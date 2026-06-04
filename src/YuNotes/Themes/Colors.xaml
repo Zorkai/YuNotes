@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ResourceDictionary.ThemeDictionaries>
+        <ResourceDictionary x:Key="Light">
+            <SolidColorBrush x:Key="AppBackgroundBrush" Color="#F6F7FB" />
+            <SolidColorBrush x:Key="AppSurfaceBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="AppSurfaceVariantBrush" Color="#FFEFF1F5" />
+            <SolidColorBrush x:Key="AppAccentBrush" Color="#FF5B6BFF" />
+            <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#FFE7EAFF" />
+            <SolidColorBrush x:Key="AppTextPrimaryBrush" Color="#FF1B1F2A" />
+            <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#FF5B6172" />
+            <SolidColorBrush x:Key="AppBorderBrush" Color="#FFE3E5EC" />
+            <SolidColorBrush x:Key="PageSeparatorBrush" Color="#FFB4B7C1" />
+            <SolidColorBrush x:Key="AppToolbarBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="CanvasBackgroundBrush" Color="#FFFAFAFA" />
+
+            <!-- Override the default ToggleButton "checked" appearance so active
+                 tools get a clear filled background, not just a thin border. -->
+            <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="#FFE7EAFF" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="#FFD9DEFF" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="#FFCAD0FF" />
+            <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="#FF5B6BFF" />
+            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="#FF5B6BFF" />
+            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="#FF5B6BFF" />
+            <SolidColorBrush x:Key="ToggleButtonBorderBrushChecked" Color="#FF5B6BFF" />
+            <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPointerOver" Color="#FF5B6BFF" />
+            <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPressed" Color="#FF5B6BFF" />
+        </ResourceDictionary>
+        <ResourceDictionary x:Key="Dark">
+            <SolidColorBrush x:Key="AppBackgroundBrush" Color="#FF14161D" />
+            <SolidColorBrush x:Key="AppSurfaceBrush" Color="#FF1C1F28" />
+            <SolidColorBrush x:Key="AppSurfaceVariantBrush" Color="#FF252934" />
+            <SolidColorBrush x:Key="AppAccentBrush" Color="#FF7E8BFF" />
+            <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#FF2B3052" />
+            <SolidColorBrush x:Key="AppTextPrimaryBrush" Color="#FFF1F2F6" />
+            <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#FFA2A8B9" />
+            <SolidColorBrush x:Key="AppBorderBrush" Color="#FF2A2E39" />
+            <SolidColorBrush x:Key="PageSeparatorBrush" Color="#FF3D4255" />
+            <SolidColorBrush x:Key="AppToolbarBrush" Color="#FF2D323F" />
+            <SolidColorBrush x:Key="CanvasBackgroundBrush" Color="#FF1A1C24" />
+
+            <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="#FF2B3052" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPointerOver" Color="#FF353B64" />
+            <SolidColorBrush x:Key="ToggleButtonBackgroundCheckedPressed" Color="#FF3D447A" />
+            <SolidColorBrush x:Key="ToggleButtonForegroundChecked" Color="#FF7E8BFF" />
+            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPointerOver" Color="#FF7E8BFF" />
+            <SolidColorBrush x:Key="ToggleButtonForegroundCheckedPressed" Color="#FF7E8BFF" />
+            <SolidColorBrush x:Key="ToggleButtonBorderBrushChecked" Color="#FF7E8BFF" />
+            <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPointerOver" Color="#FF7E8BFF" />
+            <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPressed" Color="#FF7E8BFF" />
+        </ResourceDictionary>
+    </ResourceDictionary.ThemeDictionaries>
+</ResourceDictionary>

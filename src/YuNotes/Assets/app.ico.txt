@@ -1,0 +1,3 @@
+Place a real app.ico in this folder, or remove the <ApplicationIcon> line from YuNotes.csproj.
+A simple way to get one: right-click any 256x256 PNG -> open in https://www.icoconverter.com/ -> save as app.ico here.
+The build will work without an icon; you'll just see the default Windows icon.

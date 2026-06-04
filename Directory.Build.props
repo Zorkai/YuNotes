@@ -1,0 +1,12 @@
+<Project>
+  <!--
+    Force x64 as the default platform for every project under this folder so that
+    Win2D's native Microsoft.Graphics.Canvas.dll is copied during plain `dotnet build`
+    and `dotnet run` invocations (it isn't copied for AnyCPU). The csproj also lists
+    x64 as the only supported platform via <Platforms>x64</Platforms>.
+  -->
+  <PropertyGroup Condition="'$(Platform)' == '' or '$(Platform)' == 'AnyCPU'">
+    <Platform>x64</Platform>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+</Project>

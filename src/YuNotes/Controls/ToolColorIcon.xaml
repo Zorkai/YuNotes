@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<UserControl
+    x:Class="YuNotes.Controls.ToolColorIcon"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!--
+        Scalable pen-nib shape whose fill is driven by the tool's active color.
+        The geometry is a parallelogram rotated ~45 deg to resemble an ink pen nib
+        seen from above — matching the GoodNotes-style toolbar icon aesthetic.
+    -->
+    <Viewbox x:Name="IconViewbox" Width="18" Height="18">
+        <Path x:Name="NibPath"
+              Data="M 16,2 L 22,10 L 8,22 L 2,14 Z"
+              Fill="Gray" />
+    </Viewbox>
+</UserControl>
