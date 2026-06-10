@@ -31,6 +31,28 @@ public readonly record struct Bbox(float X, float Y, float W, float H)
         return new Bbox(minX - pad, minY - pad, (maxX - minX) + pad * 2, (maxY - minY) + pad * 2);
     }
 
+    // Bounds of the stroke as RENDERED: like Of(), but for smoothed (non-
+    // pressure) strokes also pads by the Catmull-Rom overshoot bound — the
+    // curve's control points sit up to max|P[i+1]-P[i-1]|/6 outside the sample
+    // hull. Used for commit/redraw regions, where clipping even a pixel of ink
+    // leaves a permanent sliver; selection keeps the tighter Of().
+    public static Bbox OfRendered(Stroke s)
+    {
+        var b = Of(s);
+        if (s.PressureMode || s.Points.Count < 3) return b;
+        var pts = s.Points;
+        float maxSpanSq = 0f;
+        for (int i = 2; i < pts.Count; i++)
+        {
+            float dx = pts[i].X - pts[i - 2].X;
+            float dy = pts[i].Y - pts[i - 2].Y;
+            float d2 = dx * dx + dy * dy;
+            if (d2 > maxSpanSq) maxSpanSq = d2;
+        }
+        float m = MathF.Sqrt(maxSpanSq) / 6f + 1f;
+        return new Bbox(b.X - m, b.Y - m, b.W + m * 2, b.H + m * 2);
+    }
+
     public static Bbox Of(ShapeElement s)
     {
         float x = Math.Min(s.X1, s.X2);

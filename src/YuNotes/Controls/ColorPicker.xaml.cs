@@ -69,13 +69,26 @@ public sealed partial class ColorPickerControl : UserControl
                 Width = 36,
                 Height = 36,
                 CornerRadius = new CornerRadius(18),
-                Padding = new Thickness(0),
+                Style = (Style)Application.Current.Resources["SwatchButtonStyle"],
                 Background = new SolidColorBrush(c),
-                BorderThickness = new Thickness(active ? 3 : 1),
+                BorderThickness = new Thickness(active ? 2.5 : 1),
                 BorderBrush = active
                     ? (Brush)Application.Current.Resources["AppAccentBrush"]
                     : (Brush)Application.Current.Resources["AppBorderBrush"]
             };
+            if (active)
+            {
+                // Checkmark in whichever of dark/white reads against the swatch.
+                bool darkSwatch = 0.299 * c.R + 0.587 * c.G + 0.114 * c.B < 140;
+                swatch.Content = new FontIcon
+                {
+                    Glyph = "",
+                    FontSize = 16,
+                    Foreground = new SolidColorBrush(darkSwatch
+                        ? Colors.White
+                        : Color.FromArgb(0xFF, 0x1B, 0x1F, 0x2A))
+                };
+            }
             var captured = c;
             swatch.Click += (_, __) =>
             {
@@ -91,10 +104,11 @@ public sealed partial class ColorPickerControl : UserControl
             Width = 36,
             Height = 36,
             CornerRadius = new CornerRadius(18),
-            Padding = new Thickness(0),
+            Style = (Style)Application.Current.Resources["SwatchButtonStyle"],
             Background = new SolidColorBrush(Colors.Transparent),
             BorderThickness = new Thickness(1),
             BorderBrush = (Brush)Application.Current.Resources["AppBorderBrush"],
+            Foreground = (Brush)Application.Current.Resources["AppTextPrimaryBrush"],
             Content = new FontIcon { Glyph = "", FontSize = 14 },
         };
         ToolTipService.SetToolTip(custom, "Custom color");

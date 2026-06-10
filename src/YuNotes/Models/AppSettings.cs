@@ -9,7 +9,7 @@ public enum PenButtonAction
 }
 
 public enum ToolbarPosition { Top, Bottom, Left, Right }
-public enum ToolbarSize { Compact, Small, Normal, Large }
+public enum ToolbarSize { Small = 0, Normal = 1, Large = 2 }
 
 public sealed class AppSettings
 {
@@ -66,6 +66,8 @@ public sealed class AppSettings
     public ToolbarSize ToolbarSize { get; set; } = ToolbarSize.Normal;
     public bool HideZoomBar { get; set; } = true;
     public bool SeamlessPages { get; set; } = true;
+    // Liquid-glass (refractive) effect on floating surfaces; falls back to acrylic when off
+    public bool LiquidGlassEnabled { get; set; } = true;
 
     // Toolbar customization — tool keys that are hidden from the toolbar
     public List<string> HiddenToolbarTools { get; set; } = new();

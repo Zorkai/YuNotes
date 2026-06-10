@@ -214,6 +214,77 @@ public sealed class DocumentService
         catch { }
     }
 
+    // Fallback for documents with no saved thumbnail (plain PDFs that were never
+    // annotated, or .yunote files never saved since thumbnails were added —
+    // including most of what lands in trash): render a small first-page preview.
+    // .yunote renders are backfilled into the file so the cost is paid once;
+    // plain PDFs render on demand — we never rewrite a file the user didn't save.
+    public byte[]? RenderFallbackThumbnail(string path, TemplateService templates)
+    {
+        try
+        {
+            if (string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase))
+            {
+                var bytes = File.ReadAllBytes(path);
+                using var bmp = PDFtoImage.Conversion.ToImage(bytes, page: (Index)0,
+                    options: new PDFtoImage.RenderOptions { Width = 280, WithAspectRatio = true });
+                using var ms = new MemoryStream();
+                bmp.Encode(ms, SkiaSharp.SKEncodedImageFormat.Png, 85);
+                return ms.ToArray();
+            }
+
+            var doc = Open(path);
+            if (doc.Pages.Count == 0) return null;
+            var page = doc.Pages[0];
+            var template = page.TemplateOverride ?? doc.Template;
+
+            var device = Microsoft.Graphics.Canvas.CanvasDevice.GetSharedDevice();
+            var temps = new List<Microsoft.Graphics.Canvas.CanvasBitmap>();
+            try
+            {
+                Microsoft.Graphics.Canvas.CanvasBitmap? bg = null;
+                if (page.BackgroundPng is { Length: > 0 })
+                {
+                    using var bgMs = new MemoryStream(page.BackgroundPng);
+                    bg = Microsoft.Graphics.Canvas.CanvasBitmap.LoadAsync(device, bgMs.AsRandomAccessStream())
+                            .AsTask().GetAwaiter().GetResult();
+                    temps.Add(bg);
+                }
+                var images = new Dictionary<string, Microsoft.Graphics.Canvas.CanvasBitmap>();
+                foreach (var img in page.Images)
+                {
+                    try
+                    {
+                        using var imgMs = new MemoryStream(img.PngData);
+                        var ib = Microsoft.Graphics.Canvas.CanvasBitmap.LoadAsync(device, imgMs.AsRandomAccessStream())
+                                    .AsTask().GetAwaiter().GetResult();
+                        images[img.Id] = ib;
+                        temps.Add(ib);
+                    }
+                    catch { }
+                }
+
+                const float scale = 0.2f;
+                using var target = new Microsoft.Graphics.Canvas.CanvasRenderTarget(
+                    device, (float)(page.Width * scale), (float)(page.Height * scale), 96f);
+                using (var ds = target.CreateDrawingSession())
+                {
+                    ds.Clear(Microsoft.UI.Colors.White);
+                    ds.Transform = System.Numerics.Matrix3x2.CreateScale(scale);
+                    new Rendering.PageRenderer(templates).DrawPage(ds, device, page, template, bg, images);
+                }
+                using var outMs = new MemoryStream();
+                target.SaveAsync(outMs.AsRandomAccessStream(), Microsoft.Graphics.Canvas.CanvasBitmapFileFormat.Png)
+                      .AsTask().GetAwaiter().GetResult();
+                var png = outMs.ToArray();
+                SaveThumbnail(path, png);   // backfill — next refresh reads it straight from the file
+                return png;
+            }
+            finally { foreach (var t in temps) t.Dispose(); }
+        }
+        catch { return null; }
+    }
+
     private static SqliteConnection OpenConn(string path)
     {
         // Pooling=False: without it Microsoft.Data.Sqlite keeps the native handle

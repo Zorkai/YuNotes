@@ -4,16 +4,23 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <ResourceDictionary.ThemeDictionaries>
         <ResourceDictionary x:Key="Light">
-            <SolidColorBrush x:Key="AppBackgroundBrush" Color="#F6F7FB" />
-            <SolidColorBrush x:Key="AppSurfaceBrush" Color="#FFFFFFFF" />
-            <SolidColorBrush x:Key="AppSurfaceVariantBrush" Color="#FFEFF1F5" />
+            <SolidColorBrush x:Key="AppBackgroundBrush" Color="Transparent" />
+            <AcrylicBrush x:Key="AppSurfaceBrush"
+                          TintColor="#F5F6FC"
+                          TintOpacity="0.5"
+                          FallbackColor="#D9F5F6FC" />
+            <SolidColorBrush x:Key="AppSurfaceVariantBrush" Color="#CCEFF1F5" />
             <SolidColorBrush x:Key="AppAccentBrush" Color="#FF5B6BFF" />
             <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#FFE7EAFF" />
             <SolidColorBrush x:Key="AppTextPrimaryBrush" Color="#FF1B1F2A" />
             <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#FF5B6172" />
-            <SolidColorBrush x:Key="AppBorderBrush" Color="#FFE3E5EC" />
+            <SolidColorBrush x:Key="AppBorderBrush" Color="#C8E3E5EC" />
+            <SolidColorBrush x:Key="AppSeparatorBrush" Color="#60000000" />
             <SolidColorBrush x:Key="PageSeparatorBrush" Color="#FFB4B7C1" />
-            <SolidColorBrush x:Key="AppToolbarBrush" Color="#FFFFFFFF" />
+            <AcrylicBrush x:Key="AppToolbarBrush"
+                          TintColor="#FFFFFF"
+                          TintOpacity="0.72"
+                          FallbackColor="#EEF0F0F7" />
             <SolidColorBrush x:Key="CanvasBackgroundBrush" Color="#FFFAFAFA" />
 
             <!-- Override the default ToggleButton "checked" appearance so active
@@ -27,18 +34,61 @@
             <SolidColorBrush x:Key="ToggleButtonBorderBrushChecked" Color="#FF5B6BFF" />
             <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPointerOver" Color="#FF5B6BFF" />
             <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPressed" Color="#FF5B6BFF" />
+
+            <!-- ── Transient surfaces (menus, flyouts, dialogs, tooltips) ──
+                 Lightweight-styling overrides that re-skin the default WinUI
+                 chrome to match the toolbar glass: acrylic fill, AppBorder
+                 hairline, and the 14px OverlayCornerRadius shared with cards. -->
+            <!-- Solid card that sits on top of popup glass (selected option
+                 cards in the tool flyouts). -->
+            <SolidColorBrush x:Key="AppPopupCardBrush" Color="#FFFFFFFF" />
+            <!-- In-app acrylic for popups (tool flyouts + context menus). The
+                 popups must be constrained to the window
+                 (ShouldConstrainToRootBounds) because windowed popups can't
+                 sample in-app acrylic, and FlyoutBase.SystemBackdrop doesn't
+                 actually render here — constrained, this blurs the app content
+                 beneath, the same mechanism the toolbar uses. Unconstrained
+                 popups degrade to the (solid) FallbackColor. -->
+            <AcrylicBrush x:Key="AppPopupAcrylicBrush"
+                          TintColor="#FFFFFF"
+                          TintOpacity="0.45"
+                          FallbackColor="#F0F2F8" />
+            <CornerRadius x:Key="OverlayCornerRadius">14</CornerRadius>
+            <StaticResource x:Key="MenuFlyoutPresenterBackground" ResourceKey="AppPopupAcrylicBrush" />
+            <StaticResource x:Key="MenuFlyoutPresenterBorderBrush" ResourceKey="AppBorderBrush" />
+            <StaticResource x:Key="FlyoutPresenterBackground" ResourceKey="AppToolbarBrush" />
+            <StaticResource x:Key="FlyoutBorderThemeBrush" ResourceKey="AppBorderBrush" />
+            <StaticResource x:Key="ComboBoxDropDownBackground" ResourceKey="AppToolbarBrush" />
+            <StaticResource x:Key="ComboBoxDropDownBorderBrush" ResourceKey="AppBorderBrush" />
+            <StaticResource x:Key="ContentDialogBackground" ResourceKey="AppToolbarBrush" />
+            <StaticResource x:Key="ContentDialogForeground" ResourceKey="AppTextPrimaryBrush" />
+            <StaticResource x:Key="ContentDialogBorderBrush" ResourceKey="AppBorderBrush" />
+            <StaticResource x:Key="ContentDialogSeparatorBorderBrush" ResourceKey="AppBorderBrush" />
+            <!-- Default top overlay is solid white and would hide the acrylic;
+                 a translucent wash keeps the content/button two-zone look. -->
+            <SolidColorBrush x:Key="ContentDialogTopOverlay" Color="#59FFFFFF" />
+            <StaticResource x:Key="ToolTipBackground" ResourceKey="AppToolbarBrush" />
+            <StaticResource x:Key="ToolTipForeground" ResourceKey="AppTextPrimaryBrush" />
+            <StaticResource x:Key="ToolTipBorderBrush" ResourceKey="AppBorderBrush" />
         </ResourceDictionary>
         <ResourceDictionary x:Key="Dark">
-            <SolidColorBrush x:Key="AppBackgroundBrush" Color="#FF14161D" />
-            <SolidColorBrush x:Key="AppSurfaceBrush" Color="#FF1C1F28" />
-            <SolidColorBrush x:Key="AppSurfaceVariantBrush" Color="#FF252934" />
+            <SolidColorBrush x:Key="AppBackgroundBrush" Color="Transparent" />
+            <AcrylicBrush x:Key="AppSurfaceBrush"
+                          TintColor="#1C1F28"
+                          TintOpacity="0.6"
+                          FallbackColor="#CC1C1F28" />
+            <SolidColorBrush x:Key="AppSurfaceVariantBrush" Color="#99252934" />
             <SolidColorBrush x:Key="AppAccentBrush" Color="#FF7E8BFF" />
             <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#FF2B3052" />
             <SolidColorBrush x:Key="AppTextPrimaryBrush" Color="#FFF1F2F6" />
             <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#FFA2A8B9" />
-            <SolidColorBrush x:Key="AppBorderBrush" Color="#FF2A2E39" />
+            <SolidColorBrush x:Key="AppBorderBrush" Color="#C82A2E39" />
+            <SolidColorBrush x:Key="AppSeparatorBrush" Color="#70FFFFFF" />
             <SolidColorBrush x:Key="PageSeparatorBrush" Color="#FF3D4255" />
-            <SolidColorBrush x:Key="AppToolbarBrush" Color="#FF2D323F" />
+            <AcrylicBrush x:Key="AppToolbarBrush"
+                          TintColor="#2D323F"
+                          TintOpacity="0.75"
+                          FallbackColor="#E02D323F" />
             <SolidColorBrush x:Key="CanvasBackgroundBrush" Color="#FF1A1C24" />
 
             <SolidColorBrush x:Key="ToggleButtonBackgroundChecked" Color="#FF2B3052" />
@@ -50,6 +100,28 @@
             <SolidColorBrush x:Key="ToggleButtonBorderBrushChecked" Color="#FF7E8BFF" />
             <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPointerOver" Color="#FF7E8BFF" />
             <SolidColorBrush x:Key="ToggleButtonBorderBrushCheckedPressed" Color="#FF7E8BFF" />
+
+            <!-- Transient-surface glass — see the Light dictionary for details. -->
+            <SolidColorBrush x:Key="AppPopupCardBrush" Color="#FF3C4252" />
+            <AcrylicBrush x:Key="AppPopupAcrylicBrush"
+                          TintColor="#1F232E"
+                          TintOpacity="0.6"
+                          FallbackColor="#F01F232E" />
+            <CornerRadius x:Key="OverlayCornerRadius">14</CornerRadius>
+            <StaticResource x:Key="MenuFlyoutPresenterBackground" ResourceKey="AppPopupAcrylicBrush" />
+            <StaticResource x:Key="MenuFlyoutPresenterBorderBrush" ResourceKey="AppBorderBrush" />
+            <StaticResource x:Key="FlyoutPresenterBackground" ResourceKey="AppToolbarBrush" />
+            <StaticResource x:Key="FlyoutBorderThemeBrush" ResourceKey="AppBorderBrush" />
+            <StaticResource x:Key="ComboBoxDropDownBackground" ResourceKey="AppToolbarBrush" />
+            <StaticResource x:Key="ComboBoxDropDownBorderBrush" ResourceKey="AppBorderBrush" />
+            <StaticResource x:Key="ContentDialogBackground" ResourceKey="AppToolbarBrush" />
+            <StaticResource x:Key="ContentDialogForeground" ResourceKey="AppTextPrimaryBrush" />
+            <StaticResource x:Key="ContentDialogBorderBrush" ResourceKey="AppBorderBrush" />
+            <StaticResource x:Key="ContentDialogSeparatorBorderBrush" ResourceKey="AppBorderBrush" />
+            <SolidColorBrush x:Key="ContentDialogTopOverlay" Color="#0FFFFFFF" />
+            <StaticResource x:Key="ToolTipBackground" ResourceKey="AppToolbarBrush" />
+            <StaticResource x:Key="ToolTipForeground" ResourceKey="AppTextPrimaryBrush" />
+            <StaticResource x:Key="ToolTipBorderBrush" ResourceKey="AppBorderBrush" />
         </ResourceDictionary>
     </ResourceDictionary.ThemeDictionaries>
 </ResourceDictionary>

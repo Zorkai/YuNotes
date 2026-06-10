@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Foundation;
@@ -28,20 +29,40 @@ public sealed class FolderTreeItem
 
 public sealed partial class HomePage : Page
 {
-    public sealed class RecentItem
+    public sealed class RecentItem : System.ComponentModel.INotifyPropertyChanged
     {
         public string Title { get; set; } = "";
         public string Subtitle { get; set; } = "";
         public string Path { get; set; } = "";
         public string FolderName { get; set; } = "";
-        public Microsoft.UI.Xaml.Media.ImageSource? Thumbnail { get; set; }
-        public Microsoft.UI.Xaml.Visibility NoThumbnail =>
-            Thumbnail is null ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+        public DateTime ModifiedAt { get; set; }
+        public bool IsNewCard { get; set; }
+
+        // Thumbnails load (and, for legacy docs, render) off-thread after the
+        // list is shown, so this needs change notification to pop in late.
+        private Microsoft.UI.Xaml.Media.ImageSource? _thumbnail;
+        public Microsoft.UI.Xaml.Media.ImageSource? Thumbnail
+        {
+            get => _thumbnail;
+            set
+            {
+                _thumbnail = value;
+                PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(Thumbnail)));
+            }
+        }
+        public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
+        public Microsoft.UI.Xaml.Visibility NormalCardVisibility =>
+            IsNewCard ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
+        public Microsoft.UI.Xaml.Visibility NewCardVisibility =>
+            IsNewCard ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
         public Microsoft.UI.Xaml.Visibility FolderLabelVisibility =>
             string.IsNullOrEmpty(FolderName) ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
     }
 
     private enum NavSection { AllNotes, Trash, Archive, Folders }
+
+    private enum SortOrder { Date, Name, Type }
+    private SortOrder _sortOrder = SortOrder.Date;
 
     private NavSection _activeSection = NavSection.AllNotes;
     private bool _selectMode;
@@ -64,7 +85,8 @@ public sealed partial class HomePage : Page
         // Top-bar action buttons
         NewBtn.Click    += async (_, __) => await NewNoteAsync();
         OpenBtn.Click   += async (_, __) => await OpenExistingAsync();
-        SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>();
+        SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>(
+            null, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
 
         // Folder section
         NewFolderBtn.Click += async (_, __) => await CreateFolderAsync();
@@ -90,7 +112,7 @@ public sealed partial class HomePage : Page
             // SelectedItems is only valid in a multi-select mode; reading it in None/Single
             // can throw COMException (0x8000FFFF), and this fires during mode transitions.
             int n = RecentList.SelectionMode is ListViewSelectionMode.Multiple or ListViewSelectionMode.Extended
-                ? RecentList.SelectedItems.Count : 0;
+                ? RecentList.SelectedItems.OfType<RecentItem>().Count(r => !r.IsNewCard) : 0;
             SelectionCountLabel.Text = $"{n} selected";
             DeleteBtn.IsEnabled    = n > 0;
             MoveToFolderBtn.IsEnabled = n > 0;
@@ -112,9 +134,17 @@ public sealed partial class HomePage : Page
         // Selection — move to folder
         MoveToFolderBtn.Click += async (_, __) => await MoveToFolderAsync();
 
+        // Sort bar
+        SortByDateBtn.Click += (_, __) => { _sortOrder = SortOrder.Date; ApplySortSelection(); Refresh(); };
+        SortByNameBtn.Click += (_, __) => { _sortOrder = SortOrder.Name; ApplySortSelection(); Refresh(); };
+        SortByTypeBtn.Click += (_, __) => { _sortOrder = SortOrder.Type; ApplySortSelection(); Refresh(); };
+
         Loaded += (_, __) =>
         {
+            MainWindow.SetDragRegion(HeaderDragRegion);
+            HeaderBar.Padding = new Thickness(4, 0, 12 + MainWindow.CaptionButtonInset, 0);
             ApplyNavSelection();
+            ApplySortSelection();
             LoadFolderTree();
             Refresh();
         };
@@ -189,6 +219,34 @@ public sealed partial class HomePage : Page
             : new Windows.UI.Text.FontWeight { Weight = 400 };
     }
 
+    private void ApplySortSelection()
+    {
+        var active   = (Brush)Application.Current.Resources["AppSurfaceBrush"];
+        var inactive = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
+        SortByDateBtn.Background = _sortOrder == SortOrder.Date ? active : inactive;
+        SortByNameBtn.Background = _sortOrder == SortOrder.Name ? active : inactive;
+        SortByTypeBtn.Background = _sortOrder == SortOrder.Type ? active : inactive;
+    }
+
+    private void ApplySort(List<RecentItem> items)
+    {
+        switch (_sortOrder)
+        {
+            case SortOrder.Name:
+                items.Sort((a, b) => string.Compare(a.Title, b.Title, StringComparison.OrdinalIgnoreCase));
+                break;
+            case SortOrder.Type:
+                items.Sort((a, b) => string.Compare(
+                    Path.GetExtension(a.Path),
+                    Path.GetExtension(b.Path),
+                    StringComparison.OrdinalIgnoreCase));
+                break;
+            default:
+                items.Sort((a, b) => b.ModifiedAt.CompareTo(a.ModifiedAt));
+                break;
+        }
+    }
+
     // ── Select mode ───────────────────────────────────────────────────────────
 
     private void OnRecentRightTapped(object sender, RightTappedRoutedEventArgs e)
@@ -197,11 +255,13 @@ public sealed partial class HomePage : Page
         while (d is not null && d is not GridViewItem) d = VisualTreeHelper.GetParent(d);
         if (d is not GridViewItem container) return;
         if (container.Content is not RecentItem item) return;
+        if (item.IsNewCard) return;
 
         if (_activeSection == NavSection.Trash)
         {
-            // Trash items get a dedicated context menu
-            var flyout   = new MenuFlyout();
+            // Trash items get a dedicated context menu. Constrained so the
+            // in-app acrylic menu background can blur the app content beneath.
+            var flyout   = new MenuFlyout { ShouldConstrainToRootBounds = true };
             var restore  = new MenuFlyoutItem { Text = "Restore" };
             restore.Click += async (_, __) => await RestoreFromTrashAsync(new[] { item });
             var deletePerm = new MenuFlyoutItem { Text = "Delete permanently" };
@@ -215,7 +275,7 @@ public sealed partial class HomePage : Page
         else if (_activeSection == NavSection.Archive)
         {
             // Archive items: unarchive or delete permanently
-            var flyout    = new MenuFlyout();
+            var flyout    = new MenuFlyout { ShouldConstrainToRootBounds = true };
             var unarchive = new MenuFlyoutItem { Text = "Unarchive" };
             unarchive.Click += async (_, __) => await UnarchiveAsync(new[] { item });
             var deletePerm = new MenuFlyoutItem { Text = "Delete permanently" };
@@ -284,7 +344,7 @@ public sealed partial class HomePage : Page
 
     private async Task DeleteOrTrashSelectedAsync()
     {
-        var picked = RecentList.SelectedItems.OfType<RecentItem>().ToList();
+        var picked = RecentList.SelectedItems.OfType<RecentItem>().Where(r => !r.IsNewCard).ToList();
         if (picked.Count == 0) return;
 
         if (_activeSection is NavSection.Trash or NavSection.Archive)
@@ -329,7 +389,7 @@ public sealed partial class HomePage : Page
 
     private async Task RestoreSelectedAsync()
     {
-        var picked = RecentList.SelectedItems.OfType<RecentItem>().ToList();
+        var picked = RecentList.SelectedItems.OfType<RecentItem>().Where(r => !r.IsNewCard).ToList();
         if (picked.Count > 0) await RestoreFromTrashAsync(picked);
     }
 
@@ -408,7 +468,7 @@ public sealed partial class HomePage : Page
 
     private async Task ArchiveSelectedAsync()
     {
-        var picked = RecentList.SelectedItems.OfType<RecentItem>().ToList();
+        var picked = RecentList.SelectedItems.OfType<RecentItem>().Where(r => !r.IsNewCard).ToList();
         if (picked.Count == 0) return;
 
         var recent = App.Services.Settings.Current.RecentDocuments;
@@ -431,7 +491,7 @@ public sealed partial class HomePage : Page
 
     private async Task UnarchiveSelectedAsync()
     {
-        var picked = RecentList.SelectedItems.OfType<RecentItem>().ToList();
+        var picked = RecentList.SelectedItems.OfType<RecentItem>().Where(r => !r.IsNewCard).ToList();
         if (picked.Count > 0) await UnarchiveAsync(picked);
     }
 
@@ -543,6 +603,31 @@ public sealed partial class HomePage : Page
 
     // ── Refresh / load notes ──────────────────────────────────────────────────
 
+    // Loads the saved thumbnail off the UI thread; when a document has none
+    // (plain PDFs never annotated, .yunote files never saved since thumbnails
+    // were added — most trash items), renders a first-page fallback. Called
+    // fire-and-forget: cards appear immediately, previews pop in via binding.
+    private static async Task LoadThumbnailAsync(RecentItem item, string path)
+    {
+        byte[]? thumb = null;
+        try
+        {
+            thumb = await Task.Run(() =>
+                App.Services.Documents.ReadThumbnail(path)
+                ?? App.Services.Documents.RenderFallbackThumbnail(path, App.Services.Templates));
+        }
+        catch { }
+        if (thumb is not { Length: > 0 }) return;
+        try
+        {
+            var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
+            using var ms = new System.IO.MemoryStream(thumb);
+            await bmp.SetSourceAsync(ms.AsRandomAccessStream());
+            item.Thumbnail = bmp;
+        }
+        catch { }
+    }
+
     private async void Refresh()
     {
         // ── Trash ─────────────────────────────────────────────────────────────
@@ -564,25 +649,16 @@ public sealed partial class HomePage : Page
                             Title      = info.Title,
                             Subtitle   = $"{info.PageCount} page{(info.PageCount == 1 ? "" : "s")} · {info.ModifiedAt.ToLocalTime():g}",
                             Path       = info.FilePath,
-                            FolderName = GetFolderLabel(info.FilePath)
+                            FolderName = GetFolderLabel(info.FilePath),
+                            ModifiedAt = info.ModifiedAt
                         };
-                        var thumb = App.Services.Documents.ReadThumbnail(p);
-                        if (thumb is { Length: > 0 })
-                        {
-                            try
-                            {
-                                var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
-                                using var ms = new System.IO.MemoryStream(thumb);
-                                await bmp.SetSourceAsync(ms.AsRandomAccessStream());
-                                item.Thumbnail = bmp;
-                            }
-                            catch { }
-                        }
+                        _ = LoadThumbnailAsync(item, p);
                         trashItems.Add(item);
                     }
                     catch { }
                 }
             }
+            ApplySort(trashItems);
             RecentList.ItemsSource   = trashItems;
             EmptyHintTitle.Text      = "Trash is empty";
             EmptyHintSubtitle.Text   = "Deleted notes will appear here.";
@@ -606,25 +682,15 @@ public sealed partial class HomePage : Page
                         Title      = label,
                         Subtitle   = $"{info.PageCount} page{(info.PageCount == 1 ? "" : "s")} · {info.ModifiedAt.ToLocalTime():g}",
                         Path       = info.FilePath,
-                        // Show the original folder structure (relative to the archive root).
-                        FolderName = GetFolderLabelRelativeTo(info.FilePath, ArchiveFolder)
+                        FolderName = GetFolderLabelRelativeTo(info.FilePath, ArchiveFolder),
+                        ModifiedAt = info.ModifiedAt
                     };
-                    var thumb = App.Services.Documents.ReadThumbnail(p);
-                    if (thumb is { Length: > 0 })
-                    {
-                        try
-                        {
-                            var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
-                            using var ms = new System.IO.MemoryStream(thumb);
-                            await bmp.SetSourceAsync(ms.AsRandomAccessStream());
-                            item.Thumbnail = bmp;
-                        }
-                        catch { }
-                    }
+                    _ = LoadThumbnailAsync(item, p);
                     archiveItems.Add(item);
                 }
                 catch { }
             }
+            ApplySort(archiveItems);
             RecentList.ItemsSource   = archiveItems;
             EmptyHintTitle.Text      = "Archive is empty";
             EmptyHintSubtitle.Text   = "Archived notes and folders will appear here.";
@@ -658,29 +724,20 @@ public sealed partial class HomePage : Page
                         Title      = label,
                         Subtitle   = $"{info.PageCount} page{(info.PageCount == 1 ? "" : "s")} · {info.ModifiedAt.ToLocalTime():g}",
                         Path       = info.FilePath,
-                        FolderName = GetFolderLabel(info.FilePath)
+                        FolderName = GetFolderLabel(info.FilePath),
+                        ModifiedAt = info.ModifiedAt
                     };
-                    var thumb = App.Services.Documents.ReadThumbnail(info.FilePath);
-                    if (thumb is { Length: > 0 })
-                    {
-                        try
-                        {
-                            var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
-                            using var ms = new System.IO.MemoryStream(thumb);
-                            await bmp.SetSourceAsync(ms.AsRandomAccessStream());
-                            item.Thumbnail = bmp;
-                        }
-                        catch { }
-                    }
+                    _ = LoadThumbnailAsync(item, info.FilePath);
                     folderItems.Add(item);
                 }
                 catch { }
             }
-            folderItems.Sort((a, b) => string.Compare(a.Title, b.Title, StringComparison.OrdinalIgnoreCase));
-            RecentList.ItemsSource   = folderItems;
+            ApplySort(folderItems);
+            EmptyHint.Visibility     = folderItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             EmptyHintTitle.Text      = "This folder is empty";
             EmptyHintSubtitle.Text   = "Tap Create note to add one, or move notes here.";
-            EmptyHint.Visibility     = folderItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            folderItems.Insert(0, new RecentItem { IsNewCard = true });
+            RecentList.ItemsSource   = folderItems;
             return;
         }
 
@@ -711,8 +768,6 @@ public sealed partial class HomePage : Page
             App.Services.Settings.Save();
         }
 
-        infos.Sort((a, b) => b.ModifiedAt.CompareTo(a.ModifiedAt));
-
         var items = new List<RecentItem>();
         foreach (var d in infos)
         {
@@ -723,26 +778,18 @@ public sealed partial class HomePage : Page
                 Title      = label,
                 Subtitle   = $"{d.PageCount} page{(d.PageCount == 1 ? "" : "s")} · {d.ModifiedAt.ToLocalTime():g}",
                 Path       = d.FilePath,
-                FolderName = GetFolderLabel(d.FilePath)
+                FolderName = GetFolderLabel(d.FilePath),
+                ModifiedAt = d.ModifiedAt
             };
-            var thumb = App.Services.Documents.ReadThumbnail(d.FilePath);
-            if (thumb is { Length: > 0 })
-            {
-                try
-                {
-                    var bmp = new Microsoft.UI.Xaml.Media.Imaging.BitmapImage();
-                    using var ms = new System.IO.MemoryStream(thumb);
-                    await bmp.SetSourceAsync(ms.AsRandomAccessStream());
-                    item.Thumbnail = bmp;
-                }
-                catch { }
-            }
+            _ = LoadThumbnailAsync(item, d.FilePath);
             items.Add(item);
         }
-        RecentList.ItemsSource   = items;
+        ApplySort(items);
+        EmptyHint.Visibility     = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         EmptyHintTitle.Text      = "No notes";
         EmptyHintSubtitle.Text   = "Tap Create note to add one.";
-        EmptyHint.Visibility     = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        items.Insert(0, new RecentItem { IsNewCard = true });
+        RecentList.ItemsSource   = items;
     }
 
     // Returns the folder path relative to DocumentsFolder (e.g. "Work / Project A"),
@@ -875,7 +922,7 @@ public sealed partial class HomePage : Page
         var path = UniquePath(folder, title, ".pdf");
         var doc  = App.Services.Documents.CreatePdf(path, title, App.Services.PdfContainer, selectedTemplate);
         TouchRecent(doc.Info.FilePath);
-        MainWindow.Navigate<EditorPage>(doc);
+        MainWindow.Navigate<EditorPage>(doc, new DrillInNavigationTransitionInfo());
     }
 
     private async Task OpenExistingAsync()
@@ -886,32 +933,45 @@ public sealed partial class HomePage : Page
             picker, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
         var file = await picker.PickSingleFileAsync();
         if (file is null) return;
-        await OpenPathAsync(file.Path);
+        TouchRecent(file.Path);
+        OpenPath(file.Path);
     }
 
-    private async Task OpenPathAsync(string path)
+    // Navigates immediately; EditorPage opens the document on a background
+    // thread so the drill-in transition plays over the editor shell.
+    private static void OpenPath(string path)
     {
-        try
-        {
-            Document doc;
-            if (string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase))
-                doc = App.Services.Documents.OpenPdfContainer(path, App.Services.PdfContainer, App.Services.PdfImport);
-            else
-                doc = App.Services.Documents.Open(path);
-            TouchRecent(doc.Info.FilePath);
-            MainWindow.Navigate<EditorPage>(doc);
-        }
-        catch (Exception ex)
-        {
-            await ShowDialogAsync("Open failed", ex.Message);
-        }
+        MainWindow.Navigate<EditorPage>(path, new DrillInNavigationTransitionInfo());
     }
 
     private async void RecentList_ItemClick(object sender, ItemClickEventArgs e)
     {
-        // Can't open directly from Trash or Archive — restore/unarchive first.
         if (_activeSection is NavSection.Trash or NavSection.Archive) return;
-        if (e.ClickedItem is RecentItem r) await OpenPathAsync(r.Path);
+        if (e.ClickedItem is RecentItem r)
+        {
+            if (r.IsNewCard) { await NewNoteAsync(); return; }
+            TouchRecent(r.Path);
+            OpenPath(r.Path);
+        }
+    }
+
+    // ── Card hover lift ───────────────────────────────────────────────────────
+
+    private void Card_PointerEntered(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement el) return;
+        el.ScaleTransition ??= new Vector3Transition { Duration = TimeSpan.FromMilliseconds(150) };
+        el.TranslationTransition ??= new Vector3Transition { Duration = TimeSpan.FromMilliseconds(150) };
+        el.CenterPoint = new System.Numerics.Vector3((float)el.ActualWidth / 2f, (float)el.ActualHeight / 2f, 0);
+        el.Scale = new System.Numerics.Vector3(1.03f, 1.03f, 1f);
+        el.Translation = new System.Numerics.Vector3(0, 0, 16);
+    }
+
+    private void Card_PointerExited(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not FrameworkElement el) return;
+        el.Scale = System.Numerics.Vector3.One;
+        el.Translation = System.Numerics.Vector3.Zero;
     }
 
     private static string UniquePath(string folder, string title, string ext)
@@ -1045,7 +1105,7 @@ public sealed partial class HomePage : Page
 
     private MenuFlyout BuildFolderMenu(FolderTreeItem item)
     {
-        var flyout   = new MenuFlyout();
+        var flyout   = new MenuFlyout { ShouldConstrainToRootBounds = true };
         var newSub   = new MenuFlyoutItem { Text = "New subfolder" };
         newSub.Click += async (_, __) => await CreateFolderAsync(item.Path);
         var rename   = new MenuFlyoutItem { Text = "Rename" };
@@ -1334,7 +1394,7 @@ public sealed partial class HomePage : Page
 
     private async Task MoveToFolderAsync()
     {
-        var picked = RecentList.SelectedItems.OfType<RecentItem>().ToList();
+        var picked = RecentList.SelectedItems.OfType<RecentItem>().Where(r => !r.IsNewCard).ToList();
         if (picked.Count == 0) return;
 
         var rootFolder = App.Services.Settings.Current.DocumentsFolder;

@@ -108,22 +108,117 @@ public sealed partial class InkCanvasControl : UserControl
     // re-renders strokes and PDF backgrounds at the resolution they'll be shown at
     // instead of letting the ScrollViewer stretch a low-res bitmap.
     private float _appliedDpiScale = 1f;
+    // Starts sharpening (DpiScale tier + hi-res PDF crop) as soon as the view
+    // holds still for the interval — even mid-gesture with fingers down —
+    // instead of waiting for DirectManipulation to declare the gesture over.
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _viewSettleTimer;
     private void OnScrollerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
-        if (e.IsIntermediate) return;
+        if (e.IsIntermediate)
+        {
+            if (_viewSettleTimer is null)
+            {
+                _viewSettleTimer = DispatcherQueue.CreateTimer();
+                _viewSettleTimer.Interval = TimeSpan.FromMilliseconds(120);
+                _viewSettleTimer.IsRepeating = false;
+                _viewSettleTimer.Tick += (_, __) => { ApplyZoomDpi(); UpdateHiResBackgrounds(); };
+            }
+            // Restart on every intermediate event — fires only once the view
+            // has actually stopped moving.
+            _viewSettleTimer.Stop();
+            _viewSettleTimer.Start();
+            return;
+        }
+        _viewSettleTimer?.Stop();
         ApplyZoomDpi();
+        UpdateHiResBackgrounds();
         ZoomChanged?.Invoke(this, Scroller.ZoomFactor);
         ActivePageScrolled?.Invoke(this, EventArgs.Empty);
+    }
+
+    // Beyond 2× zoom the imported 300-DPI background PNGs run out of pixels.
+    // For documents that still carry their source PDF, ask each visible page
+    // to re-rasterize its visible crop from the vectors at the current
+    // backing-store scale (see PageCanvas.UpdateHiResBackground).
+    private void UpdateHiResBackgrounds()
+    {
+        if (Document?.SourcePdfBytes is not { Length: > 0 } src)
+            return;
+
+        double zoom = Scroller.ZoomFactor;
+        var viewportW = Scroller.ViewportWidth;
+        var viewportH = Scroller.ViewportHeight;
+
+        foreach (var pc in _pageCanvases)
+        {
+            if (pc.Page.SourcePageIndex is not int srcIdx || srcIdx < 0)
+                continue;
+
+            // Page bounds in viewport coordinates (TransformToVisual includes
+            // the ScrollViewer's zoom and scroll offsets).
+            Windows.Foundation.Point topLeft;
+            try { topLeft = pc.TransformToVisual(Scroller).TransformPoint(new Windows.Foundation.Point(0, 0)); }
+            catch { continue; }
+
+            double visL = Math.Max(0, topLeft.X);
+            double visT = Math.Max(0, topLeft.Y);
+            double visR = Math.Min(viewportW, topLeft.X + pc.Page.Width * zoom);
+            double visB = Math.Min(viewportH, topLeft.Y + pc.Page.Height * zoom);
+            if (visR <= visL || visB <= visT)
+            {
+                pc.ClearHiResBackground();   // off-screen — free the crop
+                continue;
+            }
+
+            var viewRect = new Windows.Foundation.Rect(
+                (visL - topLeft.X) / zoom,
+                (visT - topLeft.Y) / zoom,
+                (visR - visL) / zoom,
+                (visB - visT) / zoom);
+            pc.UpdateHiResBackground(src, srcIdx, viewRect, _appliedDpiScale);
+        }
     }
 
     private void ApplyZoomDpi()
     {
         var zoom = Scroller.ZoomFactor;
         var target = (float)Math.Min(4.0, Math.Max(1.0, Math.Ceiling(zoom)));
+        // A DpiScale change recreates each canvas's backing store, which blanks
+        // to white until its tiles re-render. Cover the visible pages with a
+        // freeze-frame of their current content first so the swap is seamless
+        // (each PageCanvas removes its overlay after the post-change redraw).
+        if (Math.Abs(_appliedDpiScale - target) > 0.01f)
+            FreezeVisiblePages(_appliedDpiScale);
         // Even when the main DpiScale hasn't changed, the live-stroke cap setting
         // may have — let PageCanvas decide whether to skip.
         _appliedDpiScale = target;
         foreach (var pc in _pageCanvases) pc.SetDpiScale(target);
+    }
+
+    private void FreezeVisiblePages(float oldScale)
+    {
+        double zoom = Scroller.ZoomFactor;
+        var viewportW = Scroller.ViewportWidth;
+        var viewportH = Scroller.ViewportHeight;
+        foreach (var pc in _pageCanvases)
+        {
+            Windows.Foundation.Point topLeft;
+            try { topLeft = pc.TransformToVisual(Scroller).TransformPoint(new Windows.Foundation.Point(0, 0)); }
+            catch { continue; }
+
+            double visL = Math.Max(0, topLeft.X);
+            double visT = Math.Max(0, topLeft.Y);
+            double visR = Math.Min(viewportW, topLeft.X + pc.Page.Width * zoom);
+            double visB = Math.Min(viewportH, topLeft.Y + pc.Page.Height * zoom);
+            if (visR <= visL || visB <= visT) continue;   // off-screen — blanks invisibly
+
+            var viewRect = new Windows.Foundation.Rect(
+                (visL - topLeft.X) / zoom,
+                (visT - topLeft.Y) / zoom,
+                (visR - visL) / zoom,
+                (visB - visT) / zoom);
+            pc.FreezeViewportForDpiChange(viewRect, oldScale);
+        }
     }
 
     public void Bind(Document doc, AppSettings settings, PageRenderer renderer)
@@ -178,6 +273,13 @@ public sealed partial class InkCanvasControl : UserControl
                 BorderThickness = SeamlessPages ? new Thickness(0) : new Thickness(1),
                 BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppBorderBrush"]
             };
+            // Paper look: each page floats with a soft drop shadow. Skipped in
+            // seamless mode, where pages butt together into one long sheet.
+            if (!SeamlessPages)
+            {
+                canvas.Shadow = new Microsoft.UI.Xaml.Media.ThemeShadow();
+                canvas.Translation = new System.Numerics.Vector3(0, 0, 14);
+            }
             canvas.SetDpiScale(_appliedDpiScale);
             canvas.MomentaryToolStart += (_, kind) => MomentaryToolStart?.Invoke(this, kind);
             canvas.MomentaryToolEnd += (_, __) => MomentaryToolEnd?.Invoke(this, EventArgs.Empty);

@@ -126,7 +126,12 @@ public sealed partial class SettingsPage : Page
         ColorToolPen.Checked += (_, __) => RebuildColorSwatches();
         ColorToolHighlighter.Checked += (_, __) => RebuildColorSwatches();
 
-        Loaded += (_, __) => LoadIntoUi();
+        Loaded += (_, __) =>
+        {
+            MainWindow.SetDragRegion(HeaderDragRegion);
+            HeaderGrid.Padding = new Thickness(12, 0, 12 + MainWindow.CaptionButtonInset, 0);
+            LoadIntoUi();
+        };
         WireDirtyHandlers();
     }
 
@@ -205,6 +210,7 @@ public sealed partial class SettingsPage : Page
         ToolbarSizeCombo.SelectionChanged += Mark;
         HideZoomBarBox.Checked += Mark; HideZoomBarBox.Unchecked += Mark;
         SeamlessPagesBox.Checked += Mark; SeamlessPagesBox.Unchecked += Mark;
+        LiquidGlassBox.Checked += Mark; LiquidGlassBox.Unchecked += Mark;
 
         PalmToggle.Toggled += Mark;
         IgnoreTouchToggle.Toggled += Mark;
@@ -284,6 +290,7 @@ public sealed partial class SettingsPage : Page
         ToolbarSizeCombo.SelectedIndex = (int)s.ToolbarSize;
         HideZoomBarBox.IsChecked = s.HideZoomBar;
         SeamlessPagesBox.IsChecked = s.SeamlessPages;
+        LiquidGlassBox.IsChecked = s.LiquidGlassEnabled;
 
         // Toolbar tool order + visibility
         var hidden = s.HiddenToolbarTools;
@@ -477,6 +484,7 @@ public sealed partial class SettingsPage : Page
         s.ToolbarSize = (ToolbarSize)ToolbarSizeCombo.SelectedIndex;
         s.HideZoomBar = HideZoomBarBox.IsChecked == true;
         s.SeamlessPages = SeamlessPagesBox.IsChecked == true;
+        s.LiquidGlassEnabled = LiquidGlassBox.IsChecked == true;
 
         s.HiddenToolbarTools.Clear();
         s.ToolbarDrawingOrder.Clear();

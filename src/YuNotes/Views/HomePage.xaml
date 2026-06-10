@@ -14,10 +14,12 @@
         <!-- ══════════════════════════════════════════════════════════════
              Sidebar
         ══════════════════════════════════════════════════════════════ -->
+        <!-- Transparent over the window Mica (Windows 11 style) — an opaque
+             surface here reads as a flat gray slab against the backdrop. -->
         <Border x:Name="SidebarBorder"
                 Grid.Column="0"
                 Width="260"
-                Background="{ThemeResource AppSurfaceBrush}"
+                Background="Transparent"
                 BorderBrush="{ThemeResource AppBorderBrush}"
                 BorderThickness="0,0,1,0">
             <Grid>
@@ -29,17 +31,22 @@
 
                 <!-- Navigation items -->
                 <StackPanel Grid.Row="0" Padding="8,8,8,4" Spacing="2">
+                    <StackPanel.ChildrenTransitions>
+                        <TransitionCollection>
+                            <EntranceThemeTransition IsStaggeringEnabled="True" />
+                        </TransitionCollection>
+                    </StackPanel.ChildrenTransitions>
 
                     <Button x:Name="AllNotesNavBtn"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Left"
                             BorderThickness="0"
                             CornerRadius="8"
-                            Padding="10,9">
+                            Padding="10,10">
                         <StackPanel Orientation="Horizontal" Spacing="10">
-                            <FontIcon x:Name="AllNotesIcon" Glyph="&#xe26c;" FontSize="14" Foreground="White" />
+                            <FontIcon x:Name="AllNotesIcon" Glyph="&#xe26c;" FontSize="18" Foreground="White" />
                             <TextBlock x:Name="AllNotesLabel" Text="All notes"
-                                       VerticalAlignment="Center" FontSize="13" Foreground="White" />
+                                       VerticalAlignment="Center" FontSize="14" Foreground="White" />
                         </StackPanel>
                     </Button>
 
@@ -49,11 +56,11 @@
                             Background="Transparent"
                             BorderThickness="0"
                             CornerRadius="8"
-                            Padding="10,9">
+                            Padding="10,10">
                         <StackPanel Orientation="Horizontal" Spacing="10">
-                            <FontIcon Glyph="&#xe872;" FontSize="14"
+                            <FontIcon Glyph="&#xe872;" FontSize="18"
                                       Foreground="White" />
-                            <TextBlock Text="Trash" VerticalAlignment="Center" FontSize="13"
+                            <TextBlock Text="Trash" VerticalAlignment="Center" FontSize="14"
                                        Foreground="White" />
                         </StackPanel>
                     </Button>
@@ -64,12 +71,12 @@
                             Background="Transparent"
                             BorderThickness="0"
                             CornerRadius="8"
-                            Padding="10,9">
+                            Padding="10,10">
                         <StackPanel Orientation="Horizontal" Spacing="10">
-                            <FontIcon Glyph="&#xe149;" FontSize="14"
+                            <FontIcon Glyph="&#xe149;" FontSize="18"
                                       FontFamily="{StaticResource MaterialIconsFamily}"
                                       Foreground="White" />
-                            <TextBlock Text="Archive" VerticalAlignment="Center" FontSize="13"
+                            <TextBlock Text="Archive" VerticalAlignment="Center" FontSize="14"
                                        Foreground="White" />
                         </StackPanel>
                     </Button>
@@ -98,13 +105,13 @@
                             Background="Transparent"
                             BorderThickness="0"
                             CornerRadius="8"
-                            Padding="10,8,10,8"
+                            Padding="10,10,10,10"
                             Margin="8,4,8,2">
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <FontIcon Glyph="&#xE2CC;" FontSize="14"
+                            <FontIcon Glyph="&#xE2CC;" FontSize="18"
                                       FontFamily="{StaticResource MaterialIconsFamily}"
                                       Foreground="White" />
-                            <TextBlock Text="New folder" FontSize="13"
+                            <TextBlock Text="New folder" FontSize="14"
                                        Foreground="White"
                                        VerticalAlignment="Center" />
                         </StackPanel>
@@ -124,7 +131,7 @@
                               AllowDrop="True">
                         <TreeView.ItemContainerStyle>
                             <Style TargetType="TreeViewItem">
-                                <Setter Property="MinHeight" Value="34" />
+                                <Setter Property="MinHeight" Value="40" />
                                 <Setter Property="Padding" Value="0" />
                             </Style>
                         </TreeView.ItemContainerStyle>
@@ -137,11 +144,11 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="10"
                                                 Margin="-26,0,0,0">
-                                        <FontIcon Glyph="{Binding Content.Glyph}" FontSize="14"
+                                        <FontIcon Glyph="{Binding Content.Glyph}" FontSize="18"
                                                   FontFamily="{StaticResource MaterialIconsFamily}"
                                                   Foreground="White" />
                                         <TextBlock Text="{Binding Content.Name}"
-                                                   FontSize="13"
+                                                   FontSize="14"
                                                    Foreground="White"
                                                    VerticalAlignment="Center" />
                                     </StackPanel>
@@ -153,7 +160,7 @@
                                             CornerRadius="6"
                                             VerticalAlignment="Center"
                                             ToolTipService.ToolTip="Folder options">
-                                        <FontIcon Glyph="&#xE5D3;" FontSize="14"
+                                        <FontIcon Glyph="&#xE5D3;" FontSize="18"
                                                   FontFamily="{StaticResource MaterialIconsFamily}"
                                                   Foreground="White" />
                                     </Button>
@@ -175,11 +182,11 @@
                                 Background="Transparent"
                                 BorderThickness="0"
                                 CornerRadius="8"
-                                Padding="10,9">
+                                Padding="10,10">
                             <StackPanel Orientation="Horizontal" Spacing="10">
-                                <FontIcon Glyph="&#xe8b8;" FontSize="14"
+                                <FontIcon Glyph="&#xe8b8;" FontSize="18"
                                           Foreground="White" />
-                                <TextBlock Text="Settings" VerticalAlignment="Center" FontSize="13"
+                                <TextBlock Text="Settings" VerticalAlignment="Center" FontSize="14"
                                            Foreground="White" />
                             </StackPanel>
                         </Button>
@@ -205,12 +212,12 @@
                 <RowDefinition Height="*" />
             </Grid.RowDefinitions>
 
-            <!-- Top bar: hamburger + title left, actions right -->
-            <Border Grid.Row="0"
+            <!-- Top bar: hamburger left, actions right -->
+            <Border x:Name="HeaderBar" Grid.Row="0"
                     BorderBrush="{ThemeResource AppBorderBrush}"
                     BorderThickness="0,0,0,1"
                     Padding="4,0,12,0"
-                    MinHeight="52">
+                    MinHeight="48">
                 <Grid VerticalAlignment="Center">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
@@ -218,16 +225,19 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
-                    <!-- Left: sidebar toggle + section title -->
+                    <!-- Window drag region. SetTitleBar turns this element's bounds
+                         into non-client space (controls overlapping it lose input),
+                         so it only covers the empty middle column. -->
+                    <Border x:Name="HeaderDragRegion" Grid.Column="1"
+                            Background="Transparent" Margin="0,-8" />
+
+                    <!-- Left: sidebar toggle -->
                     <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                         <Button x:Name="SidebarToggleBtn"
                                 Style="{StaticResource ToolButtonStyle}"
                                 ToolTipService.ToolTip="Toggle sidebar">
                             <FontIcon Glyph="&#xe5d2;" />
                         </Button>
-                        <TextBlock x:Name="SectionTitle" Text="All notes"
-                                   Style="{StaticResource H2Style}"
-                                   VerticalAlignment="Center" />
                     </StackPanel>
 
                     <!-- Normal mode -->
@@ -237,19 +247,19 @@
                                 VerticalAlignment="Center"
                                 Spacing="4">
                         <Button x:Name="NewBtn"
-                                Padding="12,7" CornerRadius="8"
+                                Padding="12,8" CornerRadius="8"
                                 Background="Transparent" BorderThickness="0">
                             <StackPanel Orientation="Horizontal" Spacing="7">
-                                <FontIcon Glyph="&#xe89c;" FontSize="14" />
-                                <TextBlock Text="Create note" VerticalAlignment="Center" FontSize="13" />
+                                <FontIcon Glyph="&#xe89c;" FontSize="18" />
+                                <TextBlock Text="Create note" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="OpenBtn"
-                                Padding="12,7" CornerRadius="8"
+                                Padding="12,8" CornerRadius="8"
                                 Background="Transparent" BorderThickness="0">
                             <StackPanel Orientation="Horizontal" Spacing="7">
-                                <FontIcon Glyph="&#xe415;" FontSize="14" />
-                                <TextBlock Text="Import PDF" VerticalAlignment="Center" FontSize="13" />
+                                <FontIcon Glyph="&#xe415;" FontSize="18" />
+                                <TextBlock Text="Import PDF" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="SelectBtn"
@@ -270,53 +280,53 @@
                                    VerticalAlignment="Center" Margin="0,0,8,0"
                                    Style="{StaticResource MutedStyle}" />
                         <Button x:Name="RestoreBtn"
-                                Padding="12,7" CornerRadius="8"
+                                Padding="12,8" CornerRadius="8"
                                 Background="Transparent" BorderThickness="0"
                                 IsEnabled="False" Visibility="Collapsed">
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon Glyph="&#xE777;" FontSize="14" />
-                                <TextBlock Text="Restore" VerticalAlignment="Center" />
+                                <FontIcon Glyph="&#xE777;" FontSize="18" />
+                                <TextBlock Text="Restore" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="UnarchiveBtn"
-                                Padding="12,7" CornerRadius="8"
+                                Padding="12,8" CornerRadius="8"
                                 Background="Transparent" BorderThickness="0"
                                 IsEnabled="False" Visibility="Collapsed">
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon Glyph="&#xe169;" FontSize="14"
+                                <FontIcon Glyph="&#xe169;" FontSize="18"
                                           FontFamily="{StaticResource MaterialIconsFamily}" />
-                                <TextBlock Text="Unarchive" VerticalAlignment="Center" />
+                                <TextBlock Text="Unarchive" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="MoveToFolderBtn"
-                                Padding="12,7" CornerRadius="8"
+                                Padding="12,8" CornerRadius="8"
                                 Background="Transparent" BorderThickness="0" IsEnabled="False">
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon Glyph="&#xe2c8;" FontSize="14" />
-                                <TextBlock Text="Move to" VerticalAlignment="Center" />
+                                <FontIcon Glyph="&#xe2c8;" FontSize="18" />
+                                <TextBlock Text="Move to" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="ArchiveBtn"
-                                Padding="12,7" CornerRadius="8"
+                                Padding="12,8" CornerRadius="8"
                                 Background="Transparent" BorderThickness="0" IsEnabled="False">
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon Glyph="&#xe149;" FontSize="14"
+                                <FontIcon Glyph="&#xe149;" FontSize="18"
                                           FontFamily="{StaticResource MaterialIconsFamily}" />
-                                <TextBlock Text="Archive" VerticalAlignment="Center" />
+                                <TextBlock Text="Archive" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="DeleteBtn"
-                                Padding="12,7" CornerRadius="8"
+                                Padding="12,8" CornerRadius="8"
                                 Background="#E03A3A" Foreground="White"
                                 BorderThickness="0" IsEnabled="False">
                             <StackPanel Orientation="Horizontal" Spacing="6">
-                                <FontIcon Glyph="&#xe872;" FontSize="14" />
-                                <TextBlock x:Name="DeleteBtnLabel" Text="Move to Trash" VerticalAlignment="Center" />
+                                <FontIcon Glyph="&#xe872;" FontSize="18" />
+                                <TextBlock x:Name="DeleteBtnLabel" Text="Move to Trash" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="CancelSelectBtn"
-                                Padding="12,7" CornerRadius="8">
-                            <TextBlock Text="Cancel" />
+                                Padding="12,8" CornerRadius="8">
+                            <TextBlock Text="Cancel" FontSize="14" />
                         </Button>
                     </StackPanel>
 
@@ -325,186 +335,157 @@
 
             <!-- Notes area -->
             <Grid Grid.Row="1">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                </Grid.RowDefinitions>
 
-                <!-- Empty state (hidden when notes exist) -->
-                <StackPanel x:Name="EmptyHint"
-                            VerticalAlignment="Center"
-                            HorizontalAlignment="Center"
-                            Spacing="6"
-                            Visibility="Collapsed">
-                    <TextBlock x:Name="EmptyHintTitle" Text="No notes"
-                               HorizontalAlignment="Center"
-                               FontSize="16"
-                               Foreground="{ThemeResource AppTextSecondaryBrush}" />
-                    <TextBlock x:Name="EmptyHintSubtitle" Text="Tap Create note to add one."
-                               HorizontalAlignment="Center"
-                               FontSize="13"
-                               Foreground="{ThemeResource AppTextSecondaryBrush}"
-                               Opacity="0.55" />
-                </StackPanel>
+                <!-- Section header: title + sort bar -->
+                <Grid Grid.Row="0" Padding="24,18,24,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="SectionTitle" Text="All notes"
+                               Style="{StaticResource H1Style}"
+                               VerticalAlignment="Center" />
+                    <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Background="{ThemeResource AppSurfaceVariantBrush}"
+                                CornerRadius="8" Padding="2">
+                            <StackPanel Orientation="Horizontal" Spacing="1">
+                                <Button x:Name="SortByDateBtn"
+                                        Content="Date" FontSize="13"
+                                        Padding="12,6" CornerRadius="6"
+                                        Background="{ThemeResource AppSurfaceBrush}"
+                                        BorderThickness="0" />
+                                <Button x:Name="SortByNameBtn"
+                                        Content="Name" FontSize="13"
+                                        Padding="12,6" CornerRadius="6"
+                                        Background="Transparent"
+                                        BorderThickness="0" />
+                                <Button x:Name="SortByTypeBtn"
+                                        Content="Type" FontSize="13"
+                                        Padding="12,6" CornerRadius="6"
+                                        Background="Transparent"
+                                        BorderThickness="0" />
+                            </StackPanel>
+                        </Border>
+                    </StackPanel>
+                </Grid>
 
-                <!-- Notes grid -->
-                <ScrollViewer Padding="20,16,20,24">
-                    <GridView x:Name="RecentList"
-                              SelectionMode="None"
-                              IsItemClickEnabled="True"
-                              CanDragItems="True"
-                              IsMultiSelectCheckBoxEnabled="False"
-                              ItemClick="RecentList_ItemClick">
-                        <GridView.ItemContainerStyle>
-                            <Style TargetType="GridViewItem">
-                                <Setter Property="Margin" Value="0,0,12,12" />
-                                <Setter Property="Padding" Value="0" />
-                                <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                                <Setter Property="VerticalContentAlignment" Value="Stretch" />
-                                <Setter Property="UseSystemFocusVisuals" Value="False" />
-                                <Setter Property="Template">
-                                    <Setter.Value>
-                                        <ControlTemplate TargetType="GridViewItem">
-                                            <Grid CornerRadius="14">
-                                                <VisualStateManager.VisualStateGroups>
-                                                    <VisualStateGroup x:Name="CommonStates">
-                                                        <VisualState x:Name="Normal" />
-                                                        <VisualState x:Name="PointerOver">
-                                                            <VisualState.Setters>
-                                                                <Setter Target="HoverBorder.Opacity" Value="1" />
-                                                            </VisualState.Setters>
-                                                        </VisualState>
-                                                        <VisualState x:Name="Pressed">
-                                                            <VisualState.Setters>
-                                                                <Setter Target="HoverBorder.Opacity" Value="1" />
-                                                            </VisualState.Setters>
-                                                        </VisualState>
-                                                        <VisualState x:Name="Selected">
-                                                            <VisualState.Setters>
-                                                                <Setter Target="SelTint.Opacity" Value="0.22" />
-                                                                <Setter Target="SelBorder.Opacity" Value="1" />
-                                                                <Setter Target="CheckBadge.Opacity" Value="1" />
-                                                            </VisualState.Setters>
-                                                        </VisualState>
-                                                        <VisualState x:Name="PointerOverSelected">
-                                                            <VisualState.Setters>
-                                                                <Setter Target="SelTint.Opacity" Value="0.22" />
-                                                                <Setter Target="SelBorder.Opacity" Value="1" />
-                                                                <Setter Target="CheckBadge.Opacity" Value="1" />
-                                                            </VisualState.Setters>
-                                                        </VisualState>
-                                                        <VisualState x:Name="PressedSelected">
-                                                            <VisualState.Setters>
-                                                                <Setter Target="SelTint.Opacity" Value="0.22" />
-                                                                <Setter Target="SelBorder.Opacity" Value="1" />
-                                                                <Setter Target="CheckBadge.Opacity" Value="1" />
-                                                            </VisualState.Setters>
-                                                        </VisualState>
-                                                        <VisualState x:Name="SelectedUnfocused">
-                                                            <VisualState.Setters>
-                                                                <Setter Target="SelTint.Opacity" Value="0.22" />
-                                                                <Setter Target="SelBorder.Opacity" Value="1" />
-                                                                <Setter Target="CheckBadge.Opacity" Value="1" />
-                                                            </VisualState.Setters>
-                                                        </VisualState>
-                                                    </VisualStateGroup>
-                                                </VisualStateManager.VisualStateGroups>
+                <!-- Content: empty hint + notes grid -->
+                <Grid Grid.Row="1">
 
-                                                <!-- The note card itself -->
-                                                <ContentPresenter
-                                                    Content="{TemplateBinding Content}"
-                                                    ContentTemplate="{TemplateBinding ContentTemplate}"
-                                                    HorizontalAlignment="Stretch"
-                                                    VerticalAlignment="Stretch" />
+                    <!-- Empty state (hidden when notes exist) -->
+                    <StackPanel x:Name="EmptyHint"
+                                VerticalAlignment="Center"
+                                HorizontalAlignment="Center"
+                                Spacing="6"
+                                Visibility="Collapsed">
+                        <TextBlock x:Name="EmptyHintTitle" Text="No notes"
+                                   HorizontalAlignment="Center"
+                                   FontSize="16"
+                                   Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                        <TextBlock x:Name="EmptyHintSubtitle" Text="Tap Create note to add one."
+                                   HorizontalAlignment="Center"
+                                   FontSize="13"
+                                   Foreground="{ThemeResource AppTextSecondaryBrush}"
+                                   Opacity="0.55" />
+                    </StackPanel>
 
-                                                <!-- Subtle hover hint -->
-                                                <Border x:Name="HoverBorder"
-                                                        CornerRadius="14"
-                                                        BorderThickness="1"
-                                                        BorderBrush="{ThemeResource AppAccentBrush}"
-                                                        Opacity="0"
-                                                        IsHitTestVisible="False" />
+                    <!-- Notes grid -->
+                    <ScrollViewer Padding="24,12,24,24">
+                        <GridView x:Name="RecentList"
+                                  SelectionMode="None"
+                                  IsItemClickEnabled="True"
+                                  CanDragItems="True"
+                                  IsMultiSelectCheckBoxEnabled="False"
+                                  ItemContainerStyle="{StaticResource NoteCardContainerStyle}"
+                                  ItemClick="RecentList_ItemClick">
+                            <GridView.ItemContainerTransitions>
+                                <TransitionCollection>
+                                    <AddDeleteThemeTransition />
+                                    <EntranceThemeTransition IsStaggeringEnabled="True" />
+                                </TransitionCollection>
+                            </GridView.ItemContainerTransitions>
+                            <GridView.ItemTemplate>
+                                <DataTemplate>
+                                    <!-- Transparent (not null) background: the "New..." card's
+                                         dashed rectangle has no fill, so without this the card
+                                         interior is a hit-test hole and hover only fires on the
+                                         icon/text. -->
+                                    <Grid Width="165" Height="215" Background="Transparent">
 
-                                                <!-- Selection tint + accent border -->
-                                                <Border x:Name="SelTint"
-                                                        CornerRadius="14"
-                                                        Background="{ThemeResource AppAccentSoftBrush}"
-                                                        Opacity="0"
-                                                        IsHitTestVisible="False" />
-                                                <Border x:Name="SelBorder"
-                                                        CornerRadius="14"
-                                                        BorderThickness="2.5"
-                                                        BorderBrush="{ThemeResource AppAccentBrush}"
-                                                        Opacity="0"
-                                                        IsHitTestVisible="False" />
-
-                                                <!-- Check badge, top-right -->
-                                                <Border x:Name="CheckBadge"
-                                                        Width="28" Height="28"
-                                                        CornerRadius="14"
-                                                        Background="{ThemeResource AppAccentBrush}"
-                                                        BorderBrush="{ThemeResource AppSurfaceBrush}"
-                                                        BorderThickness="2"
-                                                        HorizontalAlignment="Right"
-                                                        VerticalAlignment="Top"
-                                                        Margin="0,8,8,0"
-                                                        Opacity="0"
-                                                        IsHitTestVisible="False">
-                                                    <FontIcon Glyph="&#xE5CA;"
-                                                              FontSize="16"
-                                                              FontFamily="{StaticResource MaterialIconsFamily}"
-                                                              Foreground="White" />
+                                        <!-- Regular note card -->
+                                        <Border Background="{ThemeResource AppSurfaceBrush}"
+                                                BorderBrush="{ThemeResource AppBorderBrush}"
+                                                BorderThickness="1"
+                                                CornerRadius="14"
+                                                Visibility="{Binding NormalCardVisibility}"
+                                                PointerEntered="Card_PointerEntered"
+                                                PointerExited="Card_PointerExited">
+                                            <Border.Shadow>
+                                                <ThemeShadow />
+                                            </Border.Shadow>
+                                            <Grid>
+                                                <Grid.RowDefinitions>
+                                                    <RowDefinition Height="*" />
+                                                    <RowDefinition Height="Auto" />
+                                                </Grid.RowDefinitions>
+                                                <Border Grid.Row="0"
+                                                        CornerRadius="13,13,0,0"
+                                                        Background="{ThemeResource AppSurfaceVariantBrush}">
+                                                    <Image x:Name="CardThumb"
+                                                           Source="{Binding Thumbnail}"
+                                                           Stretch="Uniform" />
                                                 </Border>
+                                                <StackPanel Grid.Row="1"
+                                                            Padding="10,8,10,10"
+                                                            Spacing="2">
+                                                    <TextBlock Text="{Binding Title}"
+                                                               FontWeight="SemiBold"
+                                                               FontSize="13"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               TextAlignment="Center" />
+                                                    <TextBlock Text="{Binding Subtitle}"
+                                                               FontSize="11"
+                                                               Style="{StaticResource MutedStyle}"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               TextAlignment="Center" />
+                                                </StackPanel>
                                             </Grid>
-                                        </ControlTemplate>
-                                    </Setter.Value>
-                                </Setter>
-                            </Style>
-                        </GridView.ItemContainerStyle>
-                        <GridView.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="{ThemeResource AppSurfaceBrush}"
-                                        BorderBrush="{ThemeResource AppBorderBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="14"
-                                        Padding="12"
-                                        Width="220" Height="220">
-                                    <Grid>
-                                        <Grid.RowDefinitions>
-                                            <RowDefinition Height="*" />
-                                            <RowDefinition Height="Auto" />
-                                        </Grid.RowDefinitions>
-                                        <Border Grid.Row="0" CornerRadius="8"
-                                                Background="{ThemeResource AppSurfaceVariantBrush}"
-                                                HorizontalAlignment="Stretch"
-                                                VerticalAlignment="Stretch">
-                                            <Image Source="{Binding Thumbnail}" Stretch="Uniform" />
                                         </Border>
-                                        <StackPanel Grid.Row="1" Margin="0,10,0,0" Spacing="2">
-                                            <TextBlock Text="{Binding Title}"
-                                                       FontWeight="SemiBold"
-                                                       TextTrimming="CharacterEllipsis" />
-                                            <TextBlock Text="{Binding Subtitle}"
-                                                       Style="{StaticResource MutedStyle}"
-                                                       TextTrimming="CharacterEllipsis" />
-                                            <StackPanel Orientation="Horizontal" Spacing="4"
-                                                        Visibility="{Binding FolderLabelVisibility}"
-                                                        Margin="0,1,0,0">
-                                                <TextBlock Text="&#xE2C8;"
-                                                           FontFamily="{StaticResource MaterialIconsFamily}"
-                                                           FontSize="11"
-                                                           Foreground="{ThemeResource AppTextSecondaryBrush}"
-                                                           VerticalAlignment="Center" Opacity="0.6"/>
-                                                <TextBlock Text="{Binding FolderName}"
-                                                           FontSize="11"
-                                                           Foreground="{ThemeResource AppTextSecondaryBrush}"
-                                                           TextTrimming="CharacterEllipsis"
-                                                           Opacity="0.6" />
-                                            </StackPanel>
-                                        </StackPanel>
-                                    </Grid>
-                                </Border>
-                            </DataTemplate>
-                        </GridView.ItemTemplate>
-                    </GridView>
-                </ScrollViewer>
 
+                                        <!-- "New..." card -->
+                                        <Grid Visibility="{Binding NewCardVisibility}">
+                                            <Rectangle Stroke="{ThemeResource AppBorderBrush}"
+                                                       StrokeThickness="1.5"
+                                                       StrokeDashArray="4,3"
+                                                       RadiusX="14" RadiusY="14"
+                                                       Opacity="0.5" />
+                                            <StackPanel VerticalAlignment="Center"
+                                                        HorizontalAlignment="Center"
+                                                        Spacing="10">
+                                                <FontIcon Glyph="&#xe145;"
+                                                          FontSize="28"
+                                                          HorizontalAlignment="Center"
+                                                          Foreground="{ThemeResource AppTextSecondaryBrush}"
+                                                          Opacity="0.6" />
+                                                <TextBlock Text="New..."
+                                                           FontSize="13"
+                                                           Foreground="{ThemeResource AppTextSecondaryBrush}"
+                                                           Opacity="0.7"
+                                                           HorizontalAlignment="Center" />
+                                            </StackPanel>
+                                        </Grid>
+
+                                    </Grid>
+                                </DataTemplate>
+                            </GridView.ItemTemplate>
+                        </GridView>
+                    </ScrollViewer>
+
+                </Grid>
             </Grid>
         </Grid>
     </Grid>

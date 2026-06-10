@@ -4,7 +4,9 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:win2d="using:Microsoft.Graphics.Canvas.UI.Xaml">
-    <Grid Background="{ThemeResource CanvasBackgroundBrush}">
+    <!-- Transparent (not null) so empty areas still hit-test for pan/zoom,
+         while the window Mica shows through — same backdrop as HomePage. -->
+    <Grid Background="Transparent">
         <ScrollViewer x:Name="Scroller"
                       HorizontalScrollBarVisibility="Auto"
                       VerticalScrollBarVisibility="Auto"

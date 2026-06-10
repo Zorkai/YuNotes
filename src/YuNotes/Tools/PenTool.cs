@@ -123,7 +123,7 @@ public sealed class PenTool : ITool
         // bbox on the main canvas (CommitStrokeAt). Falls back to full invalidate
         // if no commit hook is wired (e.g. unit tests).
         ctx.InvalidateLive?.Invoke();
-        if (ctx.CommitStrokeAt is { } commit) commit(Bbox.Of(committed));
+        if (ctx.CommitStrokeAt is { } commit) commit(Bbox.OfRendered(committed));
         else ctx.Invalidate?.Invoke();
     }
 
@@ -262,7 +262,7 @@ public sealed class HighlighterTool : ITool
         ctx.ActiveStroke = null;
         ctx.Mutated?.Invoke();
         ctx.InvalidateLive?.Invoke();
-        if (ctx.CommitStrokeAt is { } commit) commit(Bbox.Of(committed));
+        if (ctx.CommitStrokeAt is { } commit) commit(Bbox.OfRendered(committed));
         else ctx.Invalidate?.Invoke();
     }
 }

@@ -8,6 +8,7 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Navigation;
 using Microsoft.UI.Xaml.Shapes;
 using Windows.System;
@@ -55,8 +56,10 @@ public sealed partial class EditorPage : Page
     public EditorPage()
     {
         InitializeComponent();
-        BackBtn.Click += async (_, __) => { if (await ConfirmLeaveAsync()) MainWindow.Navigate<HomePage>(); };
-        SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>();
+        // GoBack reverses the drill-in animation the note was opened with.
+        BackBtn.Click += async (_, __) => { if (await ConfirmLeaveAsync()) MainWindow.GoBack(); };
+        SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>(
+            null, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
         SaveBtn.Click += async (_, __) => await SaveAsync();
 
         UndoBtn.Click += (_, __) => DoUndo();
@@ -78,17 +81,19 @@ public sealed partial class EditorPage : Page
         ToolSelect.Click += (_, __) => SelectTool(_selectMode);
         ToolExtend.Click += (_, __) => SelectTool(ToolKind.ExtendPage);
 
-        ShapeRectItem.Click     += (_, __) => { _shapeKind = ShapeKind.Rectangle; _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); };
-        ShapeEllipseItem.Click  += (_, __) => { _shapeKind = ShapeKind.Ellipse;   _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); };
-        ShapeLineItem.Click     += (_, __) => { _shapeKind = ShapeKind.Line;      _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); };
-        ShapeTriangleItem.Click += (_, __) => { _shapeKind = ShapeKind.Triangle;  _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); };
+        ShapeRectItem.Click     += (_, __) => { _shapeKind = ShapeKind.Rectangle; _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); ShapeFlyout.Hide(); };
+        ShapeEllipseItem.Click  += (_, __) => { _shapeKind = ShapeKind.Ellipse;   _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); ShapeFlyout.Hide(); };
+        ShapeLineItem.Click     += (_, __) => { _shapeKind = ShapeKind.Line;      _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); ShapeFlyout.Hide(); };
+        ShapeTriangleItem.Click += (_, __) => { _shapeKind = ShapeKind.Triangle;  _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); ShapeFlyout.Hide(); };
         ToolRuler.Click += (_, __) => Canvas.SetRulerVisible(ToolRuler.IsChecked == true);
-        EraserStrokeItem.Click += (_, __) => { _eraserPixelMode = false; SyncEraserMenu(); Canvas.Context.EraserPixelMode = false; SaveToolModes(); SelectTool(ToolKind.Eraser); };
-        EraserPixelItem.Click += (_, __) => { _eraserPixelMode = true; SyncEraserMenu(); Canvas.Context.EraserPixelMode = true; SaveToolModes(); SelectTool(ToolKind.Eraser); };
-        PenSolidItem.Click += (_, __) => { _penPressureMode = false; _pen.UsePressure = false; SyncPenMenu(); SaveToolModes(); SelectTool(ToolKind.Pen); };
-        PenPressureItem.Click += (_, __) => { _penPressureMode = true; _pen.UsePressure = true; SyncPenMenu(); SaveToolModes(); SelectTool(ToolKind.Pen); };
-        SelectLassoItem.Click += (_, __) => { _selectMode = ToolKind.Lasso; SyncSelectMenu(); SaveToolModes(); SelectTool(_selectMode); };
-        SelectRectItem.Click += (_, __) => { _selectMode = ToolKind.RectSelect; SyncSelectMenu(); SaveToolModes(); SelectTool(_selectMode); };
+        EraserStrokeItem.Click += (_, __) => { _eraserPixelMode = false; SyncEraserMenu(); Canvas.Context.EraserPixelMode = false; SaveToolModes(); SelectTool(ToolKind.Eraser); EraserFlyout.Hide(); };
+        EraserPixelItem.Click += (_, __) => { _eraserPixelMode = true; SyncEraserMenu(); Canvas.Context.EraserPixelMode = true; SaveToolModes(); SelectTool(ToolKind.Eraser); EraserFlyout.Hide(); };
+        // The pen flyout stays open on selection so the preview shows the new mode.
+        PenSolidItem.Click += (_, __) => { _penPressureMode = false; _pen.UsePressure = false; SyncPenMenu(); SaveToolModes(); SelectTool(ToolKind.Pen); PenPreview.Invalidate(); };
+        PenPressureItem.Click += (_, __) => { _penPressureMode = true; _pen.UsePressure = true; SyncPenMenu(); SaveToolModes(); SelectTool(ToolKind.Pen); PenPreview.Invalidate(); };
+        PenFlyout.Opened += (_, __) => PenPreview.Invalidate();
+        SelectLassoItem.Click += (_, __) => { _selectMode = ToolKind.Lasso; SyncSelectMenu(); SaveToolModes(); SelectTool(_selectMode); SelectFlyout.Hide(); };
+        SelectRectItem.Click += (_, __) => { _selectMode = ToolKind.RectSelect; SyncSelectMenu(); SaveToolModes(); SelectTool(_selectMode); SelectFlyout.Hide(); };
 
         Canvas.ToolProvider = () => _selected switch
         {
@@ -201,6 +206,11 @@ public sealed partial class EditorPage : Page
 
         SizeChanged += (_, e) => ApplyToolbarScaleForWidth(e.NewSize.Width);
         Loaded += (_, __) => ApplyToolbarPosition(App.Services.Settings.Current.ToolbarPosition);
+        Loaded += (_, __) =>
+        {
+            MainWindow.SetDragRegion(TopBarDragRegion);
+            TopBarGrid.Padding = new Thickness(6, 2, 6 + MainWindow.CaptionButtonInset, 2);
+        };
 
         DragHandle.PointerPressed += DragHandle_PointerPressed;
         DragHandle.PointerMoved += DragHandle_PointerMoved;
@@ -315,10 +325,40 @@ public sealed partial class EditorPage : Page
         SelectionActionsPanel.Orientation = vertical ? Orientation.Vertical : Orientation.Horizontal;
         ColorPicker.SetOrientation(vertical ? Orientation.Vertical : Orientation.Horizontal);
         WidthPicker.SetOrientation(vertical ? Orientation.Vertical : Orientation.Horizontal);
+
+        // WinUI's default ToggleButton theme style carries HorizontalAlignment=Left.
+        // A horizontal StackPanel ignores it (slot = desired width), but in the
+        // vertical toolbar it pins every tool icon a few px left of the pill's
+        // centerline while the drag handle and pickers center. Center the buttons
+        // when vertical; restore the theme default when horizontal.
+        var toolAlign = vertical ? HorizontalAlignment.Center : HorizontalAlignment.Left;
+        foreach (var tool in new FrameworkElement[]
+        {
+            ToolHand, ToolPen, ToolHighlighter, ToolEraser, ToolText, ToolImage,
+            ToolShape, ToolRuler, ToolSelect, ToolExtend,
+            SelDuplicateBtn, SelDeleteBtn, SelClearBtn
+        })
+            tool.HorizontalAlignment = toolAlign;
     }
 
     private void ApplyToolbarScaleForWidth(double pageWidth)
     {
+        // ── Top pinned bar — always Normal size, never affected by ToolbarSize ──
+        const double topBtn  = 44;
+        const double topIcon = 24;
+        var topRadius = new CornerRadius(topBtn / 2);
+        Control[] topBarBtns = {
+            BackBtn, UndoBtn, RedoBtn, SaveBtn, ExportBtn,
+            PagePanelBtn, SearchBtn, ScreenshotBtn, AddPageBtn, AddPdfPagesBtn, TemplateBtn, SettingsBtn
+        };
+        foreach (var c in topBarBtns)
+        {
+            c.Width = topBtn; c.Height = topBtn;
+            c.CornerRadius = topRadius;
+            if (c is ContentControl cc && cc.Content is FontIcon fi) fi.FontSize = topIcon;
+        }
+
+        // ── Floating drawing toolbar — scales with window width AND ToolbarSize ──
         double btn, icon, colorBtn, chip, chipDot;
         if (pageWidth >= 1200)      { btn = 44; icon = 24; colorBtn = 30; chip = 36; chipDot = 22; }
         else if (pageWidth >= 1000) { btn = 38; icon = 21; colorBtn = 26; chip = 32; chipDot = 18; }
@@ -327,10 +367,9 @@ public sealed partial class EditorPage : Page
 
         double scale = App.Services.Settings.Current.ToolbarSize switch
         {
-            Models.ToolbarSize.Compact => 0.60,
-            Models.ToolbarSize.Small   => 0.78,
-            Models.ToolbarSize.Large   => 1.25,
-            _                          => 1.00
+            Models.ToolbarSize.Small  => 0.65,
+            Models.ToolbarSize.Large  => 1.00,
+            _                         => 0.78   // Normal
         };
         if (scale != 1.0)
         {
@@ -341,49 +380,42 @@ public sealed partial class EditorPage : Page
             chipDot  = Math.Round(chipDot  * scale);
         }
 
-        // Regular Button / ToggleButton tool buttons (FontIcon as Content)
-        Control[] standard = new Control[]
-        {
-            BackBtn, UndoBtn, RedoBtn,
+        Control[] floatingBtns = {
             ToolHand, ToolPen, ToolHighlighter, ToolEraser, ToolText, ToolImage, ToolShape, ToolRuler, ToolSelect, ToolExtend,
-            SelDuplicateBtn, SelDeleteBtn, SelClearBtn,
-            PagePanelBtn, SearchBtn, ScreenshotBtn, AddPageBtn, AddPdfPagesBtn, ExportBtn, TemplateBtn, SettingsBtn, SaveBtn
+            SelDuplicateBtn, SelDeleteBtn, SelClearBtn
         };
-        var circle = new CornerRadius(btn / 2);
-        foreach (var c in standard)
+        var floatRadius = new CornerRadius(btn / 2);
+        foreach (var c in floatingBtns)
         {
             c.Width = btn; c.Height = btn;
-            c.CornerRadius = circle;
-            if (c is ContentControl cc)
-            {
-                if (cc.Content is FontIcon fi) fi.FontSize = icon;
-            }
+            c.CornerRadius = floatRadius;
+            if (c is ContentControl cc && cc.Content is FontIcon fi) fi.FontSize = icon;
         }
-        // Named icons inside the toggle parts of the composite tools
+
+        // Named icons inside composite tools (belt-and-suspenders in case template doesn't re-read Content)
         PenIcon.FontSize = icon;
         HighlighterIcon.FontSize = icon;
         EraserIcon.FontSize = icon;
+        ShapeIcon.FontSize = icon;
         SelectIcon.FontSize = icon;
 
-        // Drag handle isn't a Control so it's outside the standard array — scale it manually.
-        DragHandle.Width = btn;
-        DragHandle.Height = btn;
+        // Drag handle — not a Control, scaled separately
+        DragHandle.Width = btn; DragHandle.Height = btn;
         DragHandleIcon.FontSize = icon;
 
-        // Chevron buttons under each composite — keep their width matched to the main button,
-        // height small (~30% of button) so the arrow stays unobtrusive.
+        // Chevron sub-buttons — width matches main button, height ~30%
         double chevronHeight = Math.Max(10, btn * 0.32);
         foreach (var cb in new[] { ToolPenChevron, ToolEraserChevron, ToolShapeChevron, ToolSelectChevron })
         {
             cb.Width = btn;
             cb.Height = chevronHeight;
         }
-        PenChevronIcon.FontSize = Math.Max(7, icon * 0.55);
+        PenChevronIcon.FontSize    = Math.Max(7, icon * 0.55);
         EraserChevronIcon.FontSize = Math.Max(7, icon * 0.55);
-        ShapeChevronIcon.FontSize = Math.Max(7, icon * 0.55);
+        ShapeChevronIcon.FontSize  = Math.Max(7, icon * 0.55);
         SelectChevronIcon.FontSize = Math.Max(7, icon * 0.55);
 
-        // Color and width pickers follow button size
+        // Color and width pickers follow the floating toolbar size
         ColorPicker.SetButtonSize(colorBtn);
         WidthPicker.SetChipSize(chip, chipDot);
     }
@@ -473,12 +505,15 @@ public sealed partial class EditorPage : Page
     {
         base.OnNavigatedTo(e);
         if (e.Parameter is Document d) Load(d);
+        else if (e.Parameter is string path) _ = LoadFromPathAsync(path);
         var s = App.Services.Settings.Current;
         _pen.HoldToSnapEnabled = s.HoldToSnapEnabled;
         ApplyToolbarPosition(s.ToolbarPosition);
         ApplyToolbarScaleForWidth(ActualWidth > 0 ? ActualWidth : 1200);
         ApplyToolbarOrder();
         ApplyToolbarVisibility();
+        ToolbarGlass.RefractionSource = Canvas;
+        ToolbarGlass.IsGlassActive = s.LiquidGlassEnabled;
         if (_doc is not null) ZoomPanel.Visibility = s.HideZoomBar ? Visibility.Collapsed : Visibility.Visible;
     }
 
@@ -488,12 +523,46 @@ public sealed partial class EditorPage : Page
         App.MainWindow!.Title = "YuNotes";
     }
 
+    // Opens the document off the UI thread so the editor shell (and the page
+    // transition into it) renders immediately; the overlay blocks input while
+    // _doc is still null.
+    private async Task LoadFromPathAsync(string path)
+    {
+        LoadingOverlay.Visibility = Visibility.Visible;
+        LoadingRing.IsActive = true;
+        try
+        {
+            var doc = await Task.Run(() =>
+                string.Equals(System.IO.Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase)
+                    ? App.Services.Documents.OpenPdfContainer(path, App.Services.PdfContainer, App.Services.PdfImport)
+                    : App.Services.Documents.Open(path));
+            Load(doc);
+        }
+        catch (Exception ex)
+        {
+            App.LogError(ex, $"Open failed: {path}");
+            var dlg = new ContentDialog
+            {
+                Title = "Open failed", Content = ex.Message,
+                CloseButtonText = "OK", XamlRoot = XamlRoot
+            };
+            await dlg.ShowAsync();
+            MainWindow.GoBack();
+        }
+        finally
+        {
+            LoadingRing.IsActive = false;
+            LoadingOverlay.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private void Load(Document d)
     {
         _doc = d;
         var fileName = System.IO.Path.GetFileName(d.Info.FilePath);
         if (string.IsNullOrEmpty(fileName)) fileName = d.Info.Title;
         App.MainWindow!.Title = $"YuNotes — {fileName}";
+        TopBarTitle.Text = d.Info.Title;
         var settings = App.Services.Settings.Current;
 
         // Restore persisted tool modes
@@ -662,6 +731,42 @@ public sealed partial class EditorPage : Page
         PenSolidItem.IsChecked = !_penPressureMode;
         PenPressureItem.IsChecked = _penPressureMode;
         PenIcon.Glyph = _penPressureMode ? GlyphBrush : GlyphStylus;
+    }
+
+    // Sample stroke in the pen flyout: a calligraphic S-curve drawn by the real
+    // stroke renderer with the pen's width/mode — white ink on a dark card,
+    // independent of theme and current pen color.
+    private PageRenderer? _previewRenderer;
+
+    private void PenPreview_Draw(Microsoft.Graphics.Canvas.UI.Xaml.CanvasControl sender,
+                                 Microsoft.Graphics.Canvas.UI.Xaml.CanvasDrawEventArgs args)
+    {
+        float w = (float)sender.ActualWidth, h = (float)sender.ActualHeight;
+        if (w < 1 || h < 1) return;
+
+        var ds = args.DrawingSession;
+        ds.FillRoundedRectangle(0, 0, w, h, 10, 10, Color.FromArgb(0xFF, 0x20, 0x24, 0x2F));
+        ds.DrawRoundedRectangle(0.5f, 0.5f, w - 1, h - 1, 10, 10, Color.FromArgb(0x16, 0xFF, 0xFF, 0xFF), 1f);
+
+        var s = new Stroke
+        {
+            Kind = StrokeKind.Pen,
+            Color = Colors.White,
+            Width = _penWidth > 0 ? _penWidth : Canvas.Context.CurrentWidth,
+            PressureMode = _penPressureMode
+        };
+        const int N = 48;
+        float margin = w * 0.12f;
+        for (int i = 0; i <= N; i++)
+        {
+            float t = i / (float)N;
+            float x = margin + t * (w - 2 * margin);
+            float y = h * 0.5f + MathF.Sin(t * MathF.Tau) * h * 0.26f;
+            float pressure = 0.2f + 0.8f * MathF.Sin(t * MathF.PI);
+            s.Points.Add(new InkPoint(x, y, _penPressureMode ? pressure : 1f));
+        }
+        _previewRenderer ??= new PageRenderer(App.Services.Templates);
+        _previewRenderer.DrawStroke(ds, s);
     }
 
     private void SyncShapeMenu()
@@ -1555,7 +1660,9 @@ public sealed partial class EditorPage : Page
 
     private MenuFlyout BuildPageMenuFlyout(int pageIndex)
     {
-        var flyout = new MenuFlyout();
+        // Constrained so the in-app acrylic menu background can blur the app
+        // content beneath (see AppPopupAcrylicBrush in Colors.xaml).
+        var flyout = new MenuFlyout { ShouldConstrainToRootBounds = true };
 
         var addAbove = new MenuFlyoutItem { Text = "Add page above" };
         addAbove.Click += (_, __) => InsertPageAt(pageIndex);

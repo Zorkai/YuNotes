@@ -42,40 +42,11 @@ public sealed class PageCanvas : ContentControl
     // bounding box of the new stroke rather than the whole page (which at high
     // zoom means re-blitting the multi-MB PDF background bitmap).
     private readonly CanvasVirtualControl _canvas;
-    // Transparent tile-based overlay for the active (in-progress) stroke.
-    // CanvasVirtualControl (not CanvasControl) is the key: it tiles the surface
-    // and supports Invalidate(Rect) — when we mark a small region dirty, only
-    // the tiles intersecting that region are redrawn AND re-composited by
-    // DComp. This is what makes per-sample GPU cost stay flat at high zoom,
-    // mirroring Xournal++'s cairo expose-region behaviour.
-    private readonly CanvasVirtualControl _liveCanvas;
+    // XAML layer hosting the live-stroke shapes, shape previews, selection
+    // handles and extension handles. All in-progress ink is drawn here as
+    // retained-mode XAML shapes (Polyline et al.) — DComp redraws them
+    // natively, no Win2D surface is touched until the stroke commits.
     private readonly Canvas _overlay;
-
-    // Xournal++-style persistent mask: an off-screen render target that the
-    // active stroke is painted into INCREMENTALLY. Each pen sample paints only
-    // the new segment(s) onto the mask (additive, no clear), and only the
-    // bounding rect of those segments is invalidated on the live canvas. GPU
-    // work per pen sample stays roughly constant regardless of stroke length
-    // or zoom — the live canvas redraw is a single bitmap blit, not a re-
-    // tessellation of the whole stroke.
-    private CanvasRenderTarget? _liveMask;
-    private string? _liveMaskStrokeId;
-    // How many of ActiveStroke.Points have been baked onto the mask so far.
-    // 0 = nothing, 1 = single-dot painted, N ≥ 2 = N-1 segments painted.
-    private int _liveMaskPaintedPoints;
-    private float _liveMaskDpi;
-
-    // Vsync coalescing. Pen reports at 120–240 Hz; the display only refreshes
-    // at 60–120 Hz. We hook CompositionTarget.Rendering on the first pen sample
-    // of a stroke and unhook on stroke end — the actual mask paint + invalidate
-    // happens once per vsync regardless of how many pen samples arrived.
-    private bool _liveRenderHooked;
-
-    // Linear-extrapolated predicted tip — drawn ON TOP of the mask (never into
-    // it), so a stale prediction is wiped by simply invalidating its old rect.
-    private Vector2? _predictedTip;
-    private Windows.Foundation.Rect _predictedRect;
-    private bool _hasPredictedRect;
 
     // Live shape preview — a lightweight XAML element in the overlay that acts
     // as the rubber-band while the user is dragging out a new shape.
@@ -83,10 +54,22 @@ public sealed class PageCanvas : ContentControl
     private string? _liveShapeId;
 
     // Fast-path for uniform-width pen + highlighter: render the in-progress
-    // stroke as a single XAML Polyline. DComp handles the redraw natively.
+    // stroke as XAML Polylines. DComp handles the redraw natively — but any
+    // geometry change re-rasterizes the whole shape at screen scale, so a
+    // single growing polyline costs stroke-bbox × zoom² pixels per sample.
+    // Opaque strokes are therefore split into fixed-size chunks: frozen
+    // chunks never change again, so only the small active tail re-rasterizes.
+    // Translucent strokes (highlighter) stay one polyline — overlapping round
+    // caps at chunk joints would double-blend into visible dots.
     private Polyline? _livePolyline;
+    private readonly List<Polyline> _frozenLiveChunks = new();
+    private Brush? _polylineBrush;
+    private double _polylineWidth;
+    private bool _polylineChunkable;
+    private int _polylineSyncedCount;   // stroke points consumed across all chunks
     private string? _polylineStrokeId;
     private bool _polylineHasPrediction;
+    private const int LiveChunkPoints = 64;
 
     // Fast-path for pressure-variable pen: a XAML Canvas holding one short
     // Polyline per segment, with that segment's thickness set to the average
@@ -96,11 +79,25 @@ public sealed class PageCanvas : ContentControl
     private Canvas? _pressureContainer;
     private string? _pressureStrokeId;
     private int _pressureSegmentsRendered;
+    private int _pressureSyncedCount;
     private bool _pressureDotRendered;
     private Polyline? _pressurePredicted;
     private Brush? _pressureBrush;
     private float _pressureBaseHalfWidth;
     private CanvasBitmap? _bgBitmap;
+
+    // ── Hi-res PDF background (zoomed in) ───────────────────────────────────
+    // The imported background PNG is rasterized at 300 DPI (2× the coord
+    // space), so beyond a 2× backing scale it runs out of pixels and zoom
+    // looks soft next to vector PDF viewers. When the document still has its
+    // source PDF, the VISIBLE crop of this page is re-rasterized from the
+    // vectors at the backing-store resolution and drawn over the base bitmap.
+    // Output size is viewport-bounded, so memory stays flat at any zoom.
+    private CanvasBitmap? _bgHiRes;
+    private Windows.Foundation.Rect _bgHiResRect;   // page-coord rect the crop covers
+    private float _bgHiResScale;                    // backing scale it was rendered for
+    private int _bgHiResGen;                        // stale-async guard
+
     private readonly Dictionary<string, CanvasBitmap> _imageCache = new();
     private uint? _capturedPointerId;
     private ITool? _activeTool;
@@ -151,15 +148,6 @@ public sealed class PageCanvas : ContentControl
         _canvas.RegionsInvalidated += OnMainRegionsInvalidated;
         _canvas.CreateResources += OnCreateResources;
 
-        _liveCanvas = new CanvasVirtualControl
-        {
-            Width = page.Width,
-            Height = page.Height,
-            ClearColor = Color.FromArgb(0, 0, 0, 0),
-            IsHitTestVisible = false
-        };
-        _liveCanvas.RegionsInvalidated += OnLiveRegionsInvalidated;
-
         _overlay = new Canvas
         {
             Width = page.Width,
@@ -170,7 +158,6 @@ public sealed class PageCanvas : ContentControl
 
         var root = new Grid { Width = page.Width, Height = page.Height };
         root.Children.Add(_canvas);
-        root.Children.Add(_liveCanvas);
         root.Children.Add(_overlay);
 
         Width = page.Width;
@@ -313,7 +300,6 @@ public sealed class PageCanvas : ContentControl
     public void RequestRedraw()
     {
         _canvas.Invalidate();
-        _liveCanvas.Invalidate();
     }
 
     // Called by tools on every pen sample. Branches between two live-stroke
@@ -331,7 +317,6 @@ public sealed class PageCanvas : ContentControl
         {
             TearDownPolyline();
             TearDownPressureContainer();
-            TearDownLiveMaskPath();
             EnsureLiveShapePreview(shape);
             SyncLiveShapePreview(shape);
             return;
@@ -342,7 +327,6 @@ public sealed class PageCanvas : ContentControl
         {
             TearDownPolyline();
             TearDownPressureContainer();
-            TearDownLiveMaskPath();
             return;
         }
 
@@ -350,7 +334,6 @@ public sealed class PageCanvas : ContentControl
         {
             // Pressure stroke — per-segment polylines in a XAML Canvas.
             TearDownPolyline();
-            TearDownLiveMaskPath();
             EnsurePressureContainer(s);
             SyncPressureSegments(s);
             return;
@@ -358,7 +341,6 @@ public sealed class PageCanvas : ContentControl
 
         // Uniform-width stroke — single XAML Polyline.
         TearDownPressureContainer();
-        TearDownLiveMaskPath();
         EnsureLivePolyline(s);
         if (_livePolyline is null) return;
         SyncLivePolyline(s);
@@ -384,6 +366,7 @@ public sealed class PageCanvas : ContentControl
         _pressureBaseHalfWidth = s.Width * 0.5f;
         _pressureStrokeId = s.Id;
         _pressureSegmentsRendered = 0;
+        _pressureSyncedCount = 0;
         _pressureDotRendered = false;
         _pressurePredicted = null;
     }
@@ -393,6 +376,10 @@ public sealed class PageCanvas : ContentControl
         if (_pressureContainer is null || _pressureBrush is null) return;
         var pts = s.Points;
         int pointCount = pts.Count;
+        // No new samples → dot, segments and prediction are all current; skip
+        // the prediction remove/re-add that would dirty the container.
+        if (pointCount <= _pressureSyncedCount) return;
+        _pressureSyncedCount = pointCount;
 
         // Drop the previous predicted segment before appending real ones.
         if (_pressurePredicted is not null)
@@ -467,6 +454,7 @@ public sealed class PageCanvas : ContentControl
         _pressureBrush = null;
         _pressureStrokeId = null;
         _pressureSegmentsRendered = 0;
+        _pressureSyncedCount = 0;
         _pressureDotRendered = false;
         _pressurePredicted = null;
     }
@@ -474,31 +462,43 @@ public sealed class PageCanvas : ContentControl
     private void EnsureLivePolyline(Stroke s)
     {
         if (_livePolyline is not null && _polylineStrokeId == s.Id) return;
-        if (_livePolyline is not null) _overlay.Children.Remove(_livePolyline);
+        TearDownPolyline();
 
         byte alpha = s.Color.A;
         if (s.Kind == StrokeKind.Highlighter)
             alpha = (byte)Math.Min(140, alpha == 255 ? 110 : alpha);
 
-        _livePolyline = new Polyline
-        {
-            Stroke = new SolidColorBrush(Color.FromArgb(alpha, s.Color.R, s.Color.G, s.Color.B)),
-            StrokeThickness = s.Width,
-            StrokeLineJoin = PenLineJoin.Round,
-            StrokeStartLineCap = PenLineCap.Round,
-            StrokeEndLineCap = PenLineCap.Round,
-            IsHitTestVisible = false
-        };
+        _polylineBrush = new SolidColorBrush(Color.FromArgb(alpha, s.Color.R, s.Color.G, s.Color.B));
+        _polylineWidth = s.Width;
+        // Chunk joints render a round cap over an identical round cap — invisible
+        // for opaque ink, a darker dot for translucent ink.
+        _polylineChunkable = alpha == 255;
+        _livePolyline = MakeLiveChunk();
         _overlay.Children.Add(_livePolyline);
         _polylineStrokeId = s.Id;
+        _polylineSyncedCount = 0;
         _polylineHasPrediction = false;
     }
+
+    private Polyline MakeLiveChunk() => new()
+    {
+        Stroke = _polylineBrush,
+        StrokeThickness = _polylineWidth,
+        StrokeLineJoin = PenLineJoin.Round,
+        StrokeStartLineCap = PenLineCap.Round,
+        StrokeEndLineCap = PenLineCap.Round,
+        IsHitTestVisible = false
+    };
 
     private void SyncLivePolyline(Stroke s)
     {
         if (_livePolyline is null) return;
-        var pts = _livePolyline.Points;
         int realCount = s.Points.Count;
+        // No new samples → the prediction tail is already current; touching the
+        // PointCollection anyway would re-rasterize the shape for nothing.
+        if (realCount <= _polylineSyncedCount) return;
+
+        var pts = _livePolyline.Points;
 
         // Strip the old prediction (always the last entry) before appending
         // real samples, then re-add a fresh prediction at the end.
@@ -508,11 +508,22 @@ public sealed class PageCanvas : ContentControl
             _polylineHasPrediction = false;
         }
 
-        for (int i = pts.Count; i < realCount; i++)
+        for (int i = _polylineSyncedCount; i < realCount; i++)
         {
             var p = s.Points[i];
             pts.Add(new Windows.Foundation.Point(p.X, p.Y));
+            if (_polylineChunkable && pts.Count >= LiveChunkPoints)
+            {
+                // Freeze the full chunk and continue on a fresh polyline that
+                // shares this point so the ribbon stays continuous.
+                _frozenLiveChunks.Add(_livePolyline);
+                _livePolyline = MakeLiveChunk();
+                _overlay.Children.Add(_livePolyline);
+                pts = _livePolyline.Points;
+                pts.Add(new Windows.Foundation.Point(p.X, p.Y));
+            }
         }
+        _polylineSyncedCount = realCount;
 
         if (realCount >= 2)
         {
@@ -615,191 +626,15 @@ public sealed class PageCanvas : ContentControl
 
     private void TearDownPolyline()
     {
-        if (_livePolyline is null) return;
-        _overlay.Children.Remove(_livePolyline);
+        if (_livePolyline is null && _frozenLiveChunks.Count == 0) return;
+        if (_livePolyline is not null) _overlay.Children.Remove(_livePolyline);
+        foreach (var chunk in _frozenLiveChunks) _overlay.Children.Remove(chunk);
+        _frozenLiveChunks.Clear();
         _livePolyline = null;
+        _polylineBrush = null;
         _polylineStrokeId = null;
+        _polylineSyncedCount = 0;
         _polylineHasPrediction = false;
-    }
-
-    private void TearDownLiveMaskPath()
-    {
-        if (_hasPredictedRect)
-        {
-            _liveCanvas.Invalidate(_predictedRect);
-            _hasPredictedRect = false;
-            _predictedTip = null;
-        }
-        if (_liveMask is not null || _liveMaskStrokeId is not null)
-        {
-            DisposeLiveMask();
-            _liveCanvas.Invalidate();
-        }
-        UnhookLiveRender();
-    }
-
-    private void HookLiveRender()
-    {
-        if (_liveRenderHooked) return;
-        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnLiveRenderTick;
-        _liveRenderHooked = true;
-    }
-
-    private void UnhookLiveRender()
-    {
-        if (!_liveRenderHooked) return;
-        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnLiveRenderTick;
-        _liveRenderHooked = false;
-    }
-
-    private void OnLiveRenderTick(object? sender, object e)
-    {
-        var s = Context.ActiveStroke;
-        if (s is null || !ReferenceEquals(Context.CurrentPage, Page))
-        {
-            UnhookLiveRender();
-            return;
-        }
-
-        EnsureLiveMaskFor(s);
-        if (_liveMask is null) return;
-
-        int pointCount = s.Points.Count;
-        if (pointCount == 0) return;
-
-        // 1) Paint any NEW real segments (or first-frame dot) into the mask.
-        if (pointCount == 1)
-        {
-            if (_liveMaskPaintedPoints == 0)
-            {
-                var p = s.Points[0];
-                float dotR = s.Width * 0.5f * Math.Max(0.4f, p.Pressure);
-                using (var mds = _liveMask.CreateDrawingSession())
-                {
-                    mds.Blend = CanvasBlend.SourceOver;
-                    mds.FillCircle(p.X, p.Y, dotR, OpaqueColor(s.Color));
-                }
-                float dotPad = dotR + 2f;
-                _liveCanvas.Invalidate(new Windows.Foundation.Rect(
-                    p.X - dotPad, p.Y - dotPad, dotPad * 2, dotPad * 2));
-                _liveMaskPaintedPoints = 1;
-            }
-        }
-        else if (pointCount > _liveMaskPaintedPoints)
-        {
-            // First segment back is index 0 if we only had a dot (or nothing);
-            // otherwise resume from where we left off. _liveMaskPaintedPoints
-            // already accounts for the dot via the value 1.
-            int firstSeg = _liveMaskPaintedPoints <= 1 ? 0 : _liveMaskPaintedPoints - 1;
-            int lastSeg = pointCount - 2;
-            if (firstSeg <= lastSeg)
-            {
-                var dirty = ComputeSegmentDirtyRect(s, firstSeg, lastSeg);
-                using (var mds = _liveMask.CreateDrawingSession())
-                {
-                    mds.Blend = CanvasBlend.SourceOver;
-                    Renderer.DrawStrokeSegments(mds, s, firstSeg, lastSeg, opaque: true);
-                }
-                _liveCanvas.Invalidate(dirty);
-            }
-            _liveMaskPaintedPoints = pointCount;
-        }
-
-        // 2) Linear-extrapolated predicted tip. Drawn on top of the mask in
-        // OnLiveRegionsInvalidated — never baked into the mask — so stale
-        // predictions are erased simply by invalidating their old rect.
-        if (pointCount >= 2)
-        {
-            var pn = s.Points[pointCount - 1];
-            var pn1 = s.Points[pointCount - 2];
-            float dx = pn.X - pn1.X;
-            float dy = pn.Y - pn1.Y;
-            // One sample-step ahead — roughly a half-vsync of perceived latency
-            // erased on a 120Hz pen.
-            var newTip = new Vector2(pn.X + dx, pn.Y + dy);
-
-            float halfW = s.Width * 0.5f + 2f;
-            float minX = Math.Min(pn.X, newTip.X) - halfW;
-            float minY = Math.Min(pn.Y, newTip.Y) - halfW;
-            float maxX = Math.Max(pn.X, newTip.X) + halfW;
-            float maxY = Math.Max(pn.Y, newTip.Y) + halfW;
-            var newRect = new Windows.Foundation.Rect(minX, minY, maxX - minX, maxY - minY);
-
-            // Invalidate the OLD predicted rect (so mask re-shows underneath)
-            // and the NEW one (so the fresh prediction gets drawn).
-            if (_hasPredictedRect) _liveCanvas.Invalidate(_predictedRect);
-            _predictedTip = newTip;
-            _predictedRect = newRect;
-            _hasPredictedRect = true;
-            _liveCanvas.Invalidate(_predictedRect);
-        }
-    }
-
-    private static Color OpaqueColor(Color c) => Color.FromArgb(255, c.R, c.G, c.B);
-
-    private static Windows.Foundation.Rect ComputeSegmentDirtyRect(Stroke s, int firstSeg, int lastSeg)
-    {
-        var pts = s.Points;
-        float minX = float.MaxValue, minY = float.MaxValue;
-        float maxX = float.MinValue, maxY = float.MinValue;
-        float maxHalfW = s.Width * 0.5f;
-        for (int i = firstSeg; i <= lastSeg + 1; i++)
-        {
-            var p = pts[i];
-            if (p.X < minX) minX = p.X;
-            if (p.Y < minY) minY = p.Y;
-            if (p.X > maxX) maxX = p.X;
-            if (p.Y > maxY) maxY = p.Y;
-            if (s.PressureMode)
-            {
-                float r = s.Width * 0.5f * Math.Max(0.2f, p.Pressure);
-                if (r > maxHalfW) maxHalfW = r;
-            }
-        }
-        float pad = maxHalfW + 2f;
-        return new Windows.Foundation.Rect(
-            minX - pad, minY - pad,
-            (maxX - minX) + pad * 2, (maxY - minY) + pad * 2);
-    }
-
-    private void EnsureLiveMaskFor(Stroke s)
-    {
-        var dpi = _liveCanvas.DpiScale;
-        bool dpiChanged = _liveMask is not null && Math.Abs(_liveMaskDpi - dpi) > 0.001f;
-        bool strokeChanged = _liveMaskStrokeId != s.Id;
-
-        if (_liveMask is not null && !dpiChanged && !strokeChanged) return;
-
-        var device = _liveCanvas.Device;
-        if (device is null)
-        {
-            // Device isn't ready (CreateResources hasn't fired). Defer.
-            return;
-        }
-
-        if (_liveMask is null || dpiChanged)
-        {
-            _liveMask?.Dispose();
-            _liveMask = new CanvasRenderTarget(
-                device, (float)Page.Width, (float)Page.Height, 96f * dpi);
-            _liveMaskDpi = dpi;
-        }
-        else
-        {
-            // Same DPI, just a new stroke — wipe the existing target.
-            using var clr = _liveMask.CreateDrawingSession();
-            clr.Clear(Color.FromArgb(0, 0, 0, 0));
-        }
-        _liveMaskStrokeId = s.Id;
-        _liveMaskPaintedPoints = 0;
-    }
-
-    private void DisposeLiveMask()
-    {
-        _liveMask?.Dispose();
-        _liveMask = null;
-        _liveMaskStrokeId = null;
-        _liveMaskPaintedPoints = 0;
     }
 
     public void SetTemplate(TemplateSettings template)
@@ -809,23 +644,183 @@ public sealed class PageCanvas : ContentControl
     }
 
     // Render the main Win2D backing store at a higher pixel density so it stays
-    // crisp when the parent ScrollViewer zooms in. The LIVE overlay deliberately
-    // stays at 1× regardless of zoom — keeps per-vsync work tiny, and the
-    // committed stroke re-renders at full DPI as soon as the pen lifts, so the
-    // soft-while-drawing effect is brief and only visible mid-stroke.
+    // crisp when the parent ScrollViewer zooms in. (The live stroke is XAML
+    // shapes — DComp renders those at native resolution at any zoom.)
     public void SetDpiScale(float scale)
     {
         if (scale < 1f) scale = 1f;
-        const float liveTarget = 1f;
-        bool mainChanged = Math.Abs(_canvas.DpiScale - scale) > 0.01f;
-        bool liveChanged = Math.Abs(_liveCanvas.DpiScale - liveTarget) > 0.01f;
-        if (!mainChanged && !liveChanged) return;
-        if (mainChanged) _canvas.DpiScale = scale;
-        if (liveChanged) _liveCanvas.DpiScale = liveTarget;
+        if (Math.Abs(_canvas.DpiScale - scale) > 0.01f) _canvas.DpiScale = scale;
     }
 
     private void OnCreateResources(CanvasVirtualControl sender, CanvasCreateResourcesEventArgs args)
-        => args.TrackAsyncAction(LoadResourcesAsync(sender).AsAsyncAction());
+    {
+        // Device (re)created — any hi-res crop belongs to the old device.
+        ClearHiResBackground();
+        args.TrackAsyncAction(LoadResourcesAsync(sender).AsAsyncAction());
+    }
+
+    public void ClearHiResBackground()
+    {
+        _bgHiResGen++;
+        if (_bgHiRes is null) return;
+        var old = _bgHiResRect;
+        _bgHiRes.Dispose();
+        _bgHiRes = null;
+        _bgHiResScale = 0;
+        _canvas.Invalidate(old);
+    }
+
+    // Cached source-PDF page size in PDF points — Conversion.GetPageSize
+    // re-parses the document on every call, which is measurable on large PDFs.
+    private System.Drawing.SizeF? _srcPdfPageSize;
+    // Serializes this page's hi-res renders with latest-wins semantics: a
+    // fresh request checks the gen counter before rendering, so it never pays
+    // for a backlog of stale crops queued up by rapid zooming.
+    private Task _hiResRenderChain = Task.CompletedTask;
+
+    // Called by InkCanvasControl after a (non-intermediate) scroll/zoom change.
+    // `viewRect` is the visible part of this page in page coordinates;
+    // `backingScale` is the CanvasVirtualControl DpiScale tier currently in use
+    // (rendering the crop any sharper than that is wasted — the backing store
+    // is the resolution ceiling).
+    public void UpdateHiResBackground(byte[] sourcePdf, int sourcePageIndex,
+                                      Windows.Foundation.Rect viewRect, float backingScale)
+    {
+        // Base PNG is native up to 2× — only go to the vectors beyond that.
+        if (backingScale <= 2.01f || Page.BackgroundPng is not { Length: > 0 })
+        {
+            ClearHiResBackground();
+            return;
+        }
+
+        double bgLeft = Page.BackgroundLeft;
+        double bgW = Page.BackgroundContentWidth > 0
+            ? Page.BackgroundContentWidth
+            : Page.Width - bgLeft;
+        if (bgW <= 0) { ClearHiResBackground(); return; }
+        var bgRect = new Windows.Foundation.Rect(bgLeft, 0, bgW, Page.Height);
+
+        // Keep the current crop while it still covers the view at this scale.
+        if (_bgHiRes is not null && Math.Abs(_bgHiResScale - backingScale) < 0.01f)
+        {
+            double vr = Math.Min(viewRect.Right, bgRect.Right);
+            double vb = Math.Min(viewRect.Bottom, bgRect.Bottom);
+            double vx = Math.Max(viewRect.X, bgRect.X);
+            double vy = Math.Max(viewRect.Y, bgRect.Y);
+            if (vr <= vx || vb <= vy ||
+                (_bgHiResRect.X <= vx + 0.5 && _bgHiResRect.Y <= vy + 0.5 &&
+                 _bgHiResRect.Right >= vr - 0.5 && _bgHiResRect.Bottom >= vb - 0.5))
+                return;
+        }
+
+        // Two-pass render: the tight crop (view ∩ background) has ~3× fewer
+        // pixels than the inflated one, so it reaches the screen ~3× sooner —
+        // that's the pass the user is waiting on after a zoom. The inflated
+        // crop (35% margin so small scrolls stay covered) follows quietly and
+        // replaces it.
+        var tight = viewRect;
+        tight.Intersect(bgRect);
+        if (tight.IsEmpty || tight.Width < 1 || tight.Height < 1)
+        {
+            ClearHiResBackground();
+            return;
+        }
+
+        double mx = viewRect.Width * 0.35, my = viewRect.Height * 0.35;
+        var inflated = new Windows.Foundation.Rect(
+            viewRect.X - mx, viewRect.Y - my,
+            viewRect.Width + mx * 2, viewRect.Height + my * 2);
+        inflated.Intersect(bgRect);
+
+        int gen = ++_bgHiResGen;
+        QueueHiResRender(sourcePdf, sourcePageIndex, tight, backingScale, gen,
+                         followUp: inflated.Equals(tight) ? null : inflated);
+    }
+
+    private void QueueHiResRender(byte[] sourcePdf, int sourcePageIndex,
+                                  Windows.Foundation.Rect want, float backingScale, int gen,
+                                  Windows.Foundation.Rect? followUp)
+    {
+        double pageH = Page.Height;
+        double bgLeft = Page.BackgroundLeft;
+        double bgW = Page.BackgroundContentWidth > 0
+            ? Page.BackgroundContentWidth
+            : Page.Width - bgLeft;
+        var dispatcher = DispatcherQueue;
+        _hiResRenderChain = _hiResRenderChain.ContinueWith(_ =>
+        {
+            // Superseded while queued — skip before paying for the render.
+            if (gen != _bgHiResGen) return;
+            try
+            {
+                // PDF points (72 DPI) per page-coordinate unit.
+                if (_srcPdfPageSize is not { } pdfSize)
+                    _srcPdfPageSize = pdfSize =
+                        PDFtoImage.Conversion.GetPageSize(sourcePdf, (Index)sourcePageIndex);
+                double ptsPerUnitX = pdfSize.Width / bgW;
+                double ptsPerUnitY = pdfSize.Height / pageH;
+                var bounds = new System.Drawing.RectangleF(
+                    (float)((want.X - bgLeft) * ptsPerUnitX),
+                    (float)(want.Y * ptsPerUnitY),
+                    (float)(want.Width * ptsPerUnitX),
+                    (float)(want.Height * ptsPerUnitY));
+
+                // Output pixels = page units × backingScale, capped so a huge
+                // window can't balloon the crop (cap ≈ 64 MB BGRA).
+                double scale = backingScale;
+                double outPixels = want.Width * want.Height * scale * scale;
+                const double maxPixels = 16_000_000;
+                if (outPixels > maxPixels) scale *= Math.Sqrt(maxPixels / outPixels);
+                int dpi = (int)Math.Round(72.0 * scale / ptsPerUnitX);
+                if (dpi < 72) return;
+
+                using var bmp = PDFtoImage.Conversion.ToImage(sourcePdf, page: (Index)sourcePageIndex,
+                    options: new PDFtoImage.RenderOptions
+                    {
+                        Dpi = dpi,
+                        Bounds = bounds,
+                        UseTiling = true,
+                        WithAnnotations = true,
+                        WithFormFill = true,
+                        // CRITICAL: without this, Dpi is relative to the PAGE and
+                        // the output is full-page-sized (~35 MP at scale 4, ~500 ms)
+                        // no matter how small Bounds is. With it, output = Bounds ×
+                        // Dpi — the intended crop pixels (~75-100 ms), and the
+                        // maxPixels cap above actually matches reality.
+                        DpiRelativeToBounds = true
+                    });
+                var pixels = bmp.Bytes;   // BGRA8888
+                int w = bmp.Width, h = bmp.Height;
+
+                dispatcher.TryEnqueue(() =>
+                {
+                    if (gen != _bgHiResGen) return;   // superseded or cleared
+                    var device = _canvas.Device;
+                    if (device is null) return;
+                    CanvasBitmap bitmap;
+                    try
+                    {
+                        bitmap = CanvasBitmap.CreateFromBytes(device, pixels, w, h,
+                            Windows.Graphics.DirectX.DirectXPixelFormat.B8G8R8A8UIntNormalized);
+                    }
+                    catch { return; }
+                    var old = _bgHiRes;
+                    var oldRect = _bgHiResRect;
+                    _bgHiRes = bitmap;
+                    _bgHiResRect = want;
+                    _bgHiResScale = backingScale;
+                    var dirty = want;
+                    if (old is not null) { old.Dispose(); dirty.Union(oldRect); }
+                    _canvas.Invalidate(dirty);
+                    // Tight pass is on screen — widen to the scroll-headroom crop.
+                    if (followUp is { } inflated)
+                        QueueHiResRender(sourcePdf, sourcePageIndex, inflated, backingScale, gen,
+                                         followUp: null);
+                });
+            }
+            catch { /* hi-res is purely cosmetic — base bitmap remains */ }
+        }, TaskScheduler.Default);
+    }
 
     private async Task LoadResourcesAsync(ICanvasResourceCreator dev)
     {
@@ -856,25 +851,33 @@ public sealed class PageCanvas : ContentControl
 
     private void OnMainRegionsInvalidated(CanvasVirtualControl sender, CanvasRegionsInvalidatedEventArgs args)
     {
-        var missing = Page.Images.Where(i => !_imageCache.ContainsKey(i.Id)).ToList();
-        if (missing.Count > 0)
+        if (Page.Images.Count > 0)
         {
-            _ = Task.Run(async () =>
+            var missing = Page.Images.Where(i => !_imageCache.ContainsKey(i.Id)).ToList();
+            if (missing.Count > 0)
             {
-                foreach (var img in missing) await EnsureImageLoadedAsync(sender, img);
-                DispatcherQueue.TryEnqueue(() => sender.Invalidate());
-            });
+                _ = Task.Run(async () =>
+                {
+                    foreach (var img in missing) await EnsureImageLoadedAsync(sender, img);
+                    DispatcherQueue.TryEnqueue(() => sender.Invalidate());
+                });
+            }
         }
 
         // One drawing session per dirty region — Win2D clips drawing to that
-        // region's tiles. Re-rendering the full page per region wastes a bit of
-        // CPU on path tessellation for off-region strokes, but the GPU side is
-        // bounded by the dirty rect.
+        // region's tiles, and the region is passed as `clip` so DrawPage also
+        // skips geometry building for ink that can't touch it.
+        // The hi-res crop's rect doesn't account for the extension-preview
+        // shift, so it sits out during a preview drag.
+        bool extPreview = _previewExtLeft != 0 || _previewExtRight != 0;
         foreach (var region in args.InvalidatedRegions)
         {
             using var ds = sender.CreateDrawingSession(region);
             Renderer.DrawPage(ds, sender, Page, PageTemplate, _bgBitmap, _imageCache, Context.EditingTextId,
-                              previewExtLeft: _previewExtLeft, previewExtRight: _previewExtRight);
+                              previewExtLeft: _previewExtLeft, previewExtRight: _previewExtRight,
+                              clip: region,
+                              hiResBackground: extPreview ? null : _bgHiRes,
+                              hiResRect: !extPreview && _bgHiRes is not null ? _bgHiResRect : null);
 
             if (_selectedTextRuns.Count > 0)
             {
@@ -901,6 +904,76 @@ public sealed class PageCanvas : ContentControl
                 }
             }
         }
+
+        // A DpiScale change blanked the canvas behind the freeze-frame overlay;
+        // its regions are now redrawn and committed, so the overlay can go.
+        // Low priority lets this batch present before the overlay disappears.
+        if (_unfreezeAfterDraw)
+        {
+            _unfreezeAfterDraw = false;
+            DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, UnfreezeViewport);
+        }
+    }
+
+    // ── Freeze-frame across DpiScale changes ────────────────────────────────
+    // Changing CanvasVirtualControl.DpiScale recreates its virtual surface,
+    // which blanks to ClearColor (white) until RegionsInvalidated re-renders —
+    // a visible flash on every backing-tier change while zooming. Freeze draws
+    // the visible crop into a CanvasImageSource overlay BEFORE the change at
+    // the OLD backing scale (pixel-identical to what was on screen); the
+    // overlay is removed right after the first post-change redraw commits.
+    private Image? _freezeImage;
+    private bool _unfreezeAfterDraw;
+
+    public void FreezeViewportForDpiChange(Windows.Foundation.Rect viewRect, float oldScale)
+    {
+        UnfreezeViewport();
+        var device = _canvas.Device;
+        if (device is null || viewRect.Width < 1 || viewRect.Height < 1) return;
+        try
+        {
+            float dpi = 96f * Math.Max(1f, oldScale);
+            var snapshot = new CanvasImageSource(device, (float)viewRect.Width, (float)viewRect.Height, dpi);
+            bool extPreview = _previewExtLeft != 0 || _previewExtRight != 0;
+            using (var ds = snapshot.CreateDrawingSession(Colors.White))
+            {
+                ds.Transform = Matrix3x2.CreateTranslation((float)-viewRect.X, (float)-viewRect.Y);
+                Renderer.DrawPage(ds, device, Page, PageTemplate, _bgBitmap, _imageCache, Context.EditingTextId,
+                                  previewExtLeft: _previewExtLeft, previewExtRight: _previewExtRight,
+                                  clip: viewRect,
+                                  hiResBackground: extPreview ? null : _bgHiRes,
+                                  hiResRect: !extPreview && _bgHiRes is not null ? _bgHiResRect : null);
+            }
+            _freezeImage = new Image
+            {
+                Source = snapshot,
+                Width = viewRect.Width,
+                Height = viewRect.Height,
+                IsHitTestVisible = false
+            };
+            Canvas.SetLeft(_freezeImage, viewRect.X);
+            Canvas.SetTop(_freezeImage, viewRect.Y);
+            Canvas.SetZIndex(_freezeImage, 15);
+            _overlay.Children.Add(_freezeImage);
+            _unfreezeAfterDraw = true;
+
+            // Safety net: if no redraw ever lands (page scrolled out mid-change,
+            // device lost, …), don't leave a stale snapshot covering the page.
+            var current = _freezeImage;
+            _ = Task.Delay(1000).ContinueWith(_ => DispatcherQueue.TryEnqueue(() =>
+            {
+                if (ReferenceEquals(_freezeImage, current)) UnfreezeViewport();
+            }));
+        }
+        catch { UnfreezeViewport(); }
+    }
+
+    public void UnfreezeViewport()
+    {
+        _unfreezeAfterDraw = false;
+        if (_freezeImage is null) return;
+        _overlay.Children.Remove(_freezeImage);
+        _freezeImage = null;
     }
 
     // Called from PenTool/HighlighterTool via ctx.CommitStrokeAt on stroke
@@ -915,55 +988,6 @@ public sealed class PageCanvas : ContentControl
         double h = Math.Min(Page.Height, bbox.Y + bbox.H) - y;
         if (w <= 0 || h <= 0) return;
         _canvas.Invalidate(new Windows.Foundation.Rect(x, y, w, h));
-    }
-
-    private void OnLiveRegionsInvalidated(CanvasVirtualControl sender, CanvasRegionsInvalidatedEventArgs args)
-    {
-        var s = Context.ActiveStroke;
-        if (_liveMask is null || s is null || !ReferenceEquals(Context.CurrentPage, Page))
-        {
-            // Stroke is gone — make sure invalidated tiles are cleared (transparent).
-            foreach (var region in args.InvalidatedRegions)
-            {
-                using var clear = sender.CreateDrawingSession(region);
-                clear.Clear(Color.FromArgb(0, 0, 0, 0));
-            }
-            return;
-        }
-
-        byte rawAlpha = s.Color.A;
-        float opacity = rawAlpha / 255f;
-        if (s.Kind == StrokeKind.Highlighter)
-            opacity = Math.Min(140f, rawAlpha == 255 ? 110f : rawAlpha) / 255f;
-        bool needsLayer = opacity < 0.99f;
-
-        Vector2? lastReal = s.Points.Count >= 1
-            ? new Vector2(s.Points[^1].X, s.Points[^1].Y)
-            : (Vector2?)null;
-        var predTip = _predictedTip;
-        var lineColor = OpaqueColor(s.Color);
-
-        // One drawing session per invalidated region — Win2D clips drawing to
-        // that region's tiles, so DrawImage(_liveMask) only touches pixels inside.
-        foreach (var region in args.InvalidatedRegions)
-        {
-            using var ds = sender.CreateDrawingSession(region);
-            CanvasActiveLayer? layer = needsLayer ? ds.CreateLayer(opacity) : null;
-            try
-            {
-                ds.DrawImage(_liveMask);
-                // Predicted tail on top of the mask. The session is clipped to
-                // the region, so this is a no-op when prediction is elsewhere.
-                if (predTip is { } tip && lastReal is { } lr)
-                {
-                    ds.DrawLine(lr, tip, lineColor, s.Width);
-                }
-            }
-            finally
-            {
-                layer?.Dispose();
-            }
-        }
     }
 
     private void DrawSelectionVisuals(CanvasDrawingSession ds)
@@ -1586,6 +1610,7 @@ public sealed class PageCanvas : ContentControl
             if (props.IsMiddleButtonPressed) return;
         }
 
+        bool skipFullRedraw = false;
         if (_panning)
         {
             _panning = false;
@@ -1594,6 +1619,8 @@ public sealed class PageCanvas : ContentControl
                 _inMomentaryPan = false;
                 MomentaryToolEnd?.Invoke(this, EventArgs.Empty);
             }
+            // Panning only moves the viewport; page content is unchanged.
+            skipFullRedraw = true;
         }
         else if (_selectingText)
         {
@@ -1608,6 +1635,10 @@ public sealed class PageCanvas : ContentControl
         {
             var wasSelectTool = _activeTool is LassoTool or RectSelectTool;
             var wasRectSelect = _activeTool is RectSelectTool;
+            // Pen/highlighter repaint themselves on lift (bbox-only CommitStrokeAt,
+            // or ctx.Invalidate for hold-to-snap) — the full-page invalidate below
+            // would re-tessellate every stroke on the page after every stroke.
+            skipFullRedraw = _activeTool is PenTool or HighlighterTool;
             _activeTool?.OnPointerUp(Context, ToPageSpace(e), PressureOf(e));
             TearDownLiveShapePreview();   // no-op for non-shape tools
             if (wasSelectTool) Context.SelectionChanged?.Invoke();
@@ -1617,7 +1648,7 @@ public sealed class PageCanvas : ContentControl
         ReleasePointerCapture(e.Pointer);
         _capturedPointerId = null;
         _activeTool = null;
-        _canvas.Invalidate();
+        if (!skipFullRedraw) _canvas.Invalidate();
     }
 
     private void StartDrag(DragMode mode, Vector2 p)
@@ -2441,7 +2472,6 @@ public sealed class PageCanvas : ContentControl
     private void SetCanvasWidth(double newW)
     {
         _canvas.Width     = newW;
-        _liveCanvas.Width = newW;
         _overlay.Width    = newW;
         ((Grid)Content).Width = newW;
         Width = newW;
@@ -2481,18 +2511,17 @@ public sealed class PageCanvas : ContentControl
     {
         double newW = Page.Width;
         _canvas.Width      = newW;
-        _liveCanvas.Width  = newW;
         _overlay.Width     = newW;
         var root = (Grid)Content;
         root.Width = newW;
         Width = newW;
 
+        // Background placement changed — the hi-res crop rect is stale.
+        ClearHiResBackground();
+
         // Reposition right handle for new width.
         if (_rightExtHandle is not null)
             Canvas.SetLeft(_rightExtHandle, newW - ExtHandleWidth);
-
-        // Drop the live mask — it was sized to the old width.
-        DisposeLiveMask();
 
         _canvas.Invalidate();
     }

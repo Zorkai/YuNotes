@@ -4,6 +4,7 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:c="using:YuNotes.Controls"
+    xmlns:canvas="using:Microsoft.Graphics.Canvas.UI.Xaml"
     KeyboardAcceleratorPlacementMode="Hidden"
     Background="{ThemeResource AppBackgroundBrush}">
 
@@ -34,7 +35,9 @@
             </Border>
         </Canvas>
 
-        <!-- Floating toolbar host — position is set in code -->
+        <!-- Floating toolbar host — position is set in code. The Border keeps a
+             Transparent (hit-testable) background; the inner glass layer paints
+             either the acrylic brush or the liquid-glass effect. -->
         <Border x:Name="ToolbarHost"
                 Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
                 Canvas.ZIndex="10"
@@ -42,13 +45,16 @@
                 VerticalAlignment="Top"
                 Margin="0,14,0,0"
                 CornerRadius="22"
-                Background="{ThemeResource AppToolbarBrush}"
+                Background="Transparent"
                 BorderBrush="{ThemeResource AppBorderBrush}"
                 BorderThickness="1"
                 Translation="0,0,32">
             <Border.Shadow>
                 <ThemeShadow />
             </Border.Shadow>
+            <Grid>
+            <c:LiquidGlassBackdrop x:Name="ToolbarGlass" CornerRadius="22"
+                                   Background="{ThemeResource AppToolbarBrush}" />
             <Grid x:Name="ToolbarGrid">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -89,18 +95,39 @@
                             <FontIcon x:Name="PenChevronIcon" Glyph="&#xe5cf;" FontSize="8"
                                       Foreground="White" />
                             <Button.Flyout>
-                                <MenuFlyout Placement="Bottom">
-                                    <ToggleMenuFlyoutItem x:Name="PenSolidItem" Text="Solid pen (no pressure)" IsChecked="True">
-                                        <ToggleMenuFlyoutItem.Icon>
-                                            <FontIcon Glyph="&#xf604;" />
-                                        </ToggleMenuFlyoutItem.Icon>
-                                    </ToggleMenuFlyoutItem>
-                                    <ToggleMenuFlyoutItem x:Name="PenPressureItem" Text="Pressure-sensitive pen">
-                                        <ToggleMenuFlyoutItem.Icon>
-                                            <FontIcon Glyph="&#xe3ae;" />
-                                        </ToggleMenuFlyoutItem.Icon>
-                                    </ToggleMenuFlyoutItem>
-                                </MenuFlyout>
+                                <Flyout x:Name="PenFlyout" Placement="Bottom"
+                                        ShouldConstrainToRootBounds="True"
+                                        FlyoutPresenterStyle="{StaticResource GlassFlyoutPresenterStyle}">
+                                    <StackPanel Width="248" Spacing="10">
+                                        <TextBlock Text="Pen" Style="{StaticResource FlyoutHeaderStyle}" />
+                                        <!-- Live sample stroke rendered with the real stroke
+                                             renderer — reflects current color, width and mode. -->
+                                        <canvas:CanvasControl x:Name="PenPreview" Height="72"
+                                                              Draw="PenPreview_Draw" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <ToggleButton x:Name="PenSolidItem" Grid.Column="0"
+                                                          Style="{StaticResource OptionCardStyle}" IsChecked="True"
+                                                          ToolTipService.ToolTip="Constant-width stroke">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xf604;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Solid" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                            <ToggleButton x:Name="PenPressureItem" Grid.Column="1"
+                                                          Style="{StaticResource OptionCardStyle}"
+                                                          ToolTipService.ToolTip="Width follows pen pressure">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xe3ae;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Pressure" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                        </Grid>
+                                    </StackPanel>
+                                </Flyout>
                             </Button.Flyout>
                         </Button>
                     </Grid>
@@ -122,18 +149,35 @@
                             <FontIcon x:Name="EraserChevronIcon" Glyph="&#xe5cf;" FontSize="8"
                                       Foreground="White" />
                             <Button.Flyout>
-                                <MenuFlyout Placement="Bottom">
-                                    <ToggleMenuFlyoutItem x:Name="EraserStrokeItem" Text="Stroke eraser" IsChecked="True">
-                                        <ToggleMenuFlyoutItem.Icon>
-                                            <FontIcon Glyph="&#xf747;" />
-                                        </ToggleMenuFlyoutItem.Icon>
-                                    </ToggleMenuFlyoutItem>
-                                    <ToggleMenuFlyoutItem x:Name="EraserPixelItem" Text="Pixel eraser">
-                                        <ToggleMenuFlyoutItem.Icon>
-                                            <FontIcon Glyph="&#xf3fc;" />
-                                        </ToggleMenuFlyoutItem.Icon>
-                                    </ToggleMenuFlyoutItem>
-                                </MenuFlyout>
+                                <Flyout x:Name="EraserFlyout" Placement="Bottom"
+                                        ShouldConstrainToRootBounds="True"
+                                        FlyoutPresenterStyle="{StaticResource GlassFlyoutPresenterStyle}">
+                                    <StackPanel Width="220" Spacing="10">
+                                        <TextBlock Text="Eraser" Style="{StaticResource FlyoutHeaderStyle}" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <ToggleButton x:Name="EraserStrokeItem" Grid.Column="0"
+                                                          Style="{StaticResource OptionCardStyle}" IsChecked="True"
+                                                          ToolTipService.ToolTip="Erase whole strokes">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xf747;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Stroke" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                            <ToggleButton x:Name="EraserPixelItem" Grid.Column="1"
+                                                          Style="{StaticResource OptionCardStyle}"
+                                                          ToolTipService.ToolTip="Erase only what you touch">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xf3fc;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Pixel" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                        </Grid>
+                                    </StackPanel>
+                                </Flyout>
                             </Button.Flyout>
                         </Button>
                     </Grid>
@@ -158,28 +202,49 @@
                             <FontIcon x:Name="ShapeChevronIcon" Glyph="&#xe5cf;" FontSize="8"
                                       Foreground="White" />
                             <Button.Flyout>
-                                <MenuFlyout Placement="Bottom">
-                                    <ToggleMenuFlyoutItem x:Name="ShapeRectItem" Text="Rectangle" IsChecked="True">
-                                        <ToggleMenuFlyoutItem.Icon>
-                                            <FontIcon Glyph="&#xeb54;" />
-                                        </ToggleMenuFlyoutItem.Icon>
-                                    </ToggleMenuFlyoutItem>
-                                    <ToggleMenuFlyoutItem x:Name="ShapeEllipseItem" Text="Ellipse">
-                                        <ToggleMenuFlyoutItem.Icon>
-                                            <FontIcon Glyph="&#xef4a;" />
-                                        </ToggleMenuFlyoutItem.Icon>
-                                    </ToggleMenuFlyoutItem>
-                                    <ToggleMenuFlyoutItem x:Name="ShapeLineItem" Text="Line">
-                                        <ToggleMenuFlyoutItem.Icon>
-                                            <FontIcon Glyph="&#xf41e;" />
-                                        </ToggleMenuFlyoutItem.Icon>
-                                    </ToggleMenuFlyoutItem>
-                                    <ToggleMenuFlyoutItem x:Name="ShapeTriangleItem" Text="Triangle">
-                                        <ToggleMenuFlyoutItem.Icon>
-                                            <FontIcon Glyph="&#xf0a8;" />
-                                        </ToggleMenuFlyoutItem.Icon>
-                                    </ToggleMenuFlyoutItem>
-                                </MenuFlyout>
+                                <Flyout x:Name="ShapeFlyout" Placement="Bottom"
+                                        ShouldConstrainToRootBounds="True"
+                                        FlyoutPresenterStyle="{StaticResource GlassFlyoutPresenterStyle}">
+                                    <StackPanel Width="356" Spacing="10">
+                                        <TextBlock Text="Shape" Style="{StaticResource FlyoutHeaderStyle}" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <ToggleButton x:Name="ShapeRectItem" Grid.Column="0"
+                                                          Style="{StaticResource OptionCardStyle}" IsChecked="True">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xeb54;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Rectangle" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                            <ToggleButton x:Name="ShapeEllipseItem" Grid.Column="1"
+                                                          Style="{StaticResource OptionCardStyle}">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xef4a;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Ellipse" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                            <ToggleButton x:Name="ShapeLineItem" Grid.Column="2"
+                                                          Style="{StaticResource OptionCardStyle}">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xf41e;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Line" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                            <ToggleButton x:Name="ShapeTriangleItem" Grid.Column="3"
+                                                          Style="{StaticResource OptionCardStyle}">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xf0a8;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Triangle" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                        </Grid>
+                                    </StackPanel>
+                                </Flyout>
                             </Button.Flyout>
                         </Button>
                     </Grid>
@@ -202,18 +267,35 @@
                             <FontIcon x:Name="SelectChevronIcon" Glyph="&#xe5cf;" FontSize="8"
                                       Foreground="White" />
                             <Button.Flyout>
-                                <MenuFlyout Placement="Bottom">
-                                    <ToggleMenuFlyoutItem x:Name="SelectLassoItem" Text="Lasso" IsChecked="True">
-                                        <ToggleMenuFlyoutItem.Icon>
-                                            <FontIcon Glyph="&#xeb03;" />
-                                        </ToggleMenuFlyoutItem.Icon>
-                                    </ToggleMenuFlyoutItem>
-                                    <ToggleMenuFlyoutItem x:Name="SelectRectItem" Text="Rectangle">
-                                        <ToggleMenuFlyoutItem.Icon>
-                                            <FontIcon Glyph="&#xe6d4;" />
-                                        </ToggleMenuFlyoutItem.Icon>
-                                    </ToggleMenuFlyoutItem>
-                                </MenuFlyout>
+                                <Flyout x:Name="SelectFlyout" Placement="Bottom"
+                                        ShouldConstrainToRootBounds="True"
+                                        FlyoutPresenterStyle="{StaticResource GlassFlyoutPresenterStyle}">
+                                    <StackPanel Width="220" Spacing="10">
+                                        <TextBlock Text="Select" Style="{StaticResource FlyoutHeaderStyle}" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <ToggleButton x:Name="SelectLassoItem" Grid.Column="0"
+                                                          Style="{StaticResource OptionCardStyle}" IsChecked="True"
+                                                          ToolTipService.ToolTip="Draw freely around elements">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xeb03;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Lasso" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                            <ToggleButton x:Name="SelectRectItem" Grid.Column="1"
+                                                          Style="{StaticResource OptionCardStyle}"
+                                                          ToolTipService.ToolTip="Drag a rectangle">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xe6d4;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Rectangle" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                        </Grid>
+                                    </StackPanel>
+                                </Flyout>
                             </Button.Flyout>
                         </Button>
                     </Grid>
@@ -245,6 +327,7 @@
                     <c:WidthPickerControl x:Name="WidthPicker" />
                 </StackPanel>
                 </ScrollViewer>
+            </Grid>
             </Grid>
         </Border>
 
@@ -373,64 +456,97 @@
             </Grid>
         </Border>
 
-        <!-- Pinned bar (top, non-floating): nav on the left, doc actions on the right -->
+        <!-- Pinned bar (top, non-floating): back + history/file left, doc title center, view/actions right -->
         <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3"
                 Background="{ThemeResource AppSurfaceBrush}"
                 BorderBrush="{ThemeResource AppBorderBrush}"
                 BorderThickness="0,0,0,1">
-            <Grid>
+            <!-- 2px vertical padding keeps the bar exactly 48dip tall, matching the
+                 Tall caption-button band so both button rows share a centerline. -->
+            <Grid x:Name="TopBarGrid" Padding="6,2">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" Padding="6"
-                            HorizontalAlignment="Left" VerticalAlignment="Center">
+
+                <!-- Window drag region. SetTitleBar turns this element's bounds into
+                     non-client space (controls overlapping it lose input), so it only
+                     covers the empty center column, not the button clusters. -->
+                <Border x:Name="TopBarDragRegion" Grid.Column="1"
+                        Background="Transparent" Margin="0,-2" />
+
+                <!-- Left: back · undo/redo · save/export -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4"
+                            VerticalAlignment="Center">
                     <Button x:Name="BackBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Home">
                         <FontIcon Glyph="&#xe88a;" />
                     </Button>
-                    <Button x:Name="SaveBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Save (Ctrl+S)">
-                        <FontIcon Glyph="&#xe161;" />
-                    </Button>
-                    <Button x:Name="ExportBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Export">
-                        <FontIcon Glyph="&#xf3b2;" />
-                    </Button>
-                    <Border x:Name="TopSep0" Background="{ThemeResource AppBorderBrush}"
-                            Width="1" Height="28" Margin="-3,0" />
-                    <Button x:Name="UndoBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Undo (Ctrl+Z)" IsEnabled="False">
-                        <FontIcon Glyph="&#xe166;" />
-                    </Button>
-                    <Button x:Name="RedoBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Redo (Ctrl+Y)" IsEnabled="False">
-                        <FontIcon Glyph="&#xe15a;" />
-                    </Button>
+                    <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" />
+                    <Border Background="{ThemeResource AppSurfaceVariantBrush}" CornerRadius="10" Padding="2">
+                        <StackPanel Orientation="Horizontal" Spacing="0">
+                            <Button x:Name="UndoBtn" Style="{StaticResource ToolButtonStyle}"
+                                    ToolTipService.ToolTip="Undo (Ctrl+Z)" IsEnabled="False">
+                                <FontIcon Glyph="&#xe166;" />
+                            </Button>
+                            <Button x:Name="RedoBtn" Style="{StaticResource ToolButtonStyle}"
+                                    ToolTipService.ToolTip="Redo (Ctrl+Y)" IsEnabled="False">
+                                <FontIcon Glyph="&#xe15a;" />
+                            </Button>
+                        </StackPanel>
+                    </Border>
+                    <Border Background="{ThemeResource AppSurfaceVariantBrush}" CornerRadius="10" Padding="2">
+                        <StackPanel Orientation="Horizontal" Spacing="0">
+                            <Button x:Name="SaveBtn" Style="{StaticResource ToolButtonStyle}"
+                                    ToolTipService.ToolTip="Save (Ctrl+S)">
+                                <FontIcon Glyph="&#xe161;" />
+                            </Button>
+                            <Button x:Name="ExportBtn" Style="{StaticResource ToolButtonStyle}"
+                                    ToolTipService.ToolTip="Export">
+                                <FontIcon Glyph="&#xf3b2;" />
+                            </Button>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
-                <StackPanel x:Name="ToolbarSecondary" Grid.Column="2" Orientation="Horizontal" Spacing="6" Padding="6"
-                            HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Button x:Name="PagePanelBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Page sorter">
-                    <FontIcon Glyph="&#xe8ef;" />
-                </Button>
-                <Button x:Name="SearchBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Find text (Ctrl+F)">
-                    <FontIcon Glyph="&#xe8b6;" />
-                </Button>
-                <Border x:Name="TopSep1" Background="{ThemeResource AppBorderBrush}"
-                        Width="1" Height="28" Margin="-3,0" />
-                <Button x:Name="ScreenshotBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Take screenshot">
-                    <FontIcon Glyph="&#xe3b0;" />
-                </Button>
-                <Button x:Name="TemplateBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Page template">
-                    <FontIcon Glyph="&#xf79d;" />
-                </Button>
-                <Button x:Name="AddPdfPagesBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Add pages from a PDF">
-                    <FontIcon Glyph="&#xe415;" />
-                </Button>
-                <Button x:Name="AddPageBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Add blank page">
-                    <FontIcon Glyph="&#xe145;" />
-                </Button>
-                <Border x:Name="TopSep2" Background="{ThemeResource AppBorderBrush}"
-                        Width="1" Height="28" Margin="-3,0" />
-                <Button x:Name="SettingsBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Settings">
-                    <FontIcon Glyph="&#xe8b8;" />
-                </Button>
+
+                <!-- Center: document title -->
+                <TextBlock x:Name="TopBarTitle" Grid.Column="1"
+                           IsHitTestVisible="False"
+                           FontSize="14" FontWeight="SemiBold"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis" />
+
+                <!-- Right: view · insert actions · settings -->
+                <StackPanel x:Name="ToolbarSecondary" Grid.Column="2" Orientation="Horizontal" Spacing="4"
+                            Padding="0,0,4,0" VerticalAlignment="Center">
+                    <Border Background="{ThemeResource AppSurfaceVariantBrush}" CornerRadius="10" Padding="2">
+                        <StackPanel Orientation="Horizontal" Spacing="0">
+                            <Button x:Name="PagePanelBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Page sorter">
+                                <FontIcon Glyph="&#xe8ef;" />
+                            </Button>
+                            <Button x:Name="SearchBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Find text (Ctrl+F)">
+                                <FontIcon Glyph="&#xe8b6;" />
+                            </Button>
+                        </StackPanel>
+                    </Border>
+                    <Border x:Name="TopSep1" Background="{ThemeResource AppBorderBrush}"
+                            Width="1" Height="24" Margin="2,0" />
+                    <Button x:Name="ScreenshotBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Take screenshot">
+                        <FontIcon Glyph="&#xe3b0;" />
+                    </Button>
+                    <Button x:Name="TemplateBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Page template">
+                        <FontIcon Glyph="&#xf79d;" />
+                    </Button>
+                    <Button x:Name="AddPdfPagesBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Add pages from a PDF">
+                        <FontIcon Glyph="&#xe415;" />
+                    </Button>
+                    <Button x:Name="AddPageBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Add blank page">
+                        <FontIcon Glyph="&#xe145;" />
+                    </Button>
+                    <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" />
+                    <Button x:Name="SettingsBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Settings">
+                        <FontIcon Glyph="&#xe8b8;" />
+                    </Button>
                 </StackPanel>
             </Grid>
         </Border>
@@ -452,5 +568,13 @@
                 </StackPanel>
             </Grid>
         </Border>
+
+        <!-- Shown while a document opens on a background thread; the transparent
+             grid also blocks input until the document is bound. -->
+        <Grid x:Name="LoadingOverlay"
+              Grid.Row="0" Grid.RowSpan="4" Grid.Column="0" Grid.ColumnSpan="3"
+              Canvas.ZIndex="20" Background="Transparent" Visibility="Collapsed">
+            <ProgressRing x:Name="LoadingRing" Width="44" Height="44" IsActive="False" />
+        </Grid>
     </Grid>
 </Page>

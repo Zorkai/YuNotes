@@ -27,11 +27,27 @@ public sealed class PageRenderer
         LineJoin = CanvasLineJoin.Round
     };
 
+    // `clip`: the dirty region being redrawn (canvas space). Elements whose
+    // rendered bounds can't intersect it are skipped — the GPU is already
+    // clipped to the region's tiles, but geometry building (one COM call per
+    // Bezier segment) is pure CPU and otherwise scales with TOTAL page ink on
+    // every partial redraw (stroke commit, eraser pass, newly-scrolled tile).
+    // `hiResBackground`/`hiResRect`: optional re-rasterization of the visible
+    // crop of the PDF background at zoomed-in resolution (see PageCanvas.
+    // UpdateHiResBackground) — drawn over the base bitmap, under the template
+    // and ink.
     public void DrawPage(CanvasDrawingSession ds, ICanvasResourceCreator dev, NotePage page, TemplateSettings template,
                          CanvasBitmap? backgroundBitmap, System.Collections.Generic.IDictionary<string, CanvasBitmap>? imageCache = null,
                          string? skipTextId = null, bool overlayOnly = false,
-                         float previewExtLeft = 0, float previewExtRight = 0)
+                         float previewExtLeft = 0, float previewExtRight = 0,
+                         Rect? clip = null,
+                         CanvasBitmap? hiResBackground = null, Rect? hiResRect = null)
     {
+        // Elements are drawn shifted right during a left-extension preview, so
+        // cull against the clip shifted the opposite way.
+        Rect? cullClip = clip;
+        if (clip is { } c && previewExtLeft > 0)
+            cullClip = new Rect(c.X - previewExtLeft, c.Y, c.Width, c.Height);
         // totalWidth grows for extension previews but stays at page.Width for
         // reduction previews (we draw an overlay instead of shrinking the canvas).
         float totalWidth = (float)page.Width + Math.Max(0, previewExtLeft) + Math.Max(0, previewExtRight);
@@ -88,7 +104,34 @@ public sealed class PageRenderer
                 float bgW    = page.BackgroundContentWidth > 0
                                    ? (float)page.BackgroundContentWidth
                                    : (float)page.Width - (float)page.BackgroundLeft;
-                ds.DrawImage(backgroundBitmap, new Rect(bgLeft, 0, bgW, page.Height));
+                // The hi-res crop is opaque (rasterized on a white background), so
+                // when it fully covers the dirty region the base blit underneath is
+                // entirely painted over — skip the expensive cubic upscale of the
+                // full-page bitmap.
+                bool hiResCoversClip = hiResBackground is not null && hiResRect is { } cover &&
+                                       clip is { } cr &&
+                                       cover.X <= cr.X + 0.01 && cover.Y <= cr.Y + 0.01 &&
+                                       cover.Right >= cr.Right - 0.01 && cover.Bottom >= cr.Bottom - 0.01;
+                if (!hiResCoversClip)
+                {
+                    // Cubic resampling keeps PDF text edges noticeably cleaner than
+                    // the default linear filter when the bitmap is scaled.
+                    ds.DrawImage(backgroundBitmap, new Rect(bgLeft, 0, bgW, page.Height),
+                                 backgroundBitmap.Bounds, 1f, CanvasImageInterpolation.HighQualityCubic);
+                }
+                if (hiResBackground is not null && hiResRect is { } hr)
+                {
+                    // The crop is rendered at the backing-store scale, so this blit
+                    // is normally ~1:1, where linear is visually identical to (and
+                    // far cheaper than) two-pass cubic. Keep cubic when the 16 MP
+                    // cap or display scaling made it a real upscale.
+                    double devicePxPerBitmapPx =
+                        hr.Width * ds.Dpi / 96.0 / hiResBackground.SizeInPixels.Width;
+                    var interp = Math.Abs(devicePxPerBitmapPx - 1.0) <= 0.05
+                        ? CanvasImageInterpolation.Linear
+                        : CanvasImageInterpolation.HighQualityCubic;
+                    ds.DrawImage(hiResBackground, hr, hiResBackground.Bounds, 1f, interp);
+                }
             }
             _templates.DrawTemplate(ds, totalWidth, page.Height, template);
         }
@@ -104,6 +147,10 @@ public sealed class PageRenderer
         {
             foreach (var img in page.Images)
             {
+                if (img.Rotation == 0 && cullClip is { } cc1 &&
+                    !RectIntersects(cc1, (float)img.X, (float)img.Y,
+                                    (float)(img.X + img.Width), (float)(img.Y + img.Height)))
+                    continue;
                 if (!imageCache.TryGetValue(img.Id, out var bmp)) continue;
                 var prev = ds.Transform;
                 if (img.Rotation != 0)
@@ -119,18 +166,27 @@ public sealed class PageRenderer
 
         // Shapes (drawn below strokes so ink can annotate over them)
         foreach (var sh in page.Shapes)
+        {
+            if (cullClip is { } cc2 && !ShapeIntersects(cc2, sh)) continue;
             DrawShape(ds, sh);
+        }
 
         // Strokes (highlighters first so pen sits on top)
         foreach (var s in page.Strokes)
-            if (s.Kind == StrokeKind.Highlighter) DrawStroke(ds, s);
+            if (s.Kind == StrokeKind.Highlighter && (cullClip is not { } h || StrokeIntersects(h, s)))
+                DrawStroke(ds, s);
         foreach (var s in page.Strokes)
-            if (s.Kind == StrokeKind.Pen) DrawStroke(ds, s);
+            if (s.Kind == StrokeKind.Pen && (cullClip is not { } pc || StrokeIntersects(pc, s)))
+                DrawStroke(ds, s);
 
         // Text — skip the element currently being inline-edited
         foreach (var t in page.Texts)
         {
             if (t.Id == skipTextId) continue;
+            if (t.Rotation == 0 && cullClip is { } cc3 &&
+                !RectIntersects(cc3, (float)t.X, (float)t.Y,
+                                (float)(t.X + t.Width), (float)(t.Y + t.Height)))
+                continue;
             var prev = ds.Transform;
             if (t.Rotation != 0)
             {
@@ -146,6 +202,61 @@ public sealed class PageRenderer
         ds.Transform = prevTransform;
     }
 
+    private static bool RectIntersects(in Rect clip, float minX, float minY, float maxX, float maxY)
+        => maxX >= clip.X && minX <= clip.X + clip.Width &&
+           maxY >= clip.Y && minY <= clip.Y + clip.Height;
+
+    // Conservative bounds test for a stroke's RENDERED extent: point hull,
+    // padded by half the stroke width plus the Catmull-Rom overshoot bound —
+    // the curve stays inside the hull of its control points, which sit at most
+    // max|P[i+1]-P[i-1]|/6 outside the sample hull.
+    private static bool StrokeIntersects(in Rect clip, Stroke s)
+    {
+        var pts = s.Points;
+        if (pts.Count == 0) return false;
+
+        // Early out: any sample inside the clip padded by the width alone
+        // proves intersection without finishing the scan.
+        float halfW = s.Width * 0.5f;
+        double fastL = clip.X - halfW, fastT = clip.Y - halfW;
+        double fastR = clip.X + clip.Width + halfW, fastB = clip.Y + clip.Height + halfW;
+
+        float minX = float.MaxValue, minY = float.MaxValue;
+        float maxX = float.MinValue, maxY = float.MinValue;
+        float maxSpanSq = 0f;
+        for (int i = 0; i < pts.Count; i++)
+        {
+            var p = pts[i];
+            if (p.X >= fastL && p.X <= fastR && p.Y >= fastT && p.Y <= fastB) return true;
+            if (p.X < minX) minX = p.X; if (p.Y < minY) minY = p.Y;
+            if (p.X > maxX) maxX = p.X; if (p.Y > maxY) maxY = p.Y;
+            if (!s.PressureMode && i >= 2)
+            {
+                float dx = pts[i].X - pts[i - 2].X;
+                float dy = pts[i].Y - pts[i - 2].Y;
+                float d2 = dx * dx + dy * dy;
+                if (d2 > maxSpanSq) maxSpanSq = d2;
+            }
+        }
+        float pad = halfW + (s.PressureMode ? 0f : MathF.Sqrt(maxSpanSq) / 6f) + 2f;
+        return RectIntersects(clip, minX - pad, minY - pad, maxX + pad, maxY + pad);
+    }
+
+    private static bool ShapeIntersects(in Rect clip, ShapeElement s)
+    {
+        float minX = Math.Min(s.X1, s.X2);
+        float minY = Math.Min(s.Y1, s.Y2);
+        float maxX = Math.Max(s.X1, s.X2);
+        float maxY = Math.Max(s.Y1, s.Y2);
+        if (s.Kind == ShapeKind.Triangle)
+        {
+            minX = Math.Min(minX, s.X3); minY = Math.Min(minY, s.Y3);
+            maxX = Math.Max(maxX, s.X3); maxY = Math.Max(maxY, s.Y3);
+        }
+        float pad = s.StrokeWidth * 0.5f + 2f;
+        return RectIntersects(clip, minX - pad, minY - pad, maxX + pad, maxY + pad);
+    }
+
     public void DrawShape(CanvasDrawingSession ds, ShapeElement s)
     {
         if (s is null) return;
@@ -154,13 +265,10 @@ public sealed class PageRenderer
         float w = Math.Abs(s.X2 - s.X1);
         float h = Math.Abs(s.Y2 - s.Y1);
 
-        // Use round caps/joins so thin strokes look clean
-        var style = new CanvasStrokeStyle
-        {
-            StartCap = CanvasCapStyle.Round,
-            EndCap = CanvasCapStyle.Round,
-            LineJoin = CanvasLineJoin.Round
-        };
+        // Round caps/joins so thin strokes look clean — shared instance, same
+        // settings as s_strokeStyle; allocating one per shape per redraw shows
+        // up on pages with many shapes.
+        var style = s_strokeStyle;
 
         switch (s.Kind)
         {
