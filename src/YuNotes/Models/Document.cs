@@ -39,6 +39,24 @@ public sealed class Document
     // can copy the original vector pages and only overlay user content on top —
     // preserves selectable text in the output PDF.
     public byte[]? SourcePdfBytes { get; set; }
+
+    // Page ids in the order they were flattened into the container .pdf at the
+    // last full save (container page i ↔ FlattenPageOrder[i]). Null = the file
+    // holds no reusable flatten (legacy file, .yunote, or never fully saved).
+    public List<string>? FlattenPageOrder { get; set; }
+
+    // Pages edited since that flatten — their images in the container are stale
+    // and must be re-rendered on the next full save; every other page's
+    // flattened image can be cloned from the existing file. Persisted, so a
+    // blob-only autosave followed by an app close still re-renders only these.
+    public HashSet<string> FlattenDirtyPageIds { get; } = new();
+
+    // null page = unknown scope → conservatively mark every page stale.
+    public void MarkFlattenDirty(NotePage? page)
+    {
+        if (page is not null) { FlattenDirtyPageIds.Add(page.Id); return; }
+        foreach (var p in Pages) FlattenDirtyPageIds.Add(p.Id);
+    }
 }
 
 public sealed class NotePage

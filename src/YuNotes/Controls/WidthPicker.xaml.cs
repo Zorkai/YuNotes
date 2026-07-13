@@ -20,6 +20,10 @@ public sealed partial class WidthPickerControl : UserControl
     public WidthPickerControl()
     {
         InitializeComponent();
+        // Re-resolve the palette when the effective theme flips (e.g. the user
+        // forces Light while Windows is Dark) — the brushes are picked in code
+        // below, so they don't auto-update the way {ThemeResource} bindings do.
+        ActualThemeChanged += (_, __) => Rebuild();
         Rebuild();
     }
 
@@ -58,6 +62,12 @@ public sealed partial class WidthPickerControl : UserControl
         foreach (var p in _presets) if (p > maxPreset) maxPreset = p;
         double maxDot = _maxDot;
 
+        // Resolve against THIS control's actual theme, not the app/OS theme, so a
+        // forced Light/Dark override colors the dots for what's actually on screen.
+        var accent     = ThemeBrushes.Color(ActualTheme, "AppAccentBrush");
+        var primary    = ThemeBrushes.Color(ActualTheme, "AppTextPrimaryBrush");
+        var activeChip = ThemeBrushes.Brush(ActualTheme, "AppAccentSoftBrush");
+
         foreach (var w in _presets)
         {
             double dotSize = Math.Max(3, (w / maxPreset) * maxDot);
@@ -65,9 +75,7 @@ public sealed partial class WidthPickerControl : UserControl
             var dot = new Ellipse
             {
                 Width = dotSize, Height = dotSize,
-                Fill = new SolidColorBrush(isActive
-                    ? (Color)((SolidColorBrush)Application.Current.Resources["AppAccentBrush"]).Color
-                    : (Color)((SolidColorBrush)Application.Current.Resources["AppTextPrimaryBrush"]).Color)
+                Fill = new SolidColorBrush(isActive ? accent : primary)
             };
             var chip = new Button
             {
@@ -76,7 +84,7 @@ public sealed partial class WidthPickerControl : UserControl
                 CornerRadius = new CornerRadius(9),
                 BorderThickness = new Thickness(0),
                 Background = isActive
-                    ? (Brush)Application.Current.Resources["AppAccentSoftBrush"]
+                    ? activeChip
                     : new SolidColorBrush(Colors.Transparent),
                 Content = dot,
                 Margin = new Thickness(1),

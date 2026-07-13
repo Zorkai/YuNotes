@@ -27,7 +27,9 @@ public sealed partial class InkCanvasControl : UserControl
     public bool SeamlessPages { get; private set; } = true;
 
     public event EventHandler<double>? ZoomChanged;
-    public event EventHandler? DocumentMutated;
+    // Carries the page the mutation touched (null when unknown) so history can
+    // snapshot just that page instead of deep-copying the whole document.
+    public event EventHandler<YuNotes.Models.NotePage?>? DocumentMutated;
     public event EventHandler? SelectionChanged;
     public event EventHandler? RectSelectionCompleted;
     public event EventHandler? AddPageRequested;
@@ -44,7 +46,7 @@ public sealed partial class InkCanvasControl : UserControl
         Context.InvalidateLive = InvalidateAllLive;
         Context.CommitStrokeAt = bbox => ActivePageCanvas?.CommitStrokeRedraw(bbox);
         Context.InvalidateRect = bbox => ActivePageCanvas?.CommitStrokeRedraw(bbox);
-        Context.Mutated = () => DocumentMutated?.Invoke(this, EventArgs.Empty);
+        Context.Mutated = () => DocumentMutated?.Invoke(this, Context.CurrentPage);
         Context.SelectionChanged = () => SelectionChanged?.Invoke(this, EventArgs.Empty);
         Context.EditTextRequested = id => ActivePageCanvas?.BeginInlineTextEdit(id);
         Context.ToolRequested = kind => ToolRequested?.Invoke(this, kind);
@@ -284,10 +286,19 @@ public sealed partial class InkCanvasControl : UserControl
             canvas.MomentaryToolStart += (_, kind) => MomentaryToolStart?.Invoke(this, kind);
             canvas.MomentaryToolEnd += (_, __) => MomentaryToolEnd?.Invoke(this, EventArgs.Empty);
             canvas.RectSelectionCompleted += (_, __) => RectSelectionCompleted?.Invoke(this, EventArgs.Empty);
+            canvas.SelectionDragDropped += OnSelectionDragDropped;
             canvas.ExtensionDragCompleted += OnExtensionDragCompleted;
             canvas.ExtendModeActive = ExtendModeActive;
             PagesPanel.Children.Add(canvas);
             _pageCanvases.Add(canvas);
+        }
+
+        // Link each page to its vertical neighbours so they can render the
+        // slice of a straddling element that bleeds across the shared seam.
+        for (int i = 0; i < _pageCanvases.Count; i++)
+        {
+            _pageCanvases[i].PrevPageCanvas = i > 0 ? _pageCanvases[i - 1] : null;
+            _pageCanvases[i].NextPageCanvas = i < _pageCanvases.Count - 1 ? _pageCanvases[i + 1] : null;
         }
 
         // "Add page" button beneath the last page.
@@ -354,6 +365,28 @@ public sealed partial class InkCanvasControl : UserControl
         // overlay; invalidating other pages is just framework chatter. Big PDFs
         // would otherwise pay 100x Invalidate() calls per pen sample.
         ActivePageCanvas?.RequestLiveRedraw();
+    }
+
+    // True while any page has a pointer gesture in flight (stroke being drawn,
+    // selection drag, pan). Used to defer autosave out of the inking path.
+    public bool IsUserInteracting
+    {
+        get
+        {
+            foreach (var pc in _pageCanvases)
+                if (pc.HasActivePointer) return true;
+            return false;
+        }
+    }
+
+    public int PageCount => _pageCanvases.Count;
+
+    /// <summary>Renders one page's flattened/overlay PNG — lets the save loop
+    /// render page-by-page and yield between pages so the UI stays responsive.</summary>
+    public byte[]? RenderPageForExport(int index, float scale, bool overlayOnly)
+    {
+        if (index < 0 || index >= _pageCanvases.Count) return null;
+        return _pageCanvases[index].RenderToPng(scale, overlayOnly);
     }
 
     public byte[][] RenderAllToPng(float scale = 1f, bool overlayOnly = false)
@@ -446,12 +479,143 @@ public sealed partial class InkCanvasControl : UserControl
     public byte[]? RenderRegionOfCurrentPage(float x, float y, float w, float h)
         => ActivePageCanvas?.RenderRegionToPng(x, y, w, h);
 
+    // ── Cross-page selection move ────────────────────────────────────────────
+    //
+    // A selection Move drag is captured by its origin PageCanvas, so dragging it
+    // over another page keeps translating in the origin's local space — the
+    // elements slide off the page edge and vanish. When the drag ends, the
+    // origin raises SelectionDragDropped; here we find the page the pointer
+    // ended over and, if it's a different one, reparent the elements into it
+    // (translating their coordinates into that page's local space).
+    private void OnSelectionDragDropped(object? sender, SelectionDropEventArgs e)
+    {
+        if (sender is not PageCanvas source) return;
+        var target = PageCanvasAtLocalPoint(source, e.ReleaseLocal);
+        if (target is null || ReferenceEquals(target, source)) return;   // same page → in-page move
+
+        // Pages share the same zoom and left edge, so source→target is a pure
+        // translation; its origin offset converts a source-local point to
+        // target-local. Final target position = original + dragDelta + offset.
+        float ox, oy;
+        try
+        {
+            var origin = source.TransformToVisual(target)
+                               .TransformPoint(new Windows.Foundation.Point(0, 0));
+            ox = (float)origin.X;
+            oy = (float)origin.Y;
+        }
+        catch { return; }
+
+        float shiftX = e.Delta.X + ox;
+        float shiftY = e.Delta.Y + oy;
+        if (!MoveSelectedElements(source.Page, target.Page, shiftX, shiftY)) return;
+
+        // Keep the selection live on its new page so the chrome + floating bar
+        // follow it and the user can keep editing.
+        Context.CurrentPage = target.Page;
+        target.RequestRedraw();   // source repaints itself after this returns
+        // A drop can leave the moved elements straddling a seam; refresh the
+        // pages above/below both source and target so the bleed shows at once.
+        target.PrevPageCanvas?.RequestRedraw();
+        target.NextPageCanvas?.RequestRedraw();
+        source.PrevPageCanvas?.RequestRedraw();
+        source.NextPageCanvas?.RequestRedraw();
+
+        // Two pages changed → snapshot the whole document (null hint) so a single
+        // undo restores both; see the page-scoped history invariant.
+        DocumentMutated?.Invoke(this, null);
+        SelectionChanged?.Invoke(this, EventArgs.Empty);
+        e.Transferred = true;
+    }
+
+    // The page canvas whose bounds contain `pLocal` (given in `source`'s local
+    // coordinates); if the drop landed in a gap/margin, the vertically nearest.
+    private PageCanvas? PageCanvasAtLocalPoint(PageCanvas source, System.Numerics.Vector2 pLocal)
+    {
+        var srcPt = new Windows.Foundation.Point(pLocal.X, pLocal.Y);
+        PageCanvas? nearest = null;
+        double nearestDy = double.MaxValue;
+        foreach (var pc in _pageCanvases)
+        {
+            Windows.Foundation.Point local;
+            try { local = source.TransformToVisual(pc).TransformPoint(srcPt); }
+            catch { continue; }
+            if (local.X >= 0 && local.X <= pc.Page.Width &&
+                local.Y >= 0 && local.Y <= pc.Page.Height)
+                return pc;   // direct hit
+            double dy = local.Y < 0 ? -local.Y
+                      : local.Y > pc.Page.Height ? local.Y - pc.Page.Height : 0;
+            if (dy < nearestDy) { nearestDy = dy; nearest = pc; }
+        }
+        return nearest;
+    }
+
+    // Reparents the currently-selected elements from `from` to `to`, offsetting
+    // their coordinates by (shiftX, shiftY). Returns false if nothing moved.
+    private bool MoveSelectedElements(NotePage from, NotePage to, float shiftX, float shiftY)
+    {
+        bool moved = false;
+        foreach (var id in Context.SelectedStrokeIds)
+        {
+            var s = from.Strokes.FirstOrDefault(z => z.Id == id);
+            if (s is null) continue;
+            for (int i = 0; i < s.Points.Count; i++)
+                s.Points[i] = s.Points[i] with { X = s.Points[i].X + shiftX, Y = s.Points[i].Y + shiftY };
+            from.Strokes.Remove(s); to.Strokes.Add(s); moved = true;
+        }
+        foreach (var id in Context.SelectedShapeIds)
+        {
+            var sh = from.Shapes.FirstOrDefault(z => z.Id == id);
+            if (sh is null) continue;
+            sh.X1 += shiftX; sh.Y1 += shiftY; sh.X2 += shiftX; sh.Y2 += shiftY;
+            if (sh.Kind == ShapeKind.Triangle) { sh.X3 += shiftX; sh.Y3 += shiftY; }
+            from.Shapes.Remove(sh); to.Shapes.Add(sh); moved = true;
+        }
+        foreach (var id in Context.SelectedTextIds)
+        {
+            var t = from.Texts.FirstOrDefault(z => z.Id == id);
+            if (t is null) continue;
+            t.X += shiftX; t.Y += shiftY;
+            from.Texts.Remove(t); to.Texts.Add(t); moved = true;
+        }
+        foreach (var id in Context.SelectedImageIds)
+        {
+            var im = from.Images.FirstOrDefault(z => z.Id == id);
+            if (im is null) continue;
+            im.X += shiftX; im.Y += shiftY;
+            from.Images.Remove(im); to.Images.Add(im); moved = true;
+        }
+        return moved;
+    }
+
     /// <summary>Renders the bounding box of the current selection as a PNG.</summary>
     public byte[]? RenderSelectionRegionToPng()
     {
         var pc = ActivePageCanvas;
         if (pc is null || !pc.SelectionBbox(out var bbox)) return null;
         return pc.RenderRegionToPng(bbox.X, bbox.Y, Math.Max(1, bbox.W), Math.Max(1, bbox.H));
+    }
+
+    /// <summary>
+    /// Scrolls to a page once layout is ready — used on document open, where the
+    /// pages haven't been measured yet so TransformToVisual would return garbage.
+    /// Retries on the dispatcher until the target page has a real height.
+    /// </summary>
+    public void ScrollToPageDeferred(int pageIndex)
+    {
+        if (pageIndex <= 0 || pageIndex >= _pageCanvases.Count) return;
+        int attempts = 0;
+        void Attempt()
+        {
+            var pc = pageIndex < _pageCanvases.Count ? _pageCanvases[pageIndex] : null;
+            if (pc is not null && pc.ActualHeight > 1 && Scroller.ViewportHeight > 1)
+            {
+                ScrollToPage(pageIndex);
+                return;
+            }
+            if (attempts++ < 40) DispatcherQueue.TryEnqueue(Attempt);
+        }
+        DispatcherQueue.TryEnqueue(Attempt);
     }
 
     /// <summary>Scrolls the viewport so that the given page (0-based) is visible at the top.</summary>
@@ -498,7 +662,7 @@ public sealed partial class InkCanvasControl : UserControl
         var pc = _pageCanvases.FirstOrDefault(c => ReferenceEquals(c.Page, page));
         ResetExtension(page);
         pc?.ResizeCanvas();
-        DocumentMutated?.Invoke(this, EventArgs.Empty);
+        DocumentMutated?.Invoke(this, page);
     }
 
     private void CommitPageExtension(NotePage page, ExtendSide side, double amount, PageCanvas? pc)
@@ -507,7 +671,7 @@ public sealed partial class InkCanvasControl : UserControl
         // increase and reduction (amount may be 0 to fully unextend a side).
         SetExtensionAbsolute(page, side, amount);
         pc?.ResizeCanvas();
-        DocumentMutated?.Invoke(this, EventArgs.Empty);
+        DocumentMutated?.Invoke(this, page);
     }
 
     // Migrates all element coordinates and updates the page dimensions.

@@ -12,10 +12,14 @@
             <SolidColorBrush x:Key="AppSurfaceVariantBrush" Color="#CCEFF1F5" />
             <SolidColorBrush x:Key="AppAccentBrush" Color="#FF5B6BFF" />
             <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#FFE7EAFF" />
+            <SolidColorBrush x:Key="AppSuccessBrush" Color="#FF1E8E4E" />
             <SolidColorBrush x:Key="AppTextPrimaryBrush" Color="#FF1B1F2A" />
             <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#FF5B6172" />
             <SolidColorBrush x:Key="AppBorderBrush" Color="#C8E3E5EC" />
             <SolidColorBrush x:Key="AppSeparatorBrush" Color="#60000000" />
+            <!-- Soft hairline for window chrome (top/status bars) that sit on the
+                 window Mica rather than a solid surface. -->
+            <SolidColorBrush x:Key="AppChromeHairlineBrush" Color="#22000000" />
             <SolidColorBrush x:Key="PageSeparatorBrush" Color="#FFB4B7C1" />
             <AcrylicBrush x:Key="AppToolbarBrush"
                           TintColor="#FFFFFF"
@@ -80,10 +84,12 @@
             <SolidColorBrush x:Key="AppSurfaceVariantBrush" Color="#99252934" />
             <SolidColorBrush x:Key="AppAccentBrush" Color="#FF7E8BFF" />
             <SolidColorBrush x:Key="AppAccentSoftBrush" Color="#FF2B3052" />
+            <SolidColorBrush x:Key="AppSuccessBrush" Color="#FF4CC38A" />
             <SolidColorBrush x:Key="AppTextPrimaryBrush" Color="#FFF1F2F6" />
             <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="#FFA2A8B9" />
             <SolidColorBrush x:Key="AppBorderBrush" Color="#C82A2E39" />
             <SolidColorBrush x:Key="AppSeparatorBrush" Color="#70FFFFFF" />
+            <SolidColorBrush x:Key="AppChromeHairlineBrush" Color="#20FFFFFF" />
             <SolidColorBrush x:Key="PageSeparatorBrush" Color="#FF3D4255" />
             <AcrylicBrush x:Key="AppToolbarBrush"
                           TintColor="#2D323F"

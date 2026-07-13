@@ -206,6 +206,7 @@ public sealed partial class SettingsPage : Page
         EraserWidthBox.ValueChanged += (s, e) => Mark();
 
         BarrelCombo.SelectionChanged += Mark;
+        ThemeCombo.SelectionChanged += Mark;
         ToolbarPositionCombo.SelectionChanged += Mark;
         ToolbarSizeCombo.SelectionChanged += Mark;
         HideZoomBarBox.Checked += Mark; HideZoomBarBox.Unchecked += Mark;
@@ -215,6 +216,10 @@ public sealed partial class SettingsPage : Page
         PalmToggle.Toggled += Mark;
         IgnoreTouchToggle.Toggled += Mark;
         HoldToSnapToggle.Toggled += Mark;
+
+        AutosaveToggle.Toggled += Mark;
+        AutosaveToggle.Toggled += (_, _) => AutosaveDelayBox.IsEnabled = AutosaveToggle.IsOn;
+        AutosaveDelayBox.ValueChanged += (_, _) => Mark();
 
         ToolVisExport.Checked   += Mark;
         ToolVisExport.Unchecked += Mark;
@@ -285,6 +290,9 @@ public sealed partial class SettingsPage : Page
         // Shape recognition
         HoldToSnapToggle.IsOn = s.HoldToSnapEnabled;
 
+        // Appearance
+        ThemeCombo.SelectedIndex = (int)s.Theme;
+
         // Layout
         ToolbarPositionCombo.SelectedIndex = (int)s.ToolbarPosition;
         ToolbarSizeCombo.SelectedIndex = (int)s.ToolbarSize;
@@ -305,6 +313,11 @@ public sealed partial class SettingsPage : Page
         HighWidthBox.Value = s.DefaultHighlighterWidth;
         EraserWidthBox.Value = s.DefaultEraserWidth;
         FolderBox.Text  = s.DocumentsFolder;
+
+        // Autosave
+        AutosaveToggle.IsOn = s.AutosaveEnabled;
+        AutosaveDelayBox.Value = s.AutosaveDelaySeconds;
+        AutosaveDelayBox.IsEnabled = s.AutosaveEnabled;
     }
 
     private static void PopulateToolList(
@@ -476,15 +489,25 @@ public sealed partial class SettingsPage : Page
         s.IgnoreTouchWhilePenActive = IgnoreTouchToggle.IsOn;
         s.PalmRejectionGraceMs = (int)GraceBox.Value;
         s.HoldToSnapEnabled = HoldToSnapToggle.IsOn;
+        s.Theme = (AppThemeMode)Math.Max(0, ThemeCombo.SelectedIndex);
         s.DefaultPenWidth = (float)PenWidthBox.Value;
         s.DefaultHighlighterWidth = (float)HighWidthBox.Value;
         s.DefaultEraserWidth = (float)EraserWidthBox.Value;
         s.DocumentsFolder  = FolderBox.Text;
+        var oldToolbarPos = s.ToolbarPosition;
         s.ToolbarPosition = (ToolbarPosition)ToolbarPositionCombo.SelectedIndex;
+        // Changing the dock edge moves the anchor, so a saved free-drag offset no
+        // longer makes sense — start the new side at its default position.
+        if (s.ToolbarPosition != oldToolbarPos) { s.ToolbarOffsetX = 0; s.ToolbarOffsetY = 0; }
         s.ToolbarSize = (ToolbarSize)ToolbarSizeCombo.SelectedIndex;
         s.HideZoomBar = HideZoomBarBox.IsChecked == true;
         s.SeamlessPages = SeamlessPagesBox.IsChecked == true;
         s.LiquidGlassEnabled = LiquidGlassBox.IsChecked == true;
+
+        s.AutosaveEnabled = AutosaveToggle.IsOn;
+        // NumberBox yields NaN if the field is cleared — fall back to the default.
+        s.AutosaveDelaySeconds = double.IsNaN(AutosaveDelayBox.Value)
+            ? 2.5 : Math.Clamp(AutosaveDelayBox.Value, 0.5, 120);
 
         s.HiddenToolbarTools.Clear();
         s.ToolbarDrawingOrder.Clear();

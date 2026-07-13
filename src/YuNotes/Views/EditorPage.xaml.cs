@@ -32,6 +32,18 @@ public sealed partial class EditorPage : Page
     private bool _penPressureMode;
     private bool _suppressZoomSlider;
 
+    // Autosave: debounced write-back so a crash or an abrupt close can't wipe out
+    // more than a couple of seconds of work. Restarted on every edit; fires once
+    // the user pauses. _saving guards against overlapping saves (manual + auto).
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _autosaveTimer;
+    private bool _saving;
+
+    // Ink/overlay is flattened to raster when a .pdf is saved/exported. The coord
+    // space is 150 DPI, so scale 1 embeds 150-DPI ink — soft when zoomed in an
+    // external viewer. 3× ≈ 450 DPI keeps hand-drawing crisp; overlay PNGs stay
+    // small since they're mostly transparent.
+    private const float ExportRenderScale = 3f;
+
     // Per-tool width state (persists across tool switches within a session)
     private float _penWidth;
     private float _highlighterWidth;
@@ -109,7 +121,7 @@ public sealed partial class EditorPage : Page
             ToolKind.ExtendPage => _extendPage,
             _ => _pen
         };
-        Canvas.DocumentMutated += (_, __) => { if (_doc is not null) _doc.IsDirty = true; App.Services.History.RecordMutation(); UpdateSelectionUi(); };
+        Canvas.DocumentMutated += (_, page) => { if (_doc is not null) { _doc.IsDirty = true; _doc.MarkFlattenDirty(page); } App.Services.History.RecordMutation(page); UpdateSelectionUi(); UpdateSaveStateUi(); ScheduleAutosave(); };
         Canvas.SelectionChanged += (_, __) => UpdateSelectionUi();
         Canvas.ToolRequested += (_, kind) => { SelectTool(kind); HideImageGhost(); };
         Canvas.AddPageRequested += (_, __) => AddBlankPage();
@@ -148,7 +160,7 @@ public sealed partial class EditorPage : Page
         PageSelDeleteBtn.Click += async (_, __) => await DeleteSelectedPagesAsync();
         PageSelClearBtn.Click  += (_, __) => ClearPageSelection();
 
-        Canvas.ActivePageScrolled += (_, __) => UpdatePagePanelHighlight();
+        Canvas.ActivePageScrolled += (_, __) => { UpdatePagePanelHighlight(); SaveLastPage(); };
 
         SearchBtn.Click += (_, __) => OpenSearch();
         SearchCloseBtn.Click += (_, __) => CloseSearch();
@@ -216,47 +228,37 @@ public sealed partial class EditorPage : Page
         DragHandle.PointerMoved += DragHandle_PointerMoved;
         DragHandle.PointerReleased += DragHandle_PointerReleased;
         DragHandle.PointerCaptureLost += DragHandle_PointerReleased;
+
+        // Seed the toolbar's persisted drag offset before first layout so it
+        // renders in place on the very first frame (no post-load jump).
+        var toolbarSettings = App.Services.Settings.Current;
+        ToolbarTranslate.X = toolbarSettings.ToolbarOffsetX;
+        ToolbarTranslate.Y = toolbarSettings.ToolbarOffsetY;
     }
 
     private bool _dragActive;
     private Windows.Foundation.Point _dragStart;
-    private Thickness _dragStartMargin;
+    private double _dragStartTx, _dragStartTy;
 
     private void DragHandle_PointerPressed(object sender, PointerRoutedEventArgs e)
     {
         _dragActive = DragHandle.CapturePointer(e.Pointer);
         if (!_dragActive) return;
         _dragStart = e.GetCurrentPoint(null).Position;
-        _dragStartMargin = ToolbarHost.Margin;
+        _dragStartTx = ToolbarTranslate.X;
+        _dragStartTy = ToolbarTranslate.Y;
     }
 
     private void DragHandle_PointerMoved(object sender, PointerRoutedEventArgs e)
     {
         if (!_dragActive) return;
         var p = e.GetCurrentPoint(null).Position;
-        double dx = p.X - _dragStart.X;
-        double dy = p.Y - _dragStart.Y;
-
-        // Constrain to the perpendicular axis of the anchored edge so the toolbar
-        // doesn't drift sideways out of the canvas area.
-        var pos = App.Services.Settings.Current.ToolbarPosition;
-        var m = _dragStartMargin;
-        switch (pos)
-        {
-            case ToolbarPosition.Top:
-                m.Top = Math.Max(0, _dragStartMargin.Top + dy);
-                break;
-            case ToolbarPosition.Bottom:
-                m.Bottom = Math.Max(0, _dragStartMargin.Bottom - dy);
-                break;
-            case ToolbarPosition.Left:
-                m.Left = Math.Max(0, _dragStartMargin.Left + dx);
-                break;
-            case ToolbarPosition.Right:
-                m.Right = Math.Max(0, _dragStartMargin.Right - dx);
-                break;
-        }
-        ToolbarHost.Margin = m;
+        ToolbarTranslate.X = _dragStartTx + (p.X - _dragStart.X);
+        ToolbarTranslate.Y = _dragStartTy + (p.Y - _dragStart.Y);
+        ClampToolbarIntoView();
+        // A render-transform change doesn't trigger layout, so nudge an arrange so
+        // the liquid-glass backdrop re-syncs its refraction offset to the new spot.
+        ToolbarHost.InvalidateArrange();
     }
 
     private void DragHandle_PointerReleased(object sender, PointerRoutedEventArgs e)
@@ -264,6 +266,29 @@ public sealed partial class EditorPage : Page
         if (!_dragActive) return;
         _dragActive = false;
         DragHandle.ReleasePointerCapture(e.Pointer);
+        var s = App.Services.Settings.Current;
+        s.ToolbarOffsetX = ToolbarTranslate.X;
+        s.ToolbarOffsetY = ToolbarTranslate.Y;
+        App.Services.Settings.Save();
+    }
+
+    // Keeps at least a sliver of the toolbar on-screen after a drag so it can't be
+    // lost off an edge (and then persisted off-screen).
+    private void ClampToolbarIntoView()
+    {
+        if (RootGrid.ActualWidth < 1 || RootGrid.ActualHeight < 1 || ToolbarHost.ActualWidth < 1) return;
+        try
+        {
+            var tl = ToolbarHost.TransformToVisual(RootGrid).TransformPoint(new Windows.Foundation.Point(0, 0));
+            double w = ToolbarHost.ActualWidth, h = ToolbarHost.ActualHeight;
+            double availW = RootGrid.ActualWidth, availH = RootGrid.ActualHeight;
+            const double keep = 32;
+            if (tl.X > availW - keep) ToolbarTranslate.X -= tl.X - (availW - keep);
+            else if (tl.X + w < keep) ToolbarTranslate.X += keep - (tl.X + w);
+            if (tl.Y > availH - keep) ToolbarTranslate.Y -= tl.Y - (availH - keep);
+            else if (tl.Y + h < keep) ToolbarTranslate.Y += keep - (tl.Y + h);
+        }
+        catch { }
     }
 
     private void ApplyToolbarPosition(ToolbarPosition pos)
@@ -321,10 +346,25 @@ public sealed partial class EditorPage : Page
             else          { sep.Width = 1;  sep.Height = 28; sep.Margin = new Thickness(-3, 0, -3, 0); }
         }
 
-        // Flip the selection action chip's inner panel + the pickers
-        SelectionActionsPanel.Orientation = vertical ? Orientation.Vertical : Orientation.Horizontal;
+        // Flip the pickers between horizontal/vertical.
         ColorPicker.SetOrientation(vertical ? Orientation.Vertical : Orientation.Horizontal);
         WidthPicker.SetOrientation(vertical ? Orientation.Vertical : Orientation.Horizontal);
+
+        // Park the floating selection bar centre-top of the canvas, but move it
+        // to the bottom when the toolbar itself occupies the top edge so the two
+        // never overlap. It's a separate grid child, so its show/hide can't
+        // resize the (possibly docked) toolbar.
+        SelectionActions.HorizontalAlignment = HorizontalAlignment.Center;
+        if (pos == ToolbarPosition.Top)
+        {
+            SelectionActions.VerticalAlignment = VerticalAlignment.Bottom;
+            SelectionActions.Margin = new Thickness(0, 0, 0, 14);
+        }
+        else
+        {
+            SelectionActions.VerticalAlignment = VerticalAlignment.Top;
+            SelectionActions.Margin = new Thickness(0, 14, 0, 0);
+        }
 
         // WinUI's default ToggleButton theme style carries HorizontalAlignment=Left.
         // A horizontal StackPanel ignores it (slot = desired width), but in the
@@ -335,28 +375,25 @@ public sealed partial class EditorPage : Page
         foreach (var tool in new FrameworkElement[]
         {
             ToolHand, ToolPen, ToolHighlighter, ToolEraser, ToolText, ToolImage,
-            ToolShape, ToolRuler, ToolSelect, ToolExtend,
-            SelDuplicateBtn, SelDeleteBtn, SelClearBtn
+            ToolShape, ToolRuler, ToolSelect, ToolExtend
         })
             tool.HorizontalAlignment = toolAlign;
+
+        // Restore the persisted free-drag offset on top of the docked anchor. The
+        // transform itself is declared in XAML (baked into the first frame); we
+        // only update its values here.
+        var settings = App.Services.Settings.Current;
+        ToolbarTranslate.X = settings.ToolbarOffsetX;
+        ToolbarTranslate.Y = settings.ToolbarOffsetY;
+        // Pull it back on-screen once laid out, in case the window is now smaller.
+        if (settings.ToolbarOffsetX != 0 || settings.ToolbarOffsetY != 0)
+            DispatcherQueue.TryEnqueue(ClampToolbarIntoView);
     }
 
     private void ApplyToolbarScaleForWidth(double pageWidth)
     {
-        // ── Top pinned bar — always Normal size, never affected by ToolbarSize ──
-        const double topBtn  = 44;
-        const double topIcon = 24;
-        var topRadius = new CornerRadius(topBtn / 2);
-        Control[] topBarBtns = {
-            BackBtn, UndoBtn, RedoBtn, SaveBtn, ExportBtn,
-            PagePanelBtn, SearchBtn, ScreenshotBtn, AddPageBtn, AddPdfPagesBtn, TemplateBtn, SettingsBtn
-        };
-        foreach (var c in topBarBtns)
-        {
-            c.Width = topBtn; c.Height = topBtn;
-            c.CornerRadius = topRadius;
-            if (c is ContentControl cc && cc.Content is FontIcon fi) fi.FontSize = topIcon;
-        }
+        // The top pinned bar is a fixed Normal size, styled entirely in XAML
+        // (compact segmented groups) — it isn't scaled here.
 
         // ── Floating drawing toolbar — scales with window width AND ToolbarSize ──
         double btn, icon, colorBtn, chip, chipDot;
@@ -445,13 +482,16 @@ public sealed partial class EditorPage : Page
         int idx = 2;
         foreach (var key in drawOrder) ToolbarPrimary.Children.Insert(idx++, toolMap[key]);
 
-        // Action buttons in ToolbarSecondary
+        // Reorderable action slots in ToolbarSecondary. The insert actions
+        // (blank page / PDF pages / template) live inside AddMenuBtn's menu,
+        // and the screenshot button has a FIXED slot left of the page sorter
+        // (user request) — so only the Add menu itself is placed here. A saved
+        // "Screenshot" entry in ToolbarActionOrder is simply ignored.
         var actionMap = new Dictionary<string, UIElement>
         {
-            ["Screenshot"] = ScreenshotBtn, ["Template"] = TemplateBtn,
-            ["AddPdfPages"] = AddPdfPagesBtn, ["AddPage"] = AddPageBtn,
+            ["Add"] = AddMenuShell,
         };
-        var defaultAction = new[] { "Screenshot", "Template", "AddPdfPages", "AddPage" };
+        var defaultAction = new[] { "Add" };
         var actionOrder = s.ToolbarActionOrder.Where(actionMap.ContainsKey)
                           .Concat(defaultAction)
                           .Distinct()
@@ -486,19 +526,17 @@ public sealed partial class EditorPage : Page
         ShapeGroup.Visibility     = Show("Shape");
         SelectGroup.Visibility    = Show("Select");
 
-        // Secondary bar — action buttons
+        // Secondary bar — action buttons. The insert actions are menu items now;
+        // hiding one hides its row, and the whole Insert menu button collapses
+        // only when all three are hidden.
         ScreenshotBtn.Visibility   = Show("Screenshot");
         AddPageBtn.Visibility      = Show("AddPage");
         AddPdfPagesBtn.Visibility  = Show("AddPdfPages");
         ExportBtn.Visibility       = Show("Export");
         TemplateBtn.Visibility     = Show("Template");
-
-        // Hide the first separator if the entire insert group collapsed —
-        // otherwise two dividers would stack with nothing between them.
-        bool anyInsertVisible =
-            !IsHidden("Screenshot") || !IsHidden("AddPage") ||
-            !IsHidden("AddPdfPages") || !IsHidden("Template");
-        TopSep1.Visibility = anyInsertVisible ? Visibility.Visible : Visibility.Collapsed;
+        bool anyAddVisible = !IsHidden("AddPage") || !IsHidden("AddPdfPages") || !IsHidden("Template");
+        AddMenuShell.Visibility = anyAddVisible ? Visibility.Visible : Visibility.Collapsed;
+        // TopSep1 is an invisible layout anchor for ApplyToolbarOrder — leave it collapsed.
     }
 
     protected override void OnNavigatedTo(NavigationEventArgs e)
@@ -521,6 +559,34 @@ public sealed partial class EditorPage : Page
     {
         base.OnNavigatedFrom(e);
         App.MainWindow!.Title = "YuNotes";
+        SaveLastPage();
+        // Stop the debounce so a queued tick can't fire a save after the user
+        // left — in particular after they picked "Don't save" in ConfirmLeaveAsync
+        // (which intentionally leaves the in-memory doc dirty without persisting).
+        _autosaveTimer?.Stop();
+    }
+
+    // Records the page the user is currently viewing so reopening this document
+    // returns there. Called on scroll-settle and on leaving the editor.
+    private void SaveLastPage()
+    {
+        if (_doc is null || string.IsNullOrEmpty(_doc.Info.FilePath)) return;
+        var page = Canvas.ActivePage;
+        if (page is null) return;
+        int idx = _doc.Pages.IndexOf(page);
+        if (idx < 0) return;
+        var map = App.Services.Settings.Current.LastPageByDocument;
+        if (map.TryGetValue(_doc.Info.FilePath, out var cur) && cur == idx) return;   // unchanged
+        map[_doc.Info.FilePath] = idx;
+        App.Services.Settings.Save();
+    }
+
+    // On open, jump to the last page the user was on (once pages are laid out).
+    private void RestoreLastPage()
+    {
+        if (_doc is null || string.IsNullOrEmpty(_doc.Info.FilePath)) return;
+        if (!App.Services.Settings.Current.LastPageByDocument.TryGetValue(_doc.Info.FilePath, out var idx)) return;
+        if (idx > 0 && idx < _doc.Pages.Count) Canvas.ScrollToPageDeferred(idx);
     }
 
     // Opens the document off the UI thread so the editor shell (and the page
@@ -563,6 +629,7 @@ public sealed partial class EditorPage : Page
         if (string.IsNullOrEmpty(fileName)) fileName = d.Info.Title;
         App.MainWindow!.Title = $"YuNotes — {fileName}";
         TopBarTitle.Text = d.Info.Title;
+        UpdateSaveStateUi();
         var settings = App.Services.Settings.Current;
 
         // Restore persisted tool modes
@@ -593,6 +660,7 @@ public sealed partial class EditorPage : Page
 
         App.Services.History.Bind(d);
         UpdateHistoryUi();
+        RestoreLastPage();
 
         // Extract selectable text from the source PDF, off the UI thread. The result
         // is wired back into each NotePage so the Hand tool can hit-test against it
@@ -864,20 +932,76 @@ public sealed partial class EditorPage : Page
 
     private void DoUndo()
     {
-        App.Services.History.Undo();
+        AfterHistoryStep(App.Services.History.Undo());
         Canvas.ResizeAllCanvases();  // page.Width may have changed (extension undo)
         Canvas.InvalidateAll();
     }
     private void DoRedo()
     {
-        App.Services.History.Redo();
+        AfterHistoryStep(App.Services.History.Redo());
         Canvas.ResizeAllCanvases();
         Canvas.InvalidateAll();
+    }
+
+    // An undo/redo edits the document like any other mutation: it must dirty
+    // the doc (save prompt + autosave) and mark the touched pages' flattened
+    // container images stale. (Previously undo left IsDirty untouched, so an
+    // undo right after a save could be silently lost on close.)
+    private void AfterHistoryStep(IReadOnlyList<string> changedPageIds)
+    {
+        if (_doc is null || changedPageIds.Count == 0) return;
+        _doc.IsDirty = true;
+        foreach (var id in changedPageIds) _doc.FlattenDirtyPageIds.Add(id);
+        UpdateSaveStateUi();
+        ScheduleAutosave();
     }
     private void UpdateHistoryUi()
     {
         UndoBtn.IsEnabled = App.Services.History.CanUndo;
         RedoBtn.IsEnabled = App.Services.History.CanRedo;
+    }
+
+    // After any page add/move/delete/duplicate. These ops never set IsDirty
+    // before (a reorder followed by close was silently lost). Page CONTENT is
+    // untouched, so no flatten invalidation is needed here: new pages aren't in
+    // FlattenPageOrder (always rendered fresh) and moved pages are handled by
+    // the save-time neighbour check.
+    private void MarkPageSetChanged()
+    {
+        if (_doc is null) return;
+        _doc.IsDirty = true;
+        UpdateSaveStateUi();
+        ScheduleAutosave();
+    }
+
+    // Reflects autosave state next to the title: green "✓ Saved" once clean, a
+    // pending dot + "Unsaved" while there are edits, "Saving…" during a write.
+    private void UpdateSaveStateUi()
+    {
+        if (SaveStateText is null) return;
+        var muted = (Brush)Application.Current.Resources["AppTextSecondaryBrush"];
+        var success = (Brush)Application.Current.Resources["AppSuccessBrush"];
+        if (_saving)
+        {
+            SaveStateText.Text = "Saving…";
+            SaveStateText.Foreground = muted;
+            SaveStateCheck.Visibility = Visibility.Collapsed;
+            SaveStateDot.Visibility = Visibility.Collapsed;
+        }
+        else if (_doc?.IsDirty == true)
+        {
+            SaveStateText.Text = "Unsaved";
+            SaveStateText.Foreground = muted;
+            SaveStateCheck.Visibility = Visibility.Collapsed;
+            SaveStateDot.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            SaveStateText.Text = "Saved";
+            SaveStateText.Foreground = success;
+            SaveStateCheck.Visibility = Visibility.Visible;
+            SaveStateDot.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void AddBlankPage()
@@ -890,6 +1014,7 @@ public sealed partial class EditorPage : Page
         Canvas.Rebuild();
         App.Services.History.Bind(_doc);   // page set changed; reset history
         UpdateHistoryUi();
+        MarkPageSetChanged();
         if (_pagePanelOpen) _ = RefreshPagePanelAsync();
     }
 
@@ -981,7 +1106,7 @@ public sealed partial class EditorPage : Page
                 InitPicker(save);
                 var file = await save.PickSaveFileAsync();
                 if (file is null) return;
-                var pngs = Canvas.RenderAllToPng();
+                var pngs = Canvas.RenderAllToPng(scale: ExportRenderScale);
                 App.Services.PdfExport.Export(_doc, pngs, file.Path);
                 await Notify("Exported", "PDF saved.");
             }
@@ -992,7 +1117,7 @@ public sealed partial class EditorPage : Page
                 InitPicker(folder);
                 var f = await folder.PickSingleFolderAsync();
                 if (f is null) return;
-                var pngs = Canvas.RenderAllToPng();
+                var pngs = Canvas.RenderAllToPng(scale: ExportRenderScale);
                 App.Services.PngExport.ExportAll(pngs, f.Path, _doc.Info.Title);
                 await Notify("Exported", "PNGs saved.");
             }
@@ -1196,8 +1321,9 @@ public sealed partial class EditorPage : Page
 
         if (resetRequested)
         {
+            // ResetPageExtension raises DocumentMutated, which already records
+            // history — an explicit RecordMutation here double-recorded.
             Canvas.ResetPageExtension(page);
-            App.Services.History.RecordMutation();
             return;
         }
 
@@ -1206,8 +1332,8 @@ public sealed partial class EditorPage : Page
         double amount = slider.Value;
 
         bool isLeft = leftBtn.IsChecked == true;
+        // CommitPageExtension raises DocumentMutated → history records there.
         Canvas.CommitPageExtension(page, isLeft ? YuNotes.Controls.ExtendSide.Left : YuNotes.Controls.ExtendSide.Right, amount);
-        App.Services.History.RecordMutation();
     }
 
     internal static UIElement BuildTemplatePreview(TemplateKind kind, double w, double h)
@@ -1256,43 +1382,241 @@ public sealed partial class EditorPage : Page
         };
     }
 
-    private async Task SaveAsync(bool toast = true)
+    // Restart the debounce timer; the actual save fires once the user pauses
+    // editing for the configured delay. Cheap to call on every mutation.
+    private void ScheduleAutosave()
     {
         if (_doc is null) return;
+        // Respect the user's autosave setting; disabled = manual save / on-close only.
+        if (!App.Services.Settings.Current.AutosaveEnabled)
+        {
+            _autosaveTimer?.Stop();
+            return;
+        }
+        _autosaveTimer ??= CreateAutosaveTimer();
+        _autosaveTimer.Stop();
+        _autosaveTimer.Interval = AutosaveInterval();
+        _autosaveTimer.Start();
+    }
+
+    // Debounce delay from settings, clamped to a sane range.
+    private static TimeSpan AutosaveInterval() =>
+        TimeSpan.FromSeconds(Math.Clamp(App.Services.Settings.Current.AutosaveDelaySeconds, 0.5, 120));
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer CreateAutosaveTimer()
+    {
+        var t = DispatcherQueue.CreateTimer();
+        t.Interval = AutosaveInterval();
+        t.IsRepeating = false;
+        t.Tick += (_, _) =>
+        {
+            _autosaveTimer?.Stop();
+            if (!App.Services.Settings.Current.AutosaveEnabled) return;
+            if (_doc is not { IsDirty: true } || _saving) return;
+            // Never save mid-gesture: the save runs on the UI thread, and a pen
+            // stroke in flight would visibly freeze while it runs. Re-arm and
+            // retry once the user actually pauses.
+            if (Canvas.IsUserInteracting) { _autosaveTimer?.Start(); return; }
+            _ = SaveAsync(toast: false, autosave: true);
+        };
+        return t;
+    }
+
+    private async Task SaveAsync(bool toast = true, bool autosave = false)
+    {
+        if (_doc is null || _saving) return;
+        _saving = true;
+        UpdateSaveStateUi();
+        // A save captures the current state — cancel any pending debounce so we
+        // don't immediately re-save the same thing.
+        _autosaveTimer?.Stop();
         try
         {
-            if (string.Equals(System.IO.Path.GetExtension(_doc.Info.FilePath), ".pdf", StringComparison.OrdinalIgnoreCase))
+            bool isPdf = string.Equals(System.IO.Path.GetExtension(_doc.Info.FilePath), ".pdf", StringComparison.OrdinalIgnoreCase);
+
+            if (isPdf && autosave)
+            {
+                // Recovery save: update only the embedded editable-state blob.
+                // The full path below re-flattens EVERY page (offscreen render
+                // + PNG encode + a complete PDF rebuild) synchronously on the
+                // UI thread — seconds of freeze on large documents, timed
+                // exactly for when the user pauses writing. The flattened page
+                // images in the file stay as of the last full save; manual
+                // save and close still run the full flatten.
+                var blob = App.Services.Documents.SerializeToBlob(_doc);
+                var path = _doc.Info.FilePath;
+                // Mutations made while the background write runs re-dirty the
+                // doc (and re-arm the timer), so clear the flag up front.
+                _doc.IsDirty = false;
+                bool updated = await Task.Run(() => App.Services.PdfContainer.TryUpdateEmbeddedData(path, blob));
+                if (updated) return;
+                // No container/blob in the file yet (fresh import never fully
+                // saved) — fall through to the one-time full save.
+                _doc.IsDirty = true;
+            }
+
+            if (isPdf)
             {
                 // When a source PDF is embedded we keep the original vector pages and
                 // only flatten the user's drawings as transparent overlays — otherwise
                 // we flatten the whole page (white background + content).
                 bool useOverlay = _doc.SourcePdfBytes is { Length: > 0 };
-                var pngs = Canvas.RenderAllToPng(scale: 1f, overlayOnly: useOverlay);
+                int n = Canvas.PageCount;
+
+                ShowSaveProgress();
+                SetSaveInteractionLock(true);   // block edits; scroll/zoom stay free
+                // Force the overlay through layout now, then wait for it to paint,
+                // so the window is visible BEFORE the first (blocking) page render.
+                SaveOverlay.UpdateLayout();
+                await AfterRenderAsync();
+
+                // Per-page reuse plan: pages untouched since the last full save keep
+                // their already-flattened image (cloned from the current container
+                // file) instead of being re-rendered — the render loop is what makes
+                // saving a 30-page document slow when only a couple pages changed.
+                // Planned AFTER the interaction lock: an edit landing while the
+                // previous container loads off-thread would otherwise be planned as
+                // "clean" and its stale flatten marked current.
+                var reuse = new int?[n];
+                byte[]? prevContainer = null;
+                if (_doc.FlattenPageOrder is { Count: > 0 } order && _doc.Pages.Count == n)
+                {
+                    var path = _doc.Info.FilePath;
+                    var prev = await Task.Run(() => App.Services.PdfContainer.TryLoadForReuse(path));
+                    if (prev is { } p && p.PageCount == order.Count)
+                    {
+                        prevContainer = p.Bytes;
+                        for (int i = 0; i < n; i++) reuse[i] = ReusableFlattenIndex(i, order);
+                    }
+                }
+                // Flatten page-by-page, letting each progress tick paint between
+                // pages so the bar advances and the window stays responsive instead
+                // of hard-freezing. (Win2D render stays on the UI thread — its
+                // geometry cache isn't thread-safe — but the input-blocking overlay
+                // stops concurrent edits.) Reused pages render nothing at all.
+                var pngs = new byte[n][];
+                int toRender = reuse.Count(r => r is null);
+                int done = 0;
+                for (int i = 0; i < n; i++)
+                {
+                    if (reuse[i] is not null) { pngs[i] = System.Array.Empty<byte>(); continue; }
+                    pngs[i] = Canvas.RenderPageForExport(i, ExportRenderScale, useOverlay) ?? System.Array.Empty<byte>();
+                    UpdateSaveProgress(++done, toRender);
+                    await AfterRenderAsync();
+                }
                 byte[]? thumb = null;
                 try { thumb = Canvas.RenderCurrentPagePng(0, scale: 0.2f); } catch { }
-                App.Services.Documents.SavePdfContainer(_doc, pngs, thumb, App.Services.PdfContainer);
+                SaveProgressFinalizing();
+                await AfterRenderAsync();
+                // The file now reflects this page order with no stale flattens.
+                // Update BEFORE the write so the embedded blob (serialized inside
+                // SavePdfContainer) carries the new state; restore it if the write
+                // fails so the next save re-renders what this one should have.
+                var prevOrder = _doc.FlattenPageOrder;
+                var prevDirty = new HashSet<string>(_doc.FlattenDirtyPageIds);
+                _doc.FlattenPageOrder = _doc.Pages.Select(pg => pg.Id).ToList();
+                _doc.FlattenDirtyPageIds.Clear();
+                // The PDFsharp embed + write is pure CPU/IO (no Win2D) — run it off
+                // the UI thread so the app stays fully responsive while it writes.
+                var docRef = _doc;
+                try
+                {
+                    await Task.Run(() => App.Services.Documents.SavePdfContainer(
+                        docRef, pngs, thumb, App.Services.PdfContainer, reuse, prevContainer));
+                }
+                catch
+                {
+                    _doc.FlattenPageOrder = prevOrder;
+                    _doc.FlattenDirtyPageIds.Clear();
+                    foreach (var id in prevDirty) _doc.FlattenDirtyPageIds.Add(id);
+                    throw;
+                }
+            }
+            else if (autosave)
+            {
+                // .yunote autosave: clone the model cheaply on the UI thread
+                // (large blobs shared by reference) and run the SQLite rewrite
+                // on a background thread — the full DELETE+reinsert of every
+                // row froze the UI right when the user paused writing. The
+                // write is a single SQLite transaction, so a crash mid-save
+                // rolls back rather than corrupting the file.
+                var clone = YuNotes.Services.DocumentService.CloneForSave(_doc);
+                byte[]? autoThumb = null;
+                try { autoThumb = Canvas.RenderCurrentPagePng(0, scale: 0.2f); } catch { }
+                _doc.IsDirty = false;   // edits during the write re-dirty + re-arm
+                await Task.Run(() =>
+                {
+                    App.Services.Documents.Save(clone);
+                    if (autoThumb is not null)
+                        App.Services.Documents.SaveThumbnail(clone.Info.FilePath, autoThumb);
+                });
+                return;
             }
             else
             {
-                App.Services.Documents.Save(_doc);
+                // Manual .yunote save: same clone + background write as the
+                // autosave — the full SQLite rewrite (incl. every page's
+                // background blob) used to run synchronously on the UI thread,
+                // freezing it for the whole write on long documents. No
+                // interaction lock here, so edits made during the write re-dirty
+                // the doc — clear the flag up front, not after the await.
+                var manualClone = YuNotes.Services.DocumentService.CloneForSave(_doc);
+                byte[]? manualThumb = null;
+                try { manualThumb = Canvas.RenderCurrentPagePng(0, scale: 0.2f); } catch { }
+                _doc.IsDirty = false;
+                UpdateSaveStateUi();
                 try
                 {
-                    var thumb = Canvas.RenderCurrentPagePng(0, scale: 0.2f);
-                    if (thumb is not null)
-                        App.Services.Documents.SaveThumbnail(_doc.Info.FilePath, thumb);
+                    await Task.Run(() =>
+                    {
+                        App.Services.Documents.Save(manualClone);
+                        if (manualThumb is not null)
+                            App.Services.Documents.SaveThumbnail(manualClone.Info.FilePath, manualThumb);
+                    });
                 }
-                catch { }
+                catch { _doc.IsDirty = true; throw; }
+                if (toast) ShowToast("Saved");
+                return;
             }
 
             _doc.IsDirty = false;
-            if (toast) await Notify("Saved", _doc.Info.Title);
+            if (toast) ShowToast("Saved");
         }
-        catch (Exception ex) { await Notify("Save failed", ex.Message); }
+        catch (Exception ex) { HideSaveProgress(); await Notify("Save failed", ex.Message); }
+        finally { _saving = false; UpdateSaveStateUi(); HideSaveProgress(); SetSaveInteractionLock(false); }
     }
+
+    // Container page index whose flattened image page i can reuse, or null if it
+    // must be re-rendered. Reusable ⇔ the page is untouched since the last full
+    // save AND both its vertical neighbours are the same untouched pages as back
+    // then — neighbour content bleeds across the seam into this page's render
+    // (DrawNeighborBleedForExport), so an edited/moved neighbour makes even an
+    // untouched page's old image stale.
+    private int? ReusableFlattenIndex(int i, List<string> order)
+    {
+        var pages = _doc!.Pages;
+        if (_doc.FlattenDirtyPageIds.Contains(pages[i].Id)) return null;
+        int idx = order.IndexOf(pages[i].Id);
+        if (idx < 0) return null;
+        return SameCleanNeighbor(pages, i, order, idx, -1) && SameCleanNeighbor(pages, i, order, idx, +1)
+            ? idx : null;
+    }
+
+    private bool SameCleanNeighbor(IList<NotePage> pages, int i, List<string> order, int idx, int dir)
+    {
+        string? cur = (uint)(i + dir) < (uint)pages.Count ? pages[i + dir].Id : null;
+        string? old = (uint)(idx + dir) < (uint)order.Count ? order[idx + dir] : null;
+        if (cur != old) return false;
+        return cur is null || !_doc!.FlattenDirtyPageIds.Contains(cur);
+    }
+
+    // True when there is an open document with edits not yet persisted. Used by
+    // the window-close guard (MainWindow) to decide whether to prompt before exit.
+    public bool HasUnsavedChanges => _doc is { IsDirty: true };
 
     // Returns true if it's OK to leave the editor (saved, discarded, or no changes).
     // Returns false if the user cancels.
-    private async Task<bool> ConfirmLeaveAsync()
+    public async Task<bool> ConfirmLeaveAsync()
     {
         if (_doc is null || !_doc.IsDirty) return true;
         var dlg = new ContentDialog
@@ -1313,6 +1637,9 @@ public sealed partial class EditorPage : Page
 
     private void OnAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
     {
+        // Ignore shortcuts while the interactive save lock is on (they'd mutate the
+        // document being flattened). Scroll/zoom aren't accelerators, so still work.
+        if (Canvas.Context.EditingSuspended) { args.Handled = true; return; }
         switch (sender.Key)
         {
             case VirtualKey.Delete:
@@ -1962,6 +2289,7 @@ public sealed partial class EditorPage : Page
         Canvas.Rebuild();
         App.Services.History.Bind(_doc);
         UpdateHistoryUi();
+        MarkPageSetChanged();
 
         // Keep the moved pages selected at their new positions.
         _selectedPages.Clear();
@@ -1998,6 +2326,7 @@ public sealed partial class EditorPage : Page
         Canvas.Rebuild();
         App.Services.History.Bind(_doc);
         UpdateHistoryUi();
+        MarkPageSetChanged();
 
         _selectedPages.Clear();
         _selectionAnchor = -1;
@@ -2014,6 +2343,7 @@ public sealed partial class EditorPage : Page
         Canvas.Rebuild();
         App.Services.History.Bind(_doc);
         UpdateHistoryUi();
+        MarkPageSetChanged();
         await RefreshPagePanelAsync();
         Canvas.ScrollToPage(index + 1);
     }
@@ -2050,6 +2380,7 @@ public sealed partial class EditorPage : Page
             {
                 Kind = sh.Kind,
                 X1 = sh.X1, Y1 = sh.Y1, X2 = sh.X2, Y2 = sh.Y2, X3 = sh.X3, Y3 = sh.Y3,
+                Rotation = sh.Rotation,
                 Color = sh.Color, StrokeWidth = sh.StrokeWidth, Filled = sh.Filled
             });
 
@@ -2083,6 +2414,7 @@ public sealed partial class EditorPage : Page
         Canvas.Rebuild();
         App.Services.History.Bind(_doc);
         UpdateHistoryUi();
+        MarkPageSetChanged();
         if (_pagePanelOpen) _ = RefreshPagePanelAsync();
     }
 
@@ -2097,6 +2429,7 @@ public sealed partial class EditorPage : Page
         Canvas.Rebuild();
         App.Services.History.Bind(_doc);
         UpdateHistoryUi();
+        MarkPageSetChanged();
         await RefreshPagePanelAsync();
     }
 
@@ -2125,6 +2458,7 @@ public sealed partial class EditorPage : Page
         Canvas.Rebuild();
         App.Services.History.Bind(_doc);
         UpdateHistoryUi();
+        MarkPageSetChanged();
         await RefreshPagePanelAsync();
     }
 
@@ -2138,5 +2472,79 @@ public sealed partial class EditorPage : Page
     {
         var d = new ContentDialog { Title = title, Content = body, CloseButtonText = "OK", XamlRoot = this.XamlRoot };
         await d.ShowAsync();
+    }
+
+    // ─── Save progress overlay ───────────────────────────────────────────────
+
+    private void ShowSaveProgress()
+    {
+        SaveOverlayText.Text = "Saving…";
+        SaveOverlaySub.Text = "Preparing…";
+        SaveProgressBar.IsIndeterminate = false;
+        SaveProgressBar.Value = 0;
+        SaveOverlay.Visibility = Visibility.Visible;
+    }
+
+    private void UpdateSaveProgress(int done, int total)
+    {
+        SaveProgressBar.IsIndeterminate = false;
+        double frac = total > 0 ? (double)done / total : 0;
+        SaveProgressBar.Value = frac;
+        int pct = (int)System.Math.Round(frac * 100);
+        SaveOverlaySub.Text = $"Page {done} of {total} · {pct}%";
+    }
+
+    // Awaits a render pass so a just-shown UI change (the overlay, a progress
+    // tick) is actually painted before the next blocking render step runs —
+    // Task.Yield alone posts at Normal priority and can run before the frame.
+    private Task AfterRenderAsync()
+    {
+        var tcs = new TaskCompletionSource();
+        if (!DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () => tcs.TrySetResult()))
+            tcs.TrySetResult();
+        return tcs.Task;
+    }
+
+    private void SaveProgressFinalizing()
+    {
+        SaveProgressBar.IsIndeterminate = true;
+        SaveOverlaySub.Text = "Finalizing…";
+    }
+
+    private void HideSaveProgress() => SaveOverlay.Visibility = Visibility.Collapsed;
+
+    // Blocks document-mutating input during a save (canvas drawing, toolbar
+    // buttons, shortcuts) while leaving scroll/zoom free, so the user can look
+    // around the document while it saves.
+    private void SetSaveInteractionLock(bool locked)
+    {
+        Canvas.Context.EditingSuspended = locked;
+        // IsHitTestVisible (not IsEnabled — these are Borders) blocks clicks on the
+        // toolbar/top-bar buttons without greying them; shortcuts are guarded in
+        // OnAccelerator, and the ScrollViewer's scroll/zoom is untouched.
+        ToolbarHost.IsHitTestVisible = !locked;
+        TopBar.IsHitTestVisible = !locked;
+    }
+
+    // ─── Custom toast (non-modal, auto-dismissing) ───────────────────────────
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _toastTimer;
+
+    private void ShowToast(string message, bool error = false)
+    {
+        ToastText.Text = message;
+        ToastIcon.Glyph = error ? "" : "";   // error : check
+        ToastIcon.Foreground = (Brush)Application.Current.Resources[error ? "AppAccentBrush" : "AppSuccessBrush"];
+        ToastHost.Visibility = Visibility.Visible;
+
+        if (_toastTimer is null)
+        {
+            _toastTimer = DispatcherQueue.CreateTimer();
+            _toastTimer.IsRepeating = false;
+            _toastTimer.Tick += (_, _) => { _toastTimer!.Stop(); ToastHost.Visibility = Visibility.Collapsed; };
+        }
+        _toastTimer.Stop();
+        _toastTimer.Interval = TimeSpan.FromSeconds(error ? 3.5 : 1.8);
+        _toastTimer.Start();
     }
 }

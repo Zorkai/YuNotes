@@ -11,6 +11,10 @@ public enum PenButtonAction
 public enum ToolbarPosition { Top, Bottom, Left, Right }
 public enum ToolbarSize { Small = 0, Normal = 1, Large = 2 }
 
+// App-wide color theme. System follows the OS light/dark setting; Light/Dark
+// force the theme regardless of the OS. Maps to ElementTheme on the window root.
+public enum AppThemeMode { System = 0, Light = 1, Dark = 2 }
+
 public sealed class AppSettings
 {
     public List<string> PenPresetColors { get; set; } = new()
@@ -61,9 +65,17 @@ public sealed class AppSettings
     public bool EraserPixelMode { get; set; } = false;
     public bool SelectRectMode { get; set; } = false;
 
+    // Appearance — app-wide light/dark theme (System = follow OS).
+    public AppThemeMode Theme { get; set; } = AppThemeMode.System;
+
     // Layout
     public ToolbarPosition ToolbarPosition { get; set; } = ToolbarPosition.Top;
     public ToolbarSize ToolbarSize { get; set; } = ToolbarSize.Normal;
+    // Free-drag offset of the floating toolbar from its docked anchor (persisted
+    // so a moved toolbar reopens where the user left it). Reset when the dock
+    // side changes, since the anchor moves.
+    public double ToolbarOffsetX { get; set; } = 0;
+    public double ToolbarOffsetY { get; set; } = 0;
     public bool HideZoomBar { get; set; } = true;
     public bool SeamlessPages { get; set; } = true;
     // Liquid-glass (refractive) effect on floating surfaces; falls back to acrylic when off
@@ -79,8 +91,18 @@ public sealed class AppSettings
     // Pen shape recognition
     public bool HoldToSnapEnabled { get; set; } = true;
 
+    // Autosave — debounced background save after the user pauses editing. For
+    // .pdf docs this is the fast recovery save (embedded editable blob only, no
+    // page re-flatten). Off = manual save (Ctrl+S) / save-on-close only.
+    public bool AutosaveEnabled { get; set; } = true;
+    public double AutosaveDelaySeconds { get; set; } = 2.5;
+
     // Render
     public bool UseHighRefreshRate { get; set; } = true;
+
+    // Per-document last-viewed page index (keyed by file path), so reopening a
+    // document returns to where you left off.
+    public Dictionary<string, int> LastPageByDocument { get; set; } = new();
 
     // Locations
     public string DocumentsFolder { get; set; } = "";

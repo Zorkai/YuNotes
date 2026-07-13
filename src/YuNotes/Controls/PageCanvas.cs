@@ -14,10 +14,12 @@ using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Media.Animation;
 using Microsoft.UI.Xaml.Shapes;
 using Windows.UI;
 using Windows.UI.Text;
 using Colors = Microsoft.UI.Colors;
+using XamlPath = Microsoft.UI.Xaml.Shapes.Path;
 using YuNotes.Input;
 using YuNotes.Models;
 using YuNotes.Rendering;
@@ -26,6 +28,17 @@ using YuNotes.Tools;
 namespace YuNotes.Controls;
 
 public enum ExtendSide { Left, Right }
+
+// Payload for PageCanvas.SelectionDragDropped — a selection Move drag released.
+public sealed class SelectionDropEventArgs : EventArgs
+{
+    // Pointer release position in the SOURCE page's local coordinates.
+    public Vector2 ReleaseLocal { get; init; }
+    // Move delta (release − grab) in source-local coordinates.
+    public Vector2 Delta { get; init; }
+    // Set by the handler when it moved the selection to a different page.
+    public bool Transferred { get; set; }
+}
 
 public sealed class PageCanvas : ContentControl
 {
@@ -53,38 +66,16 @@ public sealed class PageCanvas : ContentControl
     private UIElement? _liveShapePreview;
     private string? _liveShapeId;
 
-    // Fast-path for uniform-width pen + highlighter: render the in-progress
-    // stroke as XAML Polylines. DComp handles the redraw natively — but any
-    // geometry change re-rasterizes the whole shape at screen scale, so a
-    // single growing polyline costs stroke-bbox × zoom² pixels per sample.
-    // Opaque strokes are therefore split into fixed-size chunks: frozen
-    // chunks never change again, so only the small active tail re-rasterizes.
-    // Translucent strokes (highlighter) stay one polyline — overlapping round
-    // caps at chunk joints would double-blend into visible dots.
-    private Polyline? _livePolyline;
-    private readonly List<Polyline> _frozenLiveChunks = new();
-    private Brush? _polylineBrush;
-    private double _polylineWidth;
-    private bool _polylineChunkable;
-    private int _polylineSyncedCount;   // stroke points consumed across all chunks
-    private string? _polylineStrokeId;
-    private bool _polylineHasPrediction;
-    private const int LiveChunkPoints = 64;
-
-    // Fast-path for pressure-variable pen: a XAML Canvas holding one short
-    // Polyline per segment, with that segment's thickness set to the average
-    // of its endpoint pressures. Round line caps make adjacent segments blend
-    // into a continuous tapered ribbon. Same idea as the uniform Polyline
-    // path — no Win2D surfaces touched during the stroke.
-    private Canvas? _pressureContainer;
-    private string? _pressureStrokeId;
-    private int _pressureSegmentsRendered;
-    private int _pressureSyncedCount;
-    private bool _pressureDotRendered;
-    private Polyline? _pressurePredicted;
-    private Brush? _pressureBrush;
-    private float _pressureBaseHalfWidth;
     private CanvasBitmap? _bgBitmap;
+
+    // Live-stroke backend: dirty-rect draws into a virtualized DComp surface
+    // (one XAML Image at the bottom of the overlay). Created lazily on the
+    // first stroke. Replaced the retained-mode XAML shape overlays (chunked
+    // Polyline / filled-ribbon Path): swapping a shape's geometry every sample
+    // re-rasterized it at screen scale and forced DWM to recomposite the whole
+    // window per frame (~half the drawing-time GPU cost; see
+    // prototypes/InkPerfLab).
+    private LiveInkSurface? _liveInk;
 
     // ── Hi-res PDF background (zoomed in) ───────────────────────────────────
     // The imported background PNG is rasterized at 300 DPI (2× the coord
@@ -101,14 +92,92 @@ public sealed class PageCanvas : ContentControl
     private readonly Dictionary<string, CanvasBitmap> _imageCache = new();
     private uint? _capturedPointerId;
     private ITool? _activeTool;
+    // True while a pointer gesture (stroke, drag, pan…) is in flight on this
+    // page. EditorPage's autosave defers while any page is being interacted
+    // with so a save can't stall the UI thread mid-stroke.
+    public bool HasActivePointer => _capturedPointerId is not null;
+    // One live-overlay sync per input event: tools invoke ctx.InvalidateLive
+    // once per sample, but a single PointerMoved can carry several coalesced
+    // samples — rebuilding the ribbon/polyline tail for each is wasted work.
+    private bool _suppressLiveSync;
+
+    // ── Cross-page bleed ────────────────────────────────────────────────────
+    // Adjacent page canvases (set by InkCanvasControl after Rebuild). When an
+    // element sits partly past this page's top/bottom edge — e.g. a selection
+    // dragged so it straddles the seam — the overflowing part is invisible on
+    // its owning page (clipped to the page surface). Each page therefore also
+    // renders the portion of its neighbours' content that bleeds into it, so a
+    // straddling element shows on BOTH pages.
+    public PageCanvas? PrevPageCanvas { get; set; }
+    public PageCanvas? NextPageCanvas { get; set; }
+    internal System.Collections.Generic.IDictionary<string, CanvasBitmap> ImageCacheView => _imageCache;
+    internal System.Collections.Generic.ISet<string>? HiddenElementIdsView => _hiddenElementIds;
+
+    // Cached vertical content extent, so a neighbour can cheaply tell how far
+    // this page's content overflows its edges without rescanning every frame.
+    private bool _contentBoundsDirty = true;
+    private float _contentMinY, _contentMaxY;
+    // How far content pokes above y=0 / below Height (0 when nothing overflows).
+    public float TopOverflow    { get { EnsureContentBounds(); return Math.Max(0f, -_contentMinY); } }
+    public float BottomOverflow { get { EnsureContentBounds(); return Math.Max(0f, _contentMaxY - (float)Page.Height); } }
+
+    private void EnsureContentBounds()
+    {
+        if (!_contentBoundsDirty) return;
+        _contentBoundsDirty = false;
+        float minY = float.MaxValue, maxY = float.MinValue;
+        foreach (var s in Page.Strokes)  { var b = Bbox.Of(s);  if (b.Y < minY) minY = b.Y; if (b.Bottom > maxY) maxY = b.Bottom; }
+        foreach (var sh in Page.Shapes)  { var b = Bbox.Of(sh); if (b.Y < minY) minY = b.Y; if (b.Bottom > maxY) maxY = b.Bottom; }
+        foreach (var t in Page.Texts)    { var b = Bbox.Of(t);  if (b.Y < minY) minY = b.Y; if (b.Bottom > maxY) maxY = b.Bottom; }
+        foreach (var im in Page.Images)  { var b = Bbox.Of(im); if (b.Y < minY) minY = b.Y; if (b.Bottom > maxY) maxY = b.Bottom; }
+        if (minY == float.MaxValue) { minY = 0f; maxY = 0f; }
+        _contentMinY = minY; _contentMaxY = maxY;
+    }
+
+    // Neighbours read this page's overflow to decide whether to bleed; recompute
+    // it after any content change on this page.
+    public void InvalidateContentBounds() => _contentBoundsDirty = true;
 
     // Drag modes when interacting with selection
     private enum DragMode { None, Move, ResizeNW, ResizeNE, ResizeSW, ResizeSE, Rotate }
     private DragMode _drag = DragMode.None;
-    private Vector2 _lastMovePoint;
     private Bbox _dragStartBbox;
     private Vector2 _dragStartCenter;
     private double _dragStartRotation;
+
+    // ── Select-tool overlay visuals ──────────────────────────────────────────
+    // The marquee (rect / lasso) and the drag ghost live in the XAML overlay
+    // like live ink: per-pointer-move updates cost no Win2D redraw. Before
+    // this, every marquee move full-page-invalidated the main canvas, and
+    // every drag move rewrote the selected elements' geometry AND full-page-
+    // redrew (which also busted the stroke geometry cache each sample).
+    private Rectangle? _marqueeRect;
+    private Polyline? _marqueeLasso;
+    // PDF text-selection highlight — one overlay Path (a rectangle per selected
+    // line). The old Win2D fills forced a full-page redraw per pointer move
+    // while dragging across text.
+    private XamlPath? _textSelHighlight;
+
+    // Drag ghost: the selection rendered ONCE into a CanvasImageSource; each
+    // move only repositions/transforms this image (composition-only work).
+    // The originals are hidden from the main canvas via _hiddenElementIds and
+    // the model mutates ONCE on release.
+    private Image? _dragGhost;
+    private Rectangle? _dragGhostBorder;
+    private RotateTransform? _dragGhostRotate;
+    private RotateTransform? _dragGhostBorderRotate;
+    private Bbox _dragGhostBbox;          // padded doc-space rect the ghost image covers
+    private Vector2 _dragStartPoint;
+    private Vector2 _lastDragPoint;
+    private bool _dragMoved;
+    // True when this move drag began by pressing inside an ALREADY-committed
+    // selection (not by freshly selecting an element). A tap here — press and
+    // release with negligible travel — dismisses the selection instead of
+    // moving it, so the user can click to deselect without the sidebar button.
+    private bool _dragTapDismisses;
+    // Squared page-space travel below which a move counts as a tap, not a drag.
+    private const float TapDismissThresholdSq = 16f;   // 4px
+    private HashSet<string>? _hiddenElementIds;
 
     // Snapshot of original element transforms at drag start, keyed by id
     private readonly Dictionary<string, Bbox> _origImageBoxes = new();
@@ -171,7 +240,7 @@ public sealed class PageCanvas : ContentControl
         PointerMoved += OnPointerMoved;
         PointerReleased += OnPointerReleased;
         PointerCanceled += OnPointerReleased;
-        PointerCaptureLost += (_, __) => _capturedPointerId = null;
+        PointerCaptureLost += (_, __) => { _capturedPointerId = null; Canvas.SetZIndex(this, 0); };
         DoubleTapped += OnDoubleTapped;
         SetupExtensionHandles();
     }
@@ -188,6 +257,12 @@ public sealed class PageCanvas : ContentControl
     public event EventHandler<ToolKind>? MomentaryToolStart;
     public event EventHandler? MomentaryToolEnd;
     public event EventHandler? RectSelectionCompleted;
+
+    // Raised when a Move drag is released. InkCanvasControl uses it to hand the
+    // selection to whichever page the pointer ended over (a cross-page move);
+    // the handler sets Transferred=true if it did, so this page skips its own
+    // in-page translate (which would push the elements off the bottom edge).
+    public event EventHandler<SelectionDropEventArgs>? SelectionDragDropped;
 
     // Fired during and at the end of a page-extension drag. InkCanvasControl
     // listens to show a live preview overlay and then commit the extension.
@@ -232,8 +307,22 @@ public sealed class PageCanvas : ContentControl
     private TextRun? _selectCursor;
     private readonly List<TextRun> _selectedTextRuns = new();
 
+    // ── Input-handler containment ──────────────────────────────────────────────
+    // Pointer/gesture handlers run on the Windows App SDK native input dispatch
+    // path. If a managed exception escapes one, the input manager
+    // (Microsoft.InputStateManager.dll) raises a __fastfail (0xc0000409) that NO
+    // managed handler can catch — a hard crash with no dialog and no crash.log
+    // (the reported "opens and silently crashes"). Every handler below is wrapped
+    // so a tool / hit-test / stale-pointer bug is logged and survived instead of
+    // taking the process — and the user's unsaved work — down with it.
     private void OnDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
     {
+        try { OnDoubleTappedCore(sender, e); }
+        catch (Exception ex) { App.LogError(ex, "OnDoubleTapped"); }
+    }
+    private void OnDoubleTappedCore(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        if (Context.EditingSuspended) return;
         var pos = e.GetPosition(this);
         var p = new Vector2((float)pos.X, (float)pos.Y);
         foreach (var t in Page.Texts.AsEnumerable().Reverse())
@@ -299,24 +388,24 @@ public sealed class PageCanvas : ContentControl
 
     public void RequestRedraw()
     {
+        _contentBoundsDirty = true;
         _canvas.Invalidate();
     }
 
-    // Called by tools on every pen sample. Branches between two live-stroke
-    // backends depending on the stroke type:
-    //   - Polyline (XAML retained-mode shape) for uniform-width pen + highlighter.
-    //     DComp draws and recomposites natively — no Win2D surfaces touched.
-    //   - Win2D mask + CanvasVirtualControl for pressure-variable strokes,
-    //     which Polyline can't represent. Same code path as before.
+    // Called by tools on every pen sample. Live strokes render through
+    // LiveInkSurface: a virtualized DComp surface updated with dirty-rect
+    // draws — pixels persist between samples, so only the small changed
+    // region is redrawn and recomposited (see LiveInkSurface).
     public void RequestLiveRedraw()
     {
+        if (_suppressLiveSync) return;   // OnPointerMovedCore syncs once per event
+        SyncMarqueeOverlay();
         var s = Context.ActiveStroke;
 
         // Shape tool: show a rubber-band XAML preview while dragging
         if (Context.ActiveShape is { } shape && ReferenceEquals(Context.CurrentPage, Page))
         {
-            TearDownPolyline();
-            TearDownPressureContainer();
+            TearDownLiveInk();
             EnsureLiveShapePreview(shape);
             SyncLiveShapePreview(shape);
             return;
@@ -325,215 +414,40 @@ public sealed class PageCanvas : ContentControl
 
         if (s is null || !ReferenceEquals(Context.CurrentPage, Page))
         {
-            TearDownPolyline();
-            TearDownPressureContainer();
+            TearDownLiveInk();
             return;
         }
 
-        if (s.PressureMode)
-        {
-            // Pressure stroke — per-segment polylines in a XAML Canvas.
-            TearDownPolyline();
-            EnsurePressureContainer(s);
-            SyncPressureSegments(s);
-            return;
-        }
-
-        // Uniform-width stroke — single XAML Polyline.
-        TearDownPressureContainer();
-        EnsureLivePolyline(s);
-        if (_livePolyline is null) return;
-        SyncLivePolyline(s);
+        SyncLiveInkSurface(s);
     }
 
-    private void EnsurePressureContainer(Stroke s)
+    private void TearDownLiveInk() => _liveInk?.Clear();
+
+    private void SyncLiveInkSurface(Stroke s)
     {
-        if (_pressureContainer is not null && _pressureStrokeId == s.Id) return;
-        TearDownPressureContainer();
+        _liveInk ??= new LiveInkSurface(_overlay);
+        // Match the committed canvas's backing density so live ink stays as
+        // crisp as everything under it at the current zoom tier.
+        float raster = (float)(XamlRoot?.RasterizationScale ?? 1.0);
+        _liveInk.SetScale(raster * Math.Clamp(_canvas.DpiScale, 1f, 4f));
 
-        _pressureContainer = new Canvas
-        {
-            Width = Page.Width,
-            Height = Page.Height,
-            IsHitTestVisible = false
-        };
-        _overlay.Children.Add(_pressureContainer);
-
+        // Same color mapping as the XAML backends: highlighter ink is capped
+        // to a translucent alpha regardless of the picked color.
         byte alpha = s.Color.A;
         if (s.Kind == StrokeKind.Highlighter)
             alpha = (byte)Math.Min(140, alpha == 255 ? 110 : alpha);
-        _pressureBrush = new SolidColorBrush(Color.FromArgb(alpha, s.Color.R, s.Color.G, s.Color.B));
-        _pressureBaseHalfWidth = s.Width * 0.5f;
-        _pressureStrokeId = s.Id;
-        _pressureSegmentsRendered = 0;
-        _pressureSyncedCount = 0;
-        _pressureDotRendered = false;
-        _pressurePredicted = null;
+        _liveInk.Sync(s, Color.FromArgb(alpha, s.Color.R, s.Color.G, s.Color.B),
+            (float)Page.Width, (float)Page.Height);
     }
 
-    private void SyncPressureSegments(Stroke s)
+    // Prediction lead: extrapolate up to TWO samples ahead (never less than
+    // one, extra lead capped at ~16 px) to cover more of the input→composition
+    // pipeline latency without visible overshoot when the pen turns.
+    internal static float PredictionScale(float dx, float dy)
     {
-        if (_pressureContainer is null || _pressureBrush is null) return;
-        var pts = s.Points;
-        int pointCount = pts.Count;
-        // No new samples → dot, segments and prediction are all current; skip
-        // the prediction remove/re-add that would dirty the container.
-        if (pointCount <= _pressureSyncedCount) return;
-        _pressureSyncedCount = pointCount;
-
-        // Drop the previous predicted segment before appending real ones.
-        if (_pressurePredicted is not null)
-        {
-            _pressureContainer.Children.Remove(_pressurePredicted);
-            _pressurePredicted = null;
-        }
-
-        // First sample of a stroke: drop a circular dot at the touchdown
-        // point so even a tap leaves visible ink.
-        if (pointCount >= 1 && !_pressureDotRendered)
-        {
-            var p = pts[0];
-            float r = _pressureBaseHalfWidth * Math.Max(0.2f, p.Pressure);
-            var dot = new Ellipse
-            {
-                Width = r * 2,
-                Height = r * 2,
-                Fill = _pressureBrush,
-                IsHitTestVisible = false
-            };
-            Canvas.SetLeft(dot, p.X - r);
-            Canvas.SetTop(dot, p.Y - r);
-            _pressureContainer.Children.Add(dot);
-            _pressureDotRendered = true;
-        }
-
-        // Append a fresh Polyline for each new segment we haven't drawn yet.
-        for (int i = _pressureSegmentsRendered; i < pointCount - 1; i++)
-        {
-            var a = pts[i];
-            var b = pts[i + 1];
-            float wA = _pressureBaseHalfWidth * Math.Max(0.2f, a.Pressure) * 2f;
-            float wB = _pressureBaseHalfWidth * Math.Max(0.2f, b.Pressure) * 2f;
-            _pressureContainer.Children.Add(MakePressureSeg(a.X, a.Y, b.X, b.Y, (wA + wB) * 0.5f));
-        }
-        _pressureSegmentsRendered = Math.Max(0, pointCount - 1);
-
-        // One-sample linear extrapolation as the predicted tail.
-        if (pointCount >= 2)
-        {
-            var pn = pts[pointCount - 1];
-            var pn1 = pts[pointCount - 2];
-            float dx = pn.X - pn1.X;
-            float dy = pn.Y - pn1.Y;
-            float predWidth = _pressureBaseHalfWidth * Math.Max(0.2f, pn.Pressure) * 2f;
-            _pressurePredicted = MakePressureSeg(pn.X, pn.Y, pn.X + dx, pn.Y + dy, predWidth);
-            _pressureContainer.Children.Add(_pressurePredicted);
-        }
-    }
-
-    private Polyline MakePressureSeg(float x0, float y0, float x1, float y1, float thickness)
-    {
-        var seg = new Polyline
-        {
-            Stroke = _pressureBrush,
-            StrokeThickness = thickness,
-            StrokeStartLineCap = PenLineCap.Round,
-            StrokeEndLineCap = PenLineCap.Round,
-            IsHitTestVisible = false
-        };
-        seg.Points.Add(new Windows.Foundation.Point(x0, y0));
-        seg.Points.Add(new Windows.Foundation.Point(x1, y1));
-        return seg;
-    }
-
-    private void TearDownPressureContainer()
-    {
-        if (_pressureContainer is null) return;
-        _overlay.Children.Remove(_pressureContainer);
-        _pressureContainer = null;
-        _pressureBrush = null;
-        _pressureStrokeId = null;
-        _pressureSegmentsRendered = 0;
-        _pressureSyncedCount = 0;
-        _pressureDotRendered = false;
-        _pressurePredicted = null;
-    }
-
-    private void EnsureLivePolyline(Stroke s)
-    {
-        if (_livePolyline is not null && _polylineStrokeId == s.Id) return;
-        TearDownPolyline();
-
-        byte alpha = s.Color.A;
-        if (s.Kind == StrokeKind.Highlighter)
-            alpha = (byte)Math.Min(140, alpha == 255 ? 110 : alpha);
-
-        _polylineBrush = new SolidColorBrush(Color.FromArgb(alpha, s.Color.R, s.Color.G, s.Color.B));
-        _polylineWidth = s.Width;
-        // Chunk joints render a round cap over an identical round cap — invisible
-        // for opaque ink, a darker dot for translucent ink.
-        _polylineChunkable = alpha == 255;
-        _livePolyline = MakeLiveChunk();
-        _overlay.Children.Add(_livePolyline);
-        _polylineStrokeId = s.Id;
-        _polylineSyncedCount = 0;
-        _polylineHasPrediction = false;
-    }
-
-    private Polyline MakeLiveChunk() => new()
-    {
-        Stroke = _polylineBrush,
-        StrokeThickness = _polylineWidth,
-        StrokeLineJoin = PenLineJoin.Round,
-        StrokeStartLineCap = PenLineCap.Round,
-        StrokeEndLineCap = PenLineCap.Round,
-        IsHitTestVisible = false
-    };
-
-    private void SyncLivePolyline(Stroke s)
-    {
-        if (_livePolyline is null) return;
-        int realCount = s.Points.Count;
-        // No new samples → the prediction tail is already current; touching the
-        // PointCollection anyway would re-rasterize the shape for nothing.
-        if (realCount <= _polylineSyncedCount) return;
-
-        var pts = _livePolyline.Points;
-
-        // Strip the old prediction (always the last entry) before appending
-        // real samples, then re-add a fresh prediction at the end.
-        if (_polylineHasPrediction && pts.Count > 0)
-        {
-            pts.RemoveAt(pts.Count - 1);
-            _polylineHasPrediction = false;
-        }
-
-        for (int i = _polylineSyncedCount; i < realCount; i++)
-        {
-            var p = s.Points[i];
-            pts.Add(new Windows.Foundation.Point(p.X, p.Y));
-            if (_polylineChunkable && pts.Count >= LiveChunkPoints)
-            {
-                // Freeze the full chunk and continue on a fresh polyline that
-                // shares this point so the ribbon stays continuous.
-                _frozenLiveChunks.Add(_livePolyline);
-                _livePolyline = MakeLiveChunk();
-                _overlay.Children.Add(_livePolyline);
-                pts = _livePolyline.Points;
-                pts.Add(new Windows.Foundation.Point(p.X, p.Y));
-            }
-        }
-        _polylineSyncedCount = realCount;
-
-        if (realCount >= 2)
-        {
-            var pn = s.Points[realCount - 1];
-            var pn1 = s.Points[realCount - 2];
-            float dx = pn.X - pn1.X;
-            float dy = pn.Y - pn1.Y;
-            pts.Add(new Windows.Foundation.Point(pn.X + dx, pn.Y + dy));
-            _polylineHasPrediction = true;
-        }
+        float len = MathF.Sqrt(dx * dx + dy * dy);
+        if (len < 0.01f) return 1f;
+        return Math.Clamp(16f / len, 1f, 2f);
     }
 
     private void EnsureLiveShapePreview(ShapeElement s)
@@ -583,6 +497,34 @@ public sealed class PageCanvas : ContentControl
         _overlay.Children.Add(elem);
         _liveShapePreview = elem;
         _liveShapeId = s.Id;
+        StartDashMarch((Shape)elem);
+    }
+
+    // Marching-ants dash animation on the preview outline: while a shape is
+    // still tentative (hold-to-snap preview or shape-tool rubber band), the
+    // dashes crawl along the outline, signalling "not committed yet — keep
+    // holding or lift to confirm". One dash period (6+4, in thickness units)
+    // per cycle keeps the loop seamless. Dependent animation is unavoidable
+    // for StrokeDashOffset; it's a single overlay shape, so the per-frame
+    // cost is negligible.
+    private Storyboard? _liveShapeDashAnim;
+
+    private void StartDashMarch(Shape shape)
+    {
+        var anim = new DoubleAnimation
+        {
+            From = 0,
+            To = -10,                                   // one full dash period
+            Duration = new Duration(TimeSpan.FromMilliseconds(800)),
+            RepeatBehavior = RepeatBehavior.Forever,
+            EnableDependentAnimation = true
+        };
+        Storyboard.SetTarget(anim, shape);
+        Storyboard.SetTargetProperty(anim, "StrokeDashOffset");
+        var sb = new Storyboard();
+        sb.Children.Add(anim);
+        sb.Begin();
+        _liveShapeDashAnim = sb;
     }
 
     private void SyncLiveShapePreview(ShapeElement s)
@@ -598,10 +540,12 @@ public sealed class PageCanvas : ContentControl
             case Rectangle rect:
                 Canvas.SetLeft(rect, x); Canvas.SetTop(rect, y);
                 rect.Width = w; rect.Height = h;
+                SyncPreviewRotation(rect, s, w, h);
                 break;
             case Ellipse ell:
                 Canvas.SetLeft(ell, x); Canvas.SetTop(ell, y);
                 ell.Width = w; ell.Height = h;
+                SyncPreviewRotation(ell, s, w, h);
                 break;
             case Polyline poly when s.Kind == ShapeKind.Triangle:
                 poly.Points = new PointCollection
@@ -616,25 +560,86 @@ public sealed class PageCanvas : ContentControl
         }
     }
 
+    // Recognized-snap previews can carry a rotation (rect/ellipse only); the
+    // shape tool's rubber-band drags never do, so the common path stays a
+    // null-check.
+    private static void SyncPreviewRotation(FrameworkElement elem, ShapeElement s, float w, float h)
+    {
+        if (s.Rotation == 0f)
+        {
+            if (elem.RenderTransform is RotateTransform) elem.RenderTransform = null;
+            return;
+        }
+        if (elem.RenderTransform is not RotateTransform rt)
+            elem.RenderTransform = rt = new RotateTransform();
+        rt.Angle = s.Rotation;
+        rt.CenterX = w * 0.5;
+        rt.CenterY = h * 0.5;
+    }
+
     private void TearDownLiveShapePreview()
     {
         if (_liveShapePreview is null) return;
+        _liveShapeDashAnim?.Stop();
+        _liveShapeDashAnim = null;
         _overlay.Children.Remove(_liveShapePreview);
         _liveShapePreview = null;
         _liveShapeId = null;
     }
 
-    private void TearDownPolyline()
+    // Shows/updates/removes the select-tool marquee (rect or lasso) as XAML
+    // overlay shapes driven by Context.SelectionRect/SelectionLasso. Runs on
+    // every live sync; all no-op paths are cheap null checks.
+    private void SyncMarqueeOverlay()
     {
-        if (_livePolyline is null && _frozenLiveChunks.Count == 0) return;
-        if (_livePolyline is not null) _overlay.Children.Remove(_livePolyline);
-        foreach (var chunk in _frozenLiveChunks) _overlay.Children.Remove(chunk);
-        _frozenLiveChunks.Clear();
-        _livePolyline = null;
-        _polylineBrush = null;
-        _polylineStrokeId = null;
-        _polylineSyncedCount = 0;
-        _polylineHasPrediction = false;
+        bool isCurrent = ReferenceEquals(Context.CurrentPage, Page);
+
+        if (isCurrent && Context.SelectionRect is { } r)
+        {
+            if (_marqueeRect is null)
+            {
+                _marqueeRect = new Rectangle
+                {
+                    Stroke = new SolidColorBrush(Color.FromArgb(180, 91, 107, 255)),
+                    StrokeThickness = 1.4,
+                    Fill = new SolidColorBrush(Color.FromArgb(40, 91, 107, 255)),
+                    IsHitTestVisible = false
+                };
+                _overlay.Children.Add(_marqueeRect);
+            }
+            Canvas.SetLeft(_marqueeRect, r.X);
+            Canvas.SetTop(_marqueeRect, r.Y);
+            _marqueeRect.Width = r.W;
+            _marqueeRect.Height = r.H;
+        }
+        else if (_marqueeRect is not null)
+        {
+            _overlay.Children.Remove(_marqueeRect);
+            _marqueeRect = null;
+        }
+
+        if (isCurrent && Context.SelectionLasso is { Count: > 1 } poly)
+        {
+            if (_marqueeLasso is null)
+            {
+                _marqueeLasso = new Polyline
+                {
+                    Stroke = new SolidColorBrush(Color.FromArgb(220, 91, 107, 255)),
+                    StrokeThickness = 1.4,
+                    IsHitTestVisible = false
+                };
+                _overlay.Children.Add(_marqueeLasso);
+            }
+            var pc = _marqueeLasso.Points;
+            if (pc.Count > poly.Count) pc.Clear();   // new gesture reused the element
+            for (int i = pc.Count; i < poly.Count; i++)
+                pc.Add(new Windows.Foundation.Point(poly[i].X, poly[i].Y));
+        }
+        else if (_marqueeLasso is not null)
+        {
+            _overlay.Children.Remove(_marqueeLasso);
+            _marqueeLasso = null;
+        }
     }
 
     public void SetTemplate(TemplateSettings template)
@@ -873,35 +878,41 @@ public sealed class PageCanvas : ContentControl
         foreach (var region in args.InvalidatedRegions)
         {
             using var ds = sender.CreateDrawingSession(region);
-            Renderer.DrawPage(ds, sender, Page, PageTemplate, _bgBitmap, _imageCache, Context.EditingTextId,
-                              previewExtLeft: _previewExtLeft, previewExtRight: _previewExtRight,
-                              clip: region,
-                              hiResBackground: extPreview ? null : _bgHiRes,
-                              hiResRect: !extPreview && _bgHiRes is not null ? _bgHiResRect : null);
-
-            if (_selectedTextRuns.Count > 0)
+            // This runs inside a native Win2D callback. An unhandled managed
+            // exception here (a bad element that slips past the renderer's guards,
+            // a lost device, …) propagates through native code and hard-kills the
+            // process with no dialog and no catchable stack — the "opens and
+            // silently crashes" symptom. Contain it per-region: log it, draw what
+            // we can, and keep the app (and the user's unsaved work) alive.
+            try
             {
-                var hi = Color.FromArgb(110, 91, 107, 255);
-                foreach (var r in _selectedTextRuns)
-                    ds.FillRectangle((float)r.X, (float)r.Y, (float)r.Width, (float)r.Height, hi);
-            }
+                Renderer.DrawPage(ds, sender, Page, PageTemplate, _bgBitmap, _imageCache, Context.EditingTextId,
+                                  previewExtLeft: _previewExtLeft, previewExtRight: _previewExtRight,
+                                  clip: region,
+                                  hiResBackground: extPreview ? null : _bgHiRes,
+                                  hiResRect: !extPreview && _bgHiRes is not null ? _bgHiResRect : null,
+                                  skipElementIds: _hiddenElementIds);
 
-            if (ReferenceEquals(Context.CurrentPage, Page))
-            {
-                if (Context.SelectionRect is { } r)
-                {
-                    ds.DrawRectangle(r.X, r.Y, r.W, r.H, Color.FromArgb(180, 91, 107, 255), 1.4f);
-                    ds.FillRectangle(r.X, r.Y, r.W, r.H, Color.FromArgb(40, 91, 107, 255));
-                }
-                if (Context.SelectionLasso is { Count: > 1 } poly)
-                {
-                    for (int i = 1; i < poly.Count; i++)
-                        ds.DrawLine(poly[i - 1], poly[i], Color.FromArgb(220, 91, 107, 255), 1.4f);
-                }
-                if (HasCommittedSelection())
+                // Draw the slice of any neighbouring page's content that spills
+                // across the seam into this region, so a straddling element
+                // shows on both pages. Skipped during an extension preview
+                // (element coords are shifted then).
+                if (!extPreview) DrawNeighborBleed(ds, sender, region);
+
+                // The select-tool marquee is a XAML overlay element (see
+                // SyncMarqueeOverlay) — nothing to draw here. Selection chrome
+                // is skipped while a drag is in flight: the overlay ghost shows
+                // the selection, and drawing chrome here would force a main-
+                // canvas repaint on every drag move.
+                if (ReferenceEquals(Context.CurrentPage, Page)
+                    && _drag == DragMode.None && HasCommittedSelection())
                 {
                     DrawSelectionVisuals(ds);
                 }
+            }
+            catch (Exception ex)
+            {
+                App.LogError(ex, $"DrawPage failed (page index {Page.Index})");
             }
         }
 
@@ -913,6 +924,75 @@ public sealed class PageCanvas : ContentControl
             _unfreezeAfterDraw = false;
             DispatcherQueue.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, UnfreezeViewport);
         }
+    }
+
+    // Draws the portion of each vertical neighbour's content that overflows the
+    // shared edge into this page's `region`. Cheap in the common case: a
+    // neighbour with no overflow toward this page (cached) is skipped outright,
+    // and it only engages when the dirty region actually reaches the seam band.
+    private void DrawNeighborBleed(CanvasDrawingSession ds, ICanvasResourceCreator dev, Windows.Foundation.Rect region)
+    {
+        // Previous page (above) → bleeds down into this page's top band.
+        if (PrevPageCanvas is { } prev)
+        {
+            float overflow = prev.BottomOverflow;
+            if (overflow > 0.5f && region.Y < overflow && TryNeighborOffset(prev, out float ox, out float oy))
+                DrawOneNeighborBleed(ds, dev, prev, region, ox, oy);
+        }
+        // Next page (below) → bleeds up into this page's bottom band.
+        if (NextPageCanvas is { } next)
+        {
+            float overflow = next.TopOverflow;
+            if (overflow > 0.5f && region.Y + region.Height > (float)Page.Height - overflow
+                && TryNeighborOffset(next, out float ox, out float oy))
+                DrawOneNeighborBleed(ds, dev, next, region, ox, oy);
+        }
+    }
+
+    // Bakes the same cross-page bleed into a full-page export raster. Uses the
+    // exact page-height offset (NOT the on-screen TransformToVisual, which folds
+    // in the ~4px seam separator) so a straddling stroke continues seamlessly
+    // across the page boundary in the paginated PDF.
+    private void DrawNeighborBleedForExport(CanvasDrawingSession ds, ICanvasResourceCreator dev)
+    {
+        var region = new Windows.Foundation.Rect(0, 0, Page.Width, Page.Height);
+        if (PrevPageCanvas is { } prev && prev.BottomOverflow > 0.5f)
+            DrawOneNeighborBleed(ds, dev, prev, region, 0f, -(float)prev.Page.Height);
+        if (NextPageCanvas is { } next && next.TopOverflow > 0.5f)
+            DrawOneNeighborBleed(ds, dev, next, region, 0f, (float)Page.Height);
+    }
+
+    // On-screen offset that maps a neighbour's local coords into this page's
+    // coords (pure vertical translation — pages share the left edge and zoom).
+    private bool TryNeighborOffset(PageCanvas neighbor, out float ox, out float oy)
+    {
+        try
+        {
+            var o = neighbor.TransformToVisual(this).TransformPoint(new Windows.Foundation.Point(0, 0));
+            ox = (float)o.X; oy = (float)o.Y;
+            return true;
+        }
+        catch { ox = 0; oy = 0; return false; }
+    }
+
+    private void DrawOneNeighborBleed(CanvasDrawingSession ds, ICanvasResourceCreator dev, PageCanvas neighbor,
+                                      Windows.Foundation.Rect region, float ox, float oy)
+    {
+        // Cull the neighbour against the same region expressed in ITS coords.
+        var neighborClip = new Windows.Foundation.Rect(region.X - ox, region.Y - oy, region.Width, region.Height);
+        var prev = ds.Transform;
+        ds.Transform = Matrix3x2.CreateTranslation(ox, oy) * prev;
+        try
+        {
+            // overlayOnly: elements only — no white fill / template / background
+            // over this page. Win2D clips drawing to `region`, so nothing spills
+            // outside the seam band. Honour the neighbour's own hidden set so an
+            // element being dragged off it isn't drawn twice.
+            Renderer.DrawPage(ds, dev, neighbor.Page, neighbor.PageTemplate, null,
+                              neighbor.ImageCacheView, Context.EditingTextId, overlayOnly: true,
+                              clip: neighborClip, skipElementIds: neighbor.HiddenElementIdsView);
+        }
+        finally { ds.Transform = prev; }
     }
 
     // ── Freeze-frame across DpiScale changes ────────────────────────────────
@@ -942,7 +1022,8 @@ public sealed class PageCanvas : ContentControl
                                   previewExtLeft: _previewExtLeft, previewExtRight: _previewExtRight,
                                   clip: viewRect,
                                   hiResBackground: extPreview ? null : _bgHiRes,
-                                  hiResRect: !extPreview && _bgHiRes is not null ? _bgHiResRect : null);
+                                  hiResRect: !extPreview && _bgHiRes is not null ? _bgHiResRect : null,
+                                  skipElementIds: _hiddenElementIds);
             }
             _freezeImage = new Image
             {
@@ -982,6 +1063,13 @@ public sealed class PageCanvas : ContentControl
     // sub-ms commit and one that blocks the UI thread for ~10–20 ms.
     public void CommitStrokeRedraw(Bbox bbox)
     {
+        _contentBoundsDirty = true;
+        // If the change reaches past an edge, the neighbour the content bleeds
+        // into must repaint (it reads this page's now-stale overflow). Do this
+        // before clamping the rect to this page's bounds.
+        if (bbox.Y < 0) PrevPageCanvas?.RequestRedraw();
+        if (bbox.Y + bbox.H > Page.Height) NextPageCanvas?.RequestRedraw();
+
         double x = Math.Max(0, bbox.X);
         double y = Math.Max(0, bbox.Y);
         double w = Math.Min(Page.Width,  bbox.X + bbox.W) - x;
@@ -1414,10 +1502,19 @@ public sealed class PageCanvas : ContentControl
 
     private void OnPointerPressed(object sender, PointerRoutedEventArgs e)
     {
+        try { OnPointerPressedCore(sender, e); }
+        catch (Exception ex) { App.LogError(ex, "OnPointerPressed"); }
+    }
+    private void OnPointerPressedCore(object sender, PointerRoutedEventArgs e)
+    {
         if (!PalmRejection.Accept(e)) { e.Handled = true; return; }
         // Fingers never trigger our tools — the outer ScrollViewer's DirectManipulation
         // handles touch pan + pinch-zoom; we just refuse to draw.
         if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch) return;
+        // Editing suspended (e.g. during a save): reject pen/mouse drawing so the
+        // document can't be mutated, but scroll/zoom (handled by the ScrollViewer)
+        // still works.
+        if (Context.EditingSuspended) return;
         Focus(FocusState.Pointer);
         var p = ToPageSpace(e);
         Context.CurrentPage = Page;
@@ -1447,7 +1544,7 @@ public sealed class PageCanvas : ContentControl
                     CapturePointer(e.Pointer);
                     _capturedPointerId = e.Pointer.PointerId;
                     e.Handled = true;
-                    _canvas.Invalidate();
+                    SyncTextSelectionOverlay();
                     return;
                 }
                 // No selectable text on this page — fall through to pan.
@@ -1486,7 +1583,9 @@ public sealed class PageCanvas : ContentControl
             }
             if (PointInSelectionBounds(p))
             {
-                StartDrag(DragMode.Move, p);
+                // Pressed inside the existing selection: drag to move, or — if it
+                // turns out to be a tap — dismiss the selection on release.
+                StartDrag(DragMode.Move, p, tapDismisses: true);
                 CapturePointer(e.Pointer);
                 _capturedPointerId = e.Pointer.PointerId;
                 e.Handled = true;
@@ -1501,11 +1600,12 @@ public sealed class PageCanvas : ContentControl
         {
             if (TrySelectElementAt(p))
             {
+                // StartDrag's ghost setup repaints the selection region itself;
+                // chrome appears on release via EndDrag.
                 StartDrag(DragMode.Move, p);
                 CapturePointer(e.Pointer);
                 _capturedPointerId = e.Pointer.PointerId;
                 e.Handled = true;
-                _canvas.Invalidate();
                 return;
             }
         }
@@ -1526,6 +1626,11 @@ public sealed class PageCanvas : ContentControl
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
+        try { OnPointerMovedCore(sender, e); }
+        catch (Exception ex) { App.LogError(ex, "OnPointerMoved"); }
+    }
+    private void OnPointerMovedCore(object sender, PointerRoutedEventArgs e)
+    {
         if (_capturedPointerId is null || e.Pointer.PointerId != _capturedPointerId) return;
         if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Pen) _penEventsSinceDown++;
         if (ShouldDropPenSample(e)) return;
@@ -1543,13 +1648,13 @@ public sealed class PageCanvas : ContentControl
         {
             _selectCursor = FindNearestTextRun(p);
             RecomputeTextSelection();
-            _canvas.Invalidate();
+            SyncTextSelectionOverlay();   // overlay-only; no main-canvas redraw
             return;
         }
         if (_drag != DragMode.None)
         {
+            // Ghost-only update — no main-canvas invalidate until release.
             ContinueDrag(p);
-            _canvas.Invalidate();
             return;
         }
         if (_activeTool is null) return;
@@ -1562,28 +1667,38 @@ public sealed class PageCanvas : ContentControl
         // stroke each frame — costs that compound badly at high zoom.
         var device = e.Pointer.PointerDeviceType;
         var inter = e.GetIntermediatePoints(this);
-        if (inter is { Count: > 1 })
+        _suppressLiveSync = true;
+        try
         {
-            for (int i = inter.Count - 1; i >= 0; i--)
+            if (inter is { Count: > 1 })
             {
-                var pp = inter[i];
-                if (!pp.IsInContact) continue;
-                var raw = pp.Properties.Pressure;
-                if (device == Microsoft.UI.Input.PointerDeviceType.Pen
-                    && App.Services.Settings.Current.PressureEnabled
-                    && raw > 0 && raw < (float)App.Services.Settings.Current.MinPressure)
-                    continue;
-                var pt = new Vector2((float)pp.Position.X, (float)pp.Position.Y);
-                if (TooCloseToLast(pt)) continue;
-                _activeTool.OnPointerMove(Context, pt, PressureOf(raw, device));
+                for (int i = inter.Count - 1; i >= 0; i--)
+                {
+                    var pp = inter[i];
+                    if (!pp.IsInContact) continue;
+                    var raw = pp.Properties.Pressure;
+                    if (device == Microsoft.UI.Input.PointerDeviceType.Pen
+                        && App.Services.Settings.Current.PressureEnabled
+                        && raw > 0 && raw < (float)App.Services.Settings.Current.MinPressure)
+                        continue;
+                    var pt = new Vector2((float)pp.Position.X, (float)pp.Position.Y);
+                    if (TooCloseToLast(pt)) continue;
+                    _activeTool.OnPointerMove(Context, pt, PressureOf(raw, device));
+                }
+            }
+            else if (!TooCloseToLast(p))
+            {
+                _activeTool.OnPointerMove(Context, p, PressureOf(e));
             }
         }
-        else if (!TooCloseToLast(p))
+        finally
         {
-            _activeTool.OnPointerMove(Context, p, PressureOf(e));
+            _suppressLiveSync = false;
         }
-        // Tools self-invalidate (ctx.InvalidateLive while drawing, ctx.Invalidate on
-        // commit), so we don't need to re-invalidate the full main canvas here.
+        // One overlay sync for all samples this event delivered. Tools handle
+        // the main canvas themselves (ctx.Invalidate/InvalidateRect on commit),
+        // so no full main-canvas invalidate here.
+        Context.InvalidateLive?.Invoke();
     }
 
     private bool TooCloseToLast(Vector2 p)
@@ -1598,6 +1713,11 @@ public sealed class PageCanvas : ContentControl
     }
 
     private void OnPointerReleased(object sender, PointerRoutedEventArgs e)
+    {
+        try { OnPointerReleasedCore(sender, e); }
+        catch (Exception ex) { App.LogError(ex, "OnPointerReleased"); }
+    }
+    private void OnPointerReleasedCore(object sender, PointerRoutedEventArgs e)
     {
         if (_capturedPointerId is null || e.Pointer.PointerId != _capturedPointerId) return;
 
@@ -1624,21 +1744,29 @@ public sealed class PageCanvas : ContentControl
         }
         else if (_selectingText)
         {
+            // Text selection lives entirely on the overlay — the main canvas
+            // never changed during the gesture.
             _selectingText = false;
+            skipFullRedraw = true;
         }
         else if (_drag != DragMode.None)
         {
-            _drag = DragMode.None;
-            Context.Mutated?.Invoke();
+            // Applies the transform to the model once and repaints only the
+            // affected region (plus Mutated for dirty/history).
+            EndDrag();
+            skipFullRedraw = true;
         }
         else
         {
             var wasSelectTool = _activeTool is LassoTool or RectSelectTool;
             var wasRectSelect = _activeTool is RectSelectTool;
-            // Pen/highlighter repaint themselves on lift (bbox-only CommitStrokeAt,
-            // or ctx.Invalidate for hold-to-snap) — the full-page invalidate below
-            // would re-tessellate every stroke on the page after every stroke.
-            skipFullRedraw = _activeTool is PenTool or HighlighterTool;
+            // Pen/highlighter repaint themselves on lift (bbox-only CommitStrokeAt)
+            // — the full-page invalidate below would re-tessellate every stroke
+            // on the page after every stroke. The eraser invalidates each erased
+            // region as it goes; the select tools invalidate the selection's own
+            // region on commit; the shape tool its committed shape's bbox.
+            skipFullRedraw = _activeTool is PenTool or HighlighterTool or EraserTool
+                             or RectSelectTool or LassoTool or ShapeTool;
             _activeTool?.OnPointerUp(Context, ToPageSpace(e), PressureOf(e));
             TearDownLiveShapePreview();   // no-op for non-shape tools
             if (wasSelectTool) Context.SelectionChanged?.Invoke();
@@ -1651,10 +1779,10 @@ public sealed class PageCanvas : ContentControl
         if (!skipFullRedraw) _canvas.Invalidate();
     }
 
-    private void StartDrag(DragMode mode, Vector2 p)
+    private void StartDrag(DragMode mode, Vector2 p, bool tapDismisses = false)
     {
         _drag = mode;
-        _lastMovePoint = p;
+        _dragTapDismisses = tapDismisses;
         SelectionBbox(out _dragStartBbox);
         _dragStartCenter = _dragStartBbox.Center;
         _origImageBoxes.Clear();
@@ -1684,38 +1812,69 @@ public sealed class PageCanvas : ContentControl
             _origShapePoints[id] = (sh.X1, sh.Y1, sh.X2, sh.Y2);
         }
         _dragStartRotation = Math.Atan2(p.Y - _dragStartCenter.Y, p.X - _dragStartCenter.X);
+        _dragStartPoint = p;
+        _lastDragPoint = p;
+        _dragMoved = false;
+        // Paint this page (and its drag ghost) above sibling pages so a ghost
+        // dragged past the page edge stays visible over the next page instead
+        // of being occluded by it. Restored in EndDrag.
+        if (mode == DragMode.Move) Canvas.SetZIndex(this, 1);
+        BeginDragGhost();
     }
 
+    // During the drag only the overlay ghost is transformed — pure composition
+    // work, no Win2D redraw and no model mutation. The model changes once, in
+    // EndDrag. (Mutating per move also re-baked every selected stroke's cached
+    // geometry each sample, and repeated ApplyResize over already-scaled
+    // stroke points compounded the scale.)
     private void ContinueDrag(Vector2 p)
     {
+        _lastDragPoint = p;
+        if ((p - _dragStartPoint).LengthSquared() > 0.25f) _dragMoved = true;
+        if (_dragGhost is null) return;   // ghost failed — release still applies the drag
+
         switch (_drag)
         {
             case DragMode.Move:
-                var dx = p.X - _lastMovePoint.X;
-                var dy = p.Y - _lastMovePoint.Y;
-                TranslateSelection(dx, dy);
-                _lastMovePoint = p;
+            {
+                float tx = p.X - _dragStartPoint.X;
+                float ty = p.Y - _dragStartPoint.Y;
+                PositionGhost(_dragGhostBbox.X + tx, _dragGhostBbox.Y + ty,
+                              _dragGhostBbox.W, _dragGhostBbox.H);
                 break;
-
+            }
             case DragMode.ResizeNW:
             case DragMode.ResizeNE:
             case DragMode.ResizeSW:
             case DragMode.ResizeSE:
-                ApplyResize(p);
+            {
+                var nb = ResizedBox(_drag, p);
+                float sx = nb.W / Math.Max(1e-3f, _dragStartBbox.W);
+                float sy = nb.H / Math.Max(1e-3f, _dragStartBbox.H);
+                PositionGhost(
+                    nb.X + (_dragGhostBbox.X - _dragStartBbox.X) * sx,
+                    nb.Y + (_dragGhostBbox.Y - _dragStartBbox.Y) * sy,
+                    _dragGhostBbox.W * sx,
+                    _dragGhostBbox.H * sy);
                 break;
-
+            }
             case DragMode.Rotate:
-                ApplyRotate(p);
+            {
+                var ang = Math.Atan2(p.Y - _dragStartCenter.Y, p.X - _dragStartCenter.X);
+                var deltaDeg = (ang - _dragStartRotation) * 180.0 / Math.PI;
+                _dragGhostRotate!.Angle = deltaDeg;
+                _dragGhostBorderRotate!.Angle = deltaDeg;
                 break;
+            }
         }
     }
 
-    private void ApplyResize(Vector2 p)
+    // New selection bbox implied by dragging `mode`'s corner to `p`.
+    private Bbox ResizedBox(DragMode mode, Vector2 p)
     {
-        // Compute new bbox from the opposing fixed corner.
         var orig = _dragStartBbox;
         float left = orig.X, top = orig.Y, right = orig.Right, bottom = orig.Bottom;
-        switch (_drag)
+        switch (mode)
         {
             case DragMode.ResizeNW: left = p.X; top = p.Y; break;
             case DragMode.ResizeNE: right = p.X; top = p.Y; break;
@@ -1724,7 +1883,13 @@ public sealed class PageCanvas : ContentControl
         }
         if (right - left < 8) right = left + 8;
         if (bottom - top < 8) bottom = top + 8;
-        var newBox = new Bbox(left, top, right - left, bottom - top);
+        return new Bbox(left, top, right - left, bottom - top);
+    }
+
+    private void ApplyResize(DragMode mode, Vector2 p)
+    {
+        var orig = _dragStartBbox;
+        var newBox = ResizedBox(mode, p);
 
         // Scale each selected element from its original bbox to its new position within newBox,
         // preserving relative position/size within the selection.
@@ -1798,6 +1963,203 @@ public sealed class PageCanvas : ContentControl
         }
     }
 
+    // Renders the selected elements once into an overlay image and hides the
+    // originals from the main canvas (one partial redraw). The ghost pixel-
+    // covers the originals, so nothing visibly changes at drag start.
+    private void BeginDragGhost()
+    {
+        TearDownDragGhost();
+        if (!SelectionBbox(out var sel)) return;
+
+        // Pad so stroke half-widths + Catmull-Rom overshoot render inside the
+        // image instead of clipping at the selection's point-hull edge.
+        float pad = 12f;
+        foreach (var id in Context.SelectedStrokeIds)
+        {
+            var s = Page.Strokes.FirstOrDefault(z => z.Id == id);
+            if (s is not null) pad = Math.Max(pad, s.Width * 0.5f + 12f);
+        }
+        var box = new Bbox(sel.X - pad, sel.Y - pad, sel.W + pad * 2, sel.H + pad * 2);
+        if (box.W < 1 || box.H < 1) return;
+
+        try
+        {
+            var device = _canvas.Device ?? CanvasDevice.GetSharedDevice();
+            // Render at the canvas backing scale so the ghost is crisp at the
+            // current zoom; cap total pixels for page-sized selections.
+            float scale = Math.Clamp(_canvas.DpiScale, 1f, 4f);
+            const float maxPixels = 16_000_000f;
+            if (box.W * box.H * scale * scale > maxPixels)
+                scale = MathF.Sqrt(maxPixels / (box.W * box.H));
+            scale = Math.Max(0.25f, scale);
+
+            var src = new CanvasImageSource(device, box.W, box.H, 96f * scale);
+            using (var ds = src.CreateDrawingSession(Colors.Transparent))
+            {
+                ds.Transform = Matrix3x2.CreateTranslation(-box.X, -box.Y);
+                Renderer.DrawElements(ds, Page,
+                    Context.SelectedStrokeIds, Context.SelectedShapeIds,
+                    Context.SelectedTextIds, Context.SelectedImageIds, _imageCache);
+            }
+
+            _dragGhostRotate = new RotateTransform();
+            _dragGhost = new Image
+            {
+                Source = src,
+                Width = box.W,
+                Height = box.H,
+                Stretch = Stretch.Fill,
+                IsHitTestVisible = false,
+                RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5),
+                RenderTransform = _dragGhostRotate
+            };
+            Canvas.SetLeft(_dragGhost, box.X);
+            Canvas.SetTop(_dragGhost, box.Y);
+            Canvas.SetZIndex(_dragGhost, 10);
+            _overlay.Children.Add(_dragGhost);
+
+            _dragGhostBorderRotate = new RotateTransform();
+            _dragGhostBorder = new Rectangle
+            {
+                Stroke = new SolidColorBrush(Color.FromArgb(255, 91, 107, 255)),
+                StrokeThickness = 1.5,
+                StrokeDashArray = new DoubleCollection { 4, 3 },
+                Width = box.W,
+                Height = box.H,
+                IsHitTestVisible = false,
+                RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5),
+                RenderTransform = _dragGhostBorderRotate
+            };
+            Canvas.SetLeft(_dragGhostBorder, box.X);
+            Canvas.SetTop(_dragGhostBorder, box.Y);
+            Canvas.SetZIndex(_dragGhostBorder, 11);
+            _overlay.Children.Add(_dragGhostBorder);
+
+            _dragGhostBbox = box;
+
+            // Hide the originals (and the Win2D chrome — DrawSelectionVisuals
+            // skips while _drag is set) with one partial redraw.
+            _hiddenElementIds = new HashSet<string>(
+                Context.SelectedStrokeIds
+                    .Concat(Context.SelectedShapeIds)
+                    .Concat(Context.SelectedTextIds)
+                    .Concat(Context.SelectedImageIds));
+            InvalidateSelectionRegion(box, 0);
+        }
+        catch (Exception ex)
+        {
+            // Fail-soft: no ghost means no live preview, but the drag still
+            // applies correctly on release.
+            App.LogError(ex, "BeginDragGhost");
+            _hiddenElementIds = null;
+            TearDownDragGhost();
+        }
+    }
+
+    private void PositionGhost(float x, float y, float w, float h)
+    {
+        if (_dragGhost is null || _dragGhostBorder is null) return;
+        Canvas.SetLeft(_dragGhost, x);
+        Canvas.SetTop(_dragGhost, y);
+        _dragGhost.Width = w;
+        _dragGhost.Height = h;
+        Canvas.SetLeft(_dragGhostBorder, x);
+        Canvas.SetTop(_dragGhostBorder, y);
+        _dragGhostBorder.Width = w;
+        _dragGhostBorder.Height = h;
+    }
+
+    private void TearDownDragGhost()
+    {
+        if (_dragGhost is not null) _overlay.Children.Remove(_dragGhost);
+        if (_dragGhostBorder is not null) _overlay.Children.Remove(_dragGhostBorder);
+        _dragGhost = null;
+        _dragGhostBorder = null;
+        _dragGhostRotate = null;
+        _dragGhostBorderRotate = null;
+    }
+
+    // Partial main-canvas invalidate covering `b` plus the selection chrome
+    // (dashed outline pad, handles, rotate stalk) and any extra overhang.
+    private void InvalidateSelectionRegion(Bbox b, float extraPad)
+    {
+        float p = 56f + extraPad;
+        CommitStrokeRedraw(new Bbox(b.X - p, b.Y - p, b.W + p * 2, b.H + p * 2));
+    }
+
+    // Applies the drag's accumulated transform to the model ONCE, restores the
+    // hidden originals and repaints only the affected region.
+    private void EndDrag()
+    {
+        var mode = _drag;
+        _drag = DragMode.None;
+        Canvas.SetZIndex(this, 0);   // undo the drag-time raise (see StartDrag)
+        var oldRegion = _dragGhost is not null ? _dragGhostBbox : _dragStartBbox;
+
+        // A tap (no real travel) inside an existing selection is "click to
+        // deselect": tear down the ghost, restore the originals and clear —
+        // rather than nudging the selection by a jittery pixel or two.
+        bool tapped = (_lastDragPoint - _dragStartPoint).LengthSquared() <= TapDismissThresholdSq;
+        if (mode == DragMode.Move && _dragTapDismisses && tapped)
+        {
+            _hiddenElementIds = null;
+            TearDownDragGhost();
+            InvalidateSelectionRegion(oldRegion, 0);
+            ClearSelection();
+            return;
+        }
+
+        // Cross-page move: if the pointer ended over a different page, hand the
+        // selection to that page (InkCanvasControl does the reparenting + coord
+        // translation) instead of translating it off the bottom of this one.
+        if (mode == DragMode.Move && _dragMoved && SelectionDragDropped is not null)
+        {
+            var delta = new Vector2(_lastDragPoint.X - _dragStartPoint.X,
+                                    _lastDragPoint.Y - _dragStartPoint.Y);
+            var drop = new SelectionDropEventArgs { ReleaseLocal = _lastDragPoint, Delta = delta };
+            SelectionDragDropped.Invoke(this, drop);
+            if (drop.Transferred)
+            {
+                _hiddenElementIds = null;
+                TearDownDragGhost();
+                RequestRedraw();   // repaint this (source) page: the elements are gone
+                return;
+            }
+        }
+
+        if (_dragMoved)
+        {
+            switch (mode)
+            {
+                case DragMode.Move:
+                    TranslateSelection(_lastDragPoint.X - _dragStartPoint.X,
+                                       _lastDragPoint.Y - _dragStartPoint.Y);
+                    break;
+                case DragMode.ResizeNW:
+                case DragMode.ResizeNE:
+                case DragMode.ResizeSW:
+                case DragMode.ResizeSE:
+                    ApplyResize(mode, _lastDragPoint);
+                    break;
+                case DragMode.Rotate:
+                    ApplyRotate(_lastDragPoint);
+                    break;
+            }
+        }
+
+        _hiddenElementIds = null;
+        TearDownDragGhost();
+
+        var dirty = oldRegion;
+        if (SelectionBbox(out var nb)) dirty = Bbox.Union(dirty, nb);
+        // Rotated images/texts overhang their axis-aligned bbox by up to the
+        // half-diagonal; pad generously since this repaint happens once.
+        float extra = mode == DragMode.Rotate ? 0.5f * Math.Max(dirty.W, dirty.H) : 0f;
+        InvalidateSelectionRegion(dirty, extra);
+
+        if (_dragMoved) Context.Mutated?.Invoke();
+    }
+
     public void TranslateSelection(float dx, float dy)
     {
         foreach (var id in Context.SelectedStrokeIds)
@@ -1816,6 +2178,8 @@ public sealed class PageCanvas : ContentControl
             if (sh is null) continue;
             sh.X1 += dx; sh.Y1 += dy;
             sh.X2 += dx; sh.Y2 += dy;
+            // Triangles carry a third vertex; move it too or the shape distorts.
+            if (sh.Kind == ShapeKind.Triangle) { sh.X3 += dx; sh.Y3 += dy; }
         }
         foreach (var id in Context.SelectedTextIds)
         {
@@ -1864,7 +2228,12 @@ public sealed class PageCanvas : ContentControl
             {
                 Kind = sh.Kind, Color = sh.Color, StrokeWidth = sh.StrokeWidth, Filled = sh.Filled,
                 X1 = sh.X1 + offsetX, Y1 = sh.Y1 + offsetY,
-                X2 = sh.X2 + offsetX, Y2 = sh.Y2 + offsetY
+                X2 = sh.X2 + offsetX, Y2 = sh.Y2 + offsetY,
+                // Third vertex only means anything for triangles; leave the
+                // unused zeros alone for other kinds.
+                X3 = sh.Kind == ShapeKind.Triangle ? sh.X3 + offsetX : sh.X3,
+                Y3 = sh.Kind == ShapeKind.Triangle ? sh.Y3 + offsetY : sh.Y3,
+                Rotation = sh.Rotation
             };
             Page.Shapes.Add(clone);
             newShapeIds.Add(clone.Id);
@@ -1895,19 +2264,28 @@ public sealed class PageCanvas : ContentControl
         Context.SelectedTextIds.Clear();   Context.SelectedTextIds.AddRange(newTextIds);
         Context.SelectedImageIds.Clear();  Context.SelectedImageIds.AddRange(newImageIds);
         Context.Mutated?.Invoke();
-        _canvas.Invalidate();
+        // Repaint the clones' region and the originals' (chrome moved off it).
+        if (SelectionBbox(out var nb))
+            InvalidateSelectionRegion(
+                Bbox.Union(nb, new Bbox(nb.X - offsetX, nb.Y - offsetY, nb.W, nb.H)), 0);
+        else
+            _canvas.Invalidate();
     }
 
     public void ClearSelection()
     {
         bool hadSelection = HasCommittedSelection();
+        bool hadBbox = SelectionBbox(out var oldBbox);
         Context.SelectedStrokeIds.Clear();
         Context.SelectedShapeIds.Clear();
         Context.SelectedTextIds.Clear();
         Context.SelectedImageIds.Clear();
         Context.SelectionRect = null;
         Context.SelectionLasso = null;
-        _canvas.Invalidate();
+        SyncMarqueeOverlay();
+        // Only the old chrome region needs repainting — a full-page invalidate
+        // here re-rendered everything on every outside-click.
+        if (hadBbox) InvalidateSelectionRegion(oldBbox, 0);
         if (hadSelection) Context.SelectionChanged?.Invoke();
     }
 
@@ -1954,7 +2332,60 @@ public sealed class PageCanvas : ContentControl
         _selectAnchor = null;
         _selectCursor = null;
         _selectedTextRuns.Clear();
-        _canvas.Invalidate();
+        SyncTextSelectionOverlay();
+    }
+
+    // Rebuilds the overlay highlight from _selectedTextRuns, coalescing the
+    // runs of each line into one rectangle (fewer geometry nodes AND a
+    // continuous highlight instead of per-word gaps).
+    private void SyncTextSelectionOverlay()
+    {
+        if (_selectedTextRuns.Count == 0)
+        {
+            if (_textSelHighlight is not null)
+            {
+                _overlay.Children.Remove(_textSelHighlight);
+                _textSelHighlight = null;
+            }
+            return;
+        }
+
+        // Nonzero so slightly overlapping line boxes union instead of
+        // even-odd cancelling at their intersections.
+        var group = new GeometryGroup { FillRule = FillRule.Nonzero };
+        int i = 0;
+        while (i < _selectedTextRuns.Count)
+        {
+            var first = _selectedTextRuns[i];
+            int line = first.LineIndex;
+            double x1 = first.X, y1 = first.Y;
+            double x2 = first.X + first.Width, y2 = first.Y + first.Height;
+            i++;
+            while (i < _selectedTextRuns.Count && _selectedTextRuns[i].LineIndex == line)
+            {
+                var r = _selectedTextRuns[i];
+                x1 = Math.Min(x1, r.X);
+                y1 = Math.Min(y1, r.Y);
+                x2 = Math.Max(x2, r.X + r.Width);
+                y2 = Math.Max(y2, r.Y + r.Height);
+                i++;
+            }
+            group.Children.Add(new RectangleGeometry
+            {
+                Rect = new Windows.Foundation.Rect(x1, y1, x2 - x1, y2 - y1)
+            });
+        }
+
+        if (_textSelHighlight is null)
+        {
+            _textSelHighlight = new XamlPath
+            {
+                Fill = new SolidColorBrush(Color.FromArgb(110, 91, 107, 255)),
+                IsHitTestVisible = false
+            };
+            _overlay.Children.Add(_textSelHighlight);
+        }
+        _textSelHighlight.Data = group;
     }
 
     public string? GetSelectedText()
@@ -2256,6 +2687,10 @@ public sealed class PageCanvas : ContentControl
                 if (!overlayOnly) ds.Clear(Colors.White);
                 if (scale != 1f) ds.Transform = Matrix3x2.CreateScale(scale);
                 Renderer.DrawPage(ds, device, Page, PageTemplate, bg, images, overlayOnly: overlayOnly);
+                // Bake cross-page bleed into the export so a stroke straddling the
+                // seam shows on both pages in external PDF viewers, matching the
+                // on-screen rendering.
+                DrawNeighborBleedForExport(ds, device);
             }
             using var ms = new MemoryStream();
             target.SaveAsync(ms.AsRandomAccessStream(), CanvasBitmapFileFormat.Png)

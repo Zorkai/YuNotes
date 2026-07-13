@@ -22,6 +22,11 @@ public sealed class ShapeElement
     public float Y2 { get; set; }
     public float X3 { get; set; }
     public float Y3 { get; set; }
+    // Rotation in degrees (screen-clockwise) about the (X1,Y1)-(X2,Y2) bbox
+    // center. Only meaningful for Rectangle and Ellipse — Line and Triangle
+    // vertices are free-form already. Default 0 keeps old documents and the
+    // shape tool unchanged; JSON round-trips it automatically.
+    public float Rotation { get; set; }
     public Color Color { get; set; }
     public float StrokeWidth { get; set; } = 2.5f;
     public bool Filled { get; set; } = false;
@@ -67,6 +72,11 @@ public sealed class Stroke
         s.Width = br.ReadSingle();
         s.PressureMode = version >= 2 && br.ReadBoolean();
         var n = br.ReadInt32();
+        // A corrupt/truncated blob can carry a bogus (huge or negative) count.
+        // Each point is 3 floats = 12 bytes; clamp to what the stream can hold so
+        // we never pre-fault on a giant allocation or read past the end.
+        long remaining = ms.Length - ms.Position;
+        if (n < 0 || n > remaining / 12) n = (int)Math.Max(0, remaining / 12);
         for (int i = 0; i < n; i++)
             s.Points.Add(new InkPoint(br.ReadSingle(), br.ReadSingle(), br.ReadSingle()));
         return s;

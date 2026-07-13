@@ -10,20 +10,29 @@
     <PublishProfile>win-$(Platform).pubxml</PublishProfile>
     <UseWinUI>true</UseWinUI>
     <EnableMsixTooling>true</EnableMsixTooling>
-    <WindowsPackageType>None</WindowsPackageType>
+    <!-- Packaged (MSIX) app: gets a Start-menu entry, appears in Settings > Apps,
+         and installs/updates/uninstalls the standard Windows way. This is also the
+         format the Microsoft Store requires. (Was WindowsPackageType=None, an
+         unpackaged loose .exe.) The Package.appxmanifest at the project root is
+         auto-detected by the single-project MSIX tooling. -->
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <AssemblyName>YuNotes</AssemblyName>
     <ApplicationIcon>Assets\app.ico</ApplicationIcon>
-    <!-- Ship the Windows App SDK runtime alongside the exe so the app can launch on
-         machines that don't have "Windows App Runtime" installed. Copy the whole
-         output folder (not just YuNotes.exe) to the target machine. -->
+    <!-- Bundle the Windows App SDK runtime INTO the package so the .msix is
+         self-sufficient — sideload installs need no separate Windows App Runtime
+         framework package, and the Store submission carries its own runtime. -->
     <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
     <UseRidGraph>true</UseRidGraph>
+    <!-- Emit a single-architecture .msix (not a .msixbundle) and skip the symbol
+         package for local builds; keeps sideloading a one-file install. -->
+    <AppxBundle>Never</AppxBundle>
+    <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
+    <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260508005" />
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260529003" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
     <PackageReference Include="Microsoft.Graphics.Win2D" Version="1.4.0" />
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />

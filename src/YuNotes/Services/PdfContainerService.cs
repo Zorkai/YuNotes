@@ -24,11 +24,17 @@ public sealed class PdfContainerService
     // Each pagePngs entry: a non-empty PNG draws onto a white page; an empty/null
     // array yields a blank white page (used right after "New note" before the user
     // has drawn anything worth flattening).
-    public void Write(byte[][] pagePngs, double[] widths, double[] heights, byte[] embeddedData, string outputPath)
+    // reuseIndices/previousContainer: when reuseIndices[i] is set, page i is cloned
+    // as-is from the previous container output (its flatten is unchanged) and
+    // pagePngs[i] is ignored — the caller skipped rendering it.
+    public void Write(byte[][] pagePngs, double[] widths, double[] heights, byte[] embeddedData, string outputPath,
+                      int?[]? reuseIndices = null, byte[]? previousContainer = null)
     {
+        using var prev = OpenPrevious(previousContainer, reuseIndices);
         using var doc = new PdfDocument();
         for (int i = 0; i < pagePngs.Length; i++)
         {
+            if (TryReusePage(doc, prev, reuseIndices, i)) continue;
             var page = doc.AddPage();
             page.Width = XUnit.FromPoint(widths[i]);
             page.Height = XUnit.FromPoint(heights[i]);
@@ -44,15 +50,20 @@ public sealed class PdfContainerService
     // selectable text and vector graphics survive), then draw a transparent overlay
     // PNG containing the user's strokes / text / images on top of each. Pages that
     // don't map to the source (sourceIndices[i] == null) get a blank white page.
+    // Unchanged pages (reuseIndices[i] set) are cloned from the previous container
+    // output instead — they already carry source content + overlay.
     public void WriteWithSource(byte[][] overlayPngs, double[] widths, double[] heights,
                                 int?[] sourceIndices, byte[] sourcePdfBytes,
-                                byte[] embeddedData, string outputPath)
+                                byte[] embeddedData, string outputPath,
+                                int?[]? reuseIndices = null, byte[]? previousContainer = null)
     {
+        using var prev = OpenPrevious(previousContainer, reuseIndices);
         using var source = OpenSource(sourcePdfBytes);
         using var doc = new PdfDocument();
 
         for (int i = 0; i < overlayPngs.Length; i++)
         {
+            if (TryReusePage(doc, prev, reuseIndices, i)) continue;
             PdfPage page;
             var srcIdx = sourceIndices[i];
             if (srcIdx is int idx && idx >= 0 && idx < source.PageCount)
@@ -76,6 +87,40 @@ public sealed class PdfContainerService
         AttachEmbeddedFile(doc, EmbeddedName, embeddedData);
         AttachEmbeddedFile(doc, EmbeddedSourceName, sourcePdfBytes);
         doc.Save(outputPath);
+    }
+
+    // Reads the current container file and reports its page count, so the save
+    // can plan which flattened pages to clone instead of re-render. The bytes
+    // are read up front — the write later replaces the same path. Null when
+    // missing/unreadable: the caller then renders everything, as before.
+    public (byte[] Bytes, int PageCount)? TryLoadForReuse(string pdfPath)
+    {
+        try
+        {
+            var bytes = File.ReadAllBytes(pdfPath);
+            using var ms = new MemoryStream(bytes, 0, bytes.Length, writable: false, publiclyVisible: true);
+            using var doc = PdfReader.Open(ms, PdfDocumentOpenMode.Import);
+            return (bytes, doc.PageCount);
+        }
+        catch { return null; }
+    }
+
+    // No try/catch: when reuse was planned, the caller skipped rendering those
+    // pages — silently writing without the previous container would emit blank
+    // pages. Let the exception fail the whole save instead (nothing is written).
+    private static PdfDocument? OpenPrevious(byte[]? previousContainer, int?[]? reuseIndices)
+    {
+        if (previousContainer is not { Length: > 0 } || reuseIndices is null) return null;
+        return OpenSource(previousContainer);
+    }
+
+    private static bool TryReusePage(PdfDocument doc, PdfDocument? prev, int?[]? reuseIndices, int i)
+    {
+        if (prev is null || reuseIndices?[i] is not int rIdx) return false;
+        if (rIdx < 0 || rIdx >= prev.PageCount)   // planned reuse gone wrong — fail loud, not blank
+            throw new InvalidDataException($"Reuse index {rIdx} out of range for previous container ({prev.PageCount} pages).");
+        doc.AddPage(prev.Pages[rIdx]);
+        return true;
     }
 
     private static PdfDocument OpenSource(byte[] bytes)
@@ -111,6 +156,43 @@ public sealed class PdfContainerService
             return FindEmbeddedFile(doc, EmbeddedName);
         }
         catch { return null; }
+    }
+
+    // Replaces just the embedded editable-state blob inside an existing
+    // container PDF, leaving the (already flattened) page content untouched.
+    // Involves no rendering and no model access, so it's safe to run on a
+    // background thread — autosave uses it because re-flattening every page
+    // froze the UI for seconds on large documents. Returns false when the PDF
+    // has no embedded blob yet (fresh import never fully saved); the caller
+    // must fall back to a full container write.
+    public bool TryUpdateEmbeddedData(string pdfPath, byte[] data)
+    {
+        try
+        {
+            // Load fully into memory so the file isn't locked during the swap.
+            var bytes = File.ReadAllBytes(pdfPath);
+            using var ms = new MemoryStream(bytes, 0, bytes.Length, writable: false, publiclyVisible: true);
+            using var doc = PdfReader.Open(ms, PdfDocumentOpenMode.Modify);
+
+            var fileObj = FindEmbeddedFileDict(doc, EmbeddedName);
+            if (fileObj?.Stream is null) return false;
+            fileObj.Stream.Value = data;
+            if (fileObj.Elements["/Params"] is PdfDictionary p)
+                p.Elements["/Size"] = new PdfInteger(data.Length);
+
+            // Write-to-temp + atomic replace so a crash mid-save can't corrupt
+            // the container.
+            var tmp = pdfPath + ".yunotes-tmp";
+            doc.Save(tmp);
+            try { File.Replace(tmp, pdfPath, null); }
+            catch (IOException)
+            {
+                File.Copy(tmp, pdfPath, overwrite: true);
+                try { File.Delete(tmp); } catch { }
+            }
+            return true;
+        }
+        catch { return false; }
     }
 
     public bool HasEmbeddedData(string pdfPath) => ExtractData(pdfPath) is not null;
@@ -168,6 +250,11 @@ public sealed class PdfContainerService
     }
 
     private static byte[]? FindEmbeddedFile(PdfDocument doc, string name)
+        => FindEmbeddedFileDict(doc, name)?.Stream?.UnfilteredValue;
+
+    // Returns the embedded-file STREAM dictionary (the object whose stream
+    // holds the bytes) for `name`, or null if absent.
+    private static PdfDictionary? FindEmbeddedFileDict(PdfDocument doc, string name)
     {
         var catalog = doc.Internals.Catalog;
         if (catalog.Elements["/Names"] is not PdfDictionary names) return null;
@@ -189,7 +276,7 @@ public sealed class PdfContainerService
             var rawF = ef.Elements["/F"];
             var fileObj = rawF is PdfReference fr ? fr.Value as PdfDictionary : rawF as PdfDictionary;
             if (fileObj?.Stream is null) continue;
-            return fileObj.Stream.UnfilteredValue;
+            return fileObj;
         }
         return null;
     }

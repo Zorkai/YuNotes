@@ -10,6 +10,7 @@ using Windows.UI;
 using Colors = Microsoft.UI.Colors;
 using YuNotes.Models;
 using YuNotes.Services;
+using YuNotes.Tools;
 
 namespace YuNotes.Rendering;
 
@@ -27,6 +28,59 @@ public sealed class PageRenderer
         LineJoin = CanvasLineJoin.Round
     };
 
+    // Baked tessellations of committed strokes. Without this, every draw of a
+    // stroke re-runs geometry building (one COM call per segment) AND D2D
+    // tessellation — and a pen-lift's bbox redraw re-draws every neighbouring
+    // stroke its clip touches, so fast handwriting on an inked page stalls the
+    // UI thread mid-word re-tessellating the same neighbours over and over.
+    // CanvasCachedGeometry pays that cost once; replaying it is trivial.
+    //
+    // Entries are stamped with point count + endpoints + width: all in-place
+    // stroke mutations (drag, resize, rotate, pixel-erase splits) change one
+    // of those. The device is compared too — a session on another device
+    // (device-lost recovery, offscreen export) rebuilds lazily rather than
+    // replaying a dead resource. Color is NOT baked; it's applied at draw.
+    private readonly record struct StrokeGeoStamp(
+        int Count, float X0, float Y0, float X1, float Y1, float Width, bool Pressure);
+    private sealed record StrokeGeoEntry(
+        StrokeGeoStamp Stamp, CanvasDevice Device, CanvasCachedGeometry Geo);
+    private readonly System.Collections.Generic.Dictionary<string, StrokeGeoEntry> _strokeGeoCache = new();
+    private const int StrokeGeoCacheMax = 4096;
+
+    private static StrokeGeoStamp StampOf(Stroke s)
+    {
+        var first = s.Points[0];
+        var last = s.Points[^1];
+        return new StrokeGeoStamp(s.Points.Count, first.X, first.Y, last.X, last.Y, s.Width, s.PressureMode);
+    }
+
+    private CanvasCachedGeometry GetOrBakeStrokeGeometry(CanvasDrawingSession ds, Stroke s)
+    {
+        var stamp = StampOf(s);
+        var device = ds.Device;
+        if (_strokeGeoCache.TryGetValue(s.Id, out var hit)
+            && hit.Stamp == stamp && ReferenceEquals(hit.Device, device))
+            return hit.Geo;
+
+        using var geo = s.PressureMode
+            ? BuildVariableWidthGeometry(ds, s)
+            : BuildCatmullRomGeometry(ds, s);
+        var baked = s.PressureMode
+            ? CanvasCachedGeometry.CreateFill(geo)
+            : CanvasCachedGeometry.CreateStroke(geo, s.Width, s_strokeStyle);
+
+        if (_strokeGeoCache.Count >= StrokeGeoCacheMax && !_strokeGeoCache.ContainsKey(s.Id))
+        {
+            // Blunt eviction: the cache only grows past this on huge documents;
+            // dropping everything and re-baking visible strokes is a one-frame cost.
+            foreach (var e in _strokeGeoCache.Values) e.Geo.Dispose();
+            _strokeGeoCache.Clear();
+        }
+        if (_strokeGeoCache.TryGetValue(s.Id, out var old)) old.Geo.Dispose();
+        _strokeGeoCache[s.Id] = new StrokeGeoEntry(stamp, device, baked);
+        return baked;
+    }
+
     // `clip`: the dirty region being redrawn (canvas space). Elements whose
     // rendered bounds can't intersect it are skipped — the GPU is already
     // clipped to the region's tiles, but geometry building (one COM call per
@@ -41,7 +95,8 @@ public sealed class PageRenderer
                          string? skipTextId = null, bool overlayOnly = false,
                          float previewExtLeft = 0, float previewExtRight = 0,
                          Rect? clip = null,
-                         CanvasBitmap? hiResBackground = null, Rect? hiResRect = null)
+                         CanvasBitmap? hiResBackground = null, Rect? hiResRect = null,
+                         System.Collections.Generic.ISet<string>? skipElementIds = null)
     {
         // Elements are drawn shifted right during a left-extension preview, so
         // cull against the clip shifted the opposite way.
@@ -147,6 +202,13 @@ public sealed class PageRenderer
         {
             foreach (var img in page.Images)
             {
+                if (skipElementIds?.Contains(img.Id) == true) continue;
+                // Reject non-finite / non-positive geometry before DrawImage's Rect
+                // constructor (negative w/h throws) or Win2D (NaN throws) can crash.
+                if (!IsFinite(img.X) || !IsFinite(img.Y) ||
+                    !IsFinite(img.Width) || !IsFinite(img.Height) ||
+                    img.Width <= 0 || img.Height <= 0)
+                    continue;
                 if (img.Rotation == 0 && cullClip is { } cc1 &&
                     !RectIntersects(cc1, (float)img.X, (float)img.Y,
                                     (float)(img.X + img.Width), (float)(img.Y + img.Height)))
@@ -167,22 +229,26 @@ public sealed class PageRenderer
         // Shapes (drawn below strokes so ink can annotate over them)
         foreach (var sh in page.Shapes)
         {
+            if (skipElementIds?.Contains(sh.Id) == true) continue;
             if (cullClip is { } cc2 && !ShapeIntersects(cc2, sh)) continue;
             DrawShape(ds, sh);
         }
 
         // Strokes (highlighters first so pen sits on top)
         foreach (var s in page.Strokes)
-            if (s.Kind == StrokeKind.Highlighter && (cullClip is not { } h || StrokeIntersects(h, s)))
+            if (s.Kind == StrokeKind.Highlighter && skipElementIds?.Contains(s.Id) != true
+                && (cullClip is not { } h || StrokeIntersects(h, s)))
                 DrawStroke(ds, s);
         foreach (var s in page.Strokes)
-            if (s.Kind == StrokeKind.Pen && (cullClip is not { } pc || StrokeIntersects(pc, s)))
+            if (s.Kind == StrokeKind.Pen && skipElementIds?.Contains(s.Id) != true
+                && (cullClip is not { } pc || StrokeIntersects(pc, s)))
                 DrawStroke(ds, s);
 
         // Text — skip the element currently being inline-edited
         foreach (var t in page.Texts)
         {
             if (t.Id == skipTextId) continue;
+            if (skipElementIds?.Contains(t.Id) == true) continue;
             if (t.Rotation == 0 && cullClip is { } cc3 &&
                 !RectIntersects(cc3, (float)t.X, (float)t.Y,
                                 (float)(t.X + t.Width), (float)(t.Y + t.Height)))
@@ -202,9 +268,74 @@ public sealed class PageRenderer
         ds.Transform = prevTransform;
     }
 
+    // Draws ONLY the given elements, in DrawPage's z-order (images, shapes,
+    // highlighter strokes, pen strokes, texts). Used to render the drag ghost:
+    // the selection is rasterized once into an overlay image, then moved with
+    // composition transforms instead of re-rendering the page per pointer move.
+    public void DrawElements(CanvasDrawingSession ds, NotePage page,
+        System.Collections.Generic.ICollection<string> strokeIds,
+        System.Collections.Generic.ICollection<string> shapeIds,
+        System.Collections.Generic.ICollection<string> textIds,
+        System.Collections.Generic.ICollection<string> imageIds,
+        System.Collections.Generic.IDictionary<string, CanvasBitmap>? imageCache)
+    {
+        if (imageCache is not null && imageIds.Count > 0)
+        {
+            foreach (var img in page.Images)
+            {
+                if (!imageIds.Contains(img.Id)) continue;
+                if (!IsFinite(img.X) || !IsFinite(img.Y) ||
+                    !IsFinite(img.Width) || !IsFinite(img.Height) ||
+                    img.Width <= 0 || img.Height <= 0)
+                    continue;
+                if (!imageCache.TryGetValue(img.Id, out var bmp)) continue;
+                var prev = ds.Transform;
+                if (img.Rotation != 0)
+                {
+                    var cx = (float)(img.X + img.Width * 0.5);
+                    var cy = (float)(img.Y + img.Height * 0.5);
+                    ds.Transform = Matrix3x2.CreateRotation((float)(img.Rotation * Math.PI / 180.0), new Vector2(cx, cy)) * prev;
+                }
+                ds.DrawImage(bmp, new Rect(img.X, img.Y, img.Width, img.Height));
+                ds.Transform = prev;
+            }
+        }
+
+        foreach (var sh in page.Shapes)
+            if (shapeIds.Contains(sh.Id)) DrawShape(ds, sh);
+
+        foreach (var s in page.Strokes)
+            if (s.Kind == StrokeKind.Highlighter && strokeIds.Contains(s.Id)) DrawStroke(ds, s);
+        foreach (var s in page.Strokes)
+            if (s.Kind == StrokeKind.Pen && strokeIds.Contains(s.Id)) DrawStroke(ds, s);
+
+        foreach (var t in page.Texts)
+        {
+            if (!textIds.Contains(t.Id)) continue;
+            var prev = ds.Transform;
+            if (t.Rotation != 0)
+            {
+                var cx = (float)(t.X + t.Width * 0.5);
+                var cy = (float)(t.Y + t.Height * 0.5);
+                ds.Transform = Matrix3x2.CreateRotation((float)(t.Rotation * Math.PI / 180.0), new Vector2(cx, cy)) * prev;
+            }
+            DrawText(ds, t);
+            ds.Transform = prev;
+        }
+    }
+
     private static bool RectIntersects(in Rect clip, float minX, float minY, float maxX, float maxY)
         => maxX >= clip.X && minX <= clip.X + clip.Width &&
            maxY >= clip.Y && minY <= clip.Y + clip.Height;
+
+    // Win2D draw calls run inside a native callback: any managed exception (e.g.
+    // a Rect built with negative/NaN dimensions, or a non-finite coordinate fed
+    // to CanvasPathBuilder) propagates through native code and hard-terminates
+    // the process with no catchable stack. Corrupt or edge-case persisted data
+    // (a flipped resize leaving negative width, a divide-by-zero saved as NaN)
+    // must therefore be rejected BEFORE it reaches Win2D.
+    private static bool IsFinite(float v) => !float.IsNaN(v) && !float.IsInfinity(v);
+    private static bool IsFinite(double v) => !double.IsNaN(v) && !double.IsInfinity(v);
 
     // Conservative bounds test for a stroke's RENDERED extent: point hull,
     // padded by half the stroke width plus the Catmull-Rom overshoot bound —
@@ -253,6 +384,13 @@ public sealed class PageRenderer
             minX = Math.Min(minX, s.X3); minY = Math.Min(minY, s.Y3);
             maxX = Math.Max(maxX, s.X3); maxY = Math.Max(maxY, s.Y3);
         }
+        else if (s.Rotation != 0f)
+        {
+            // Rotation is about the bbox center, so the drawn extent is the
+            // axis-aligned bounds of the rotated corners.
+            Bbox rb = Bbox.RotatedAabb(minX, minY, maxX, maxY, s.Rotation);
+            minX = rb.X; minY = rb.Y; maxX = rb.Right; maxY = rb.Bottom;
+        }
         float pad = s.StrokeWidth * 0.5f + 2f;
         return RectIntersects(clip, minX - pad, minY - pad, maxX + pad, maxY + pad);
     }
@@ -260,6 +398,11 @@ public sealed class PageRenderer
     public void DrawShape(CanvasDrawingSession ds, ShapeElement s)
     {
         if (s is null) return;
+        // Non-finite endpoints would throw inside CanvasPathBuilder / DrawGeometry.
+        if (!IsFinite(s.X1) || !IsFinite(s.Y1) || !IsFinite(s.X2) || !IsFinite(s.Y2) ||
+            (s.Kind == ShapeKind.Triangle && (!IsFinite(s.X3) || !IsFinite(s.Y3))))
+            return;
+        if (!IsFinite(s.StrokeWidth) || s.StrokeWidth < 0) return;
         float x = Math.Min(s.X1, s.X2);
         float y = Math.Min(s.Y1, s.Y2);
         float w = Math.Abs(s.X2 - s.X1);
@@ -269,6 +412,17 @@ public sealed class PageRenderer
         // settings as s_strokeStyle; allocating one per shape per redraw shows
         // up on pages with many shapes.
         var style = s_strokeStyle;
+
+        // Rotated rect/ellipse: prepend a rotation about the bbox center to
+        // whatever page transform the session already carries. Only these two
+        // kinds ever carry Rotation (Line/Triangle vertices are free-form).
+        var savedTransform = ds.Transform;
+        bool rotated = s.Rotation != 0f && IsFinite(s.Rotation)
+            && s.Kind is ShapeKind.Rectangle or ShapeKind.Ellipse;
+        if (rotated)
+            ds.Transform = Matrix3x2.CreateRotation(
+                s.Rotation * MathF.PI / 180f,
+                new Vector2(x + w * 0.5f, y + h * 0.5f)) * savedTransform;
 
         switch (s.Kind)
         {
@@ -303,6 +457,8 @@ public sealed class PageRenderer
                 break;
             }
         }
+
+        if (rotated) ds.Transform = savedTransform;
     }
 
     public void DrawStroke(CanvasDrawingSession ds, Stroke s)
@@ -334,34 +490,7 @@ public sealed class PageRenderer
                 return;
             }
 
-            if (s.PressureMode)
-            {
-                DrawVariableWidthStroke(ds, s, drawColor);
-                return;
-            }
-
-            // Catmull-Rom smoothing: the curve passes through every sample (so even
-            // short strokes look curved, not segment-y) and is C1-continuous. Each
-            // segment is a cubic Bezier whose control points come from neighbours:
-            //   C1 = P[i]   + (P[i+1] - P[i-1]) / 6
-            //   C2 = P[i+1] - (P[i+2] - P[i]  ) / 6
-            // At the endpoints we clamp the missing neighbour to the endpoint itself.
-            using var path = new CanvasPathBuilder(ds);
-            var pts = s.Points;
-            path.BeginFigure(pts[0].X, pts[0].Y);
-            for (int i = 0; i < pts.Count - 1; i++)
-            {
-                var p0 = pts[i == 0 ? 0 : i - 1];
-                var p1 = pts[i];
-                var p2 = pts[i + 1];
-                var p3 = pts[i + 2 < pts.Count ? i + 2 : pts.Count - 1];
-                var c1 = new Vector2(p1.X + (p2.X - p0.X) / 6f, p1.Y + (p2.Y - p0.Y) / 6f);
-                var c2 = new Vector2(p2.X - (p3.X - p1.X) / 6f, p2.Y - (p3.Y - p1.Y) / 6f);
-                path.AddCubicBezier(c1, c2, new Vector2(p2.X, p2.Y));
-            }
-            path.EndFigure(CanvasFigureLoop.Open);
-            using var geo = CanvasGeometry.CreatePath(path);
-            ds.DrawGeometry(geo, drawColor, s.Width, s_strokeStyle);
+            ds.DrawCachedGeometry(GetOrBakeStrokeGeometry(ds, s), drawColor);
         }
         finally
         {
@@ -369,101 +498,45 @@ public sealed class PageRenderer
         }
     }
 
-    // Render a contiguous range of stroke segments as a POLYLINE — straight lines
-    // between consecutive points, no Catmull-Rom smoothing. Used by the live
-    // overlay; per-segment tessellation is trivial (essentially zero CPU), so the
-    // GPU has near-nothing to do per frame even at very high DPI.
-    //
-    // This is the Xournal++ trick: distance-thinned samples are dense enough that
-    // straight lines between them look indistinguishable from a smoothed curve at
-    // the pixel level, and we save the entire cost of cubic Bezier tessellation.
-    // Final committed strokes still render with full Catmull-Rom smoothing in
-    // DrawStroke, so the snap on lift is invisible.
-    //
-    // When `opaque` is true, the segment is rendered with full alpha (255). The
-    // caller is expected to push a CanvasActiveLayer at the stroke's real opacity
-    // so the chunks composite as one flattened shape instead of compounding alpha
-    // at their joins.
-    //
-    // Caller invariant: 0 ≤ firstSeg ≤ lastSeg ≤ points.Count - 2.
-    public void DrawStrokeSegments(CanvasDrawingSession ds, Stroke s, int firstSeg, int lastSeg, bool opaque = false)
+    // Catmull-Rom smoothing: the curve passes through every sample (so even
+    // short strokes look curved, not segment-y) and is C1-continuous. Each
+    // segment is a cubic Bezier whose control points come from neighbours:
+    //   C1 = P[i]   + (P[i+1] - P[i-1]) / 6
+    //   C2 = P[i+1] - (P[i+2] - P[i]  ) / 6
+    // At the endpoints we clamp the missing neighbour to the endpoint itself.
+    private static CanvasGeometry BuildCatmullRomGeometry(CanvasDrawingSession ds, Stroke s)
     {
-        var pts = s.Points;
-        if (pts.Count < 2 || firstSeg < 0 || lastSeg < firstSeg || lastSeg > pts.Count - 2) return;
-
-        var color = s.Color;
-        if (opaque)
-        {
-            color = Color.FromArgb(255, color.R, color.G, color.B);
-        }
-        else if (s.Kind == StrokeKind.Highlighter)
-        {
-            color = Color.FromArgb((byte)Math.Min(140, color.A == 255 ? 110 : color.A), color.R, color.G, color.B);
-        }
-
-        if (s.PressureMode)
-        {
-            DrawVariableWidthSegments(ds, s, color, firstSeg, lastSeg);
-            return;
-        }
-
         using var path = new CanvasPathBuilder(ds);
-        path.BeginFigure(pts[firstSeg].X, pts[firstSeg].Y);
-        for (int i = firstSeg; i <= lastSeg; i++)
+        var pts = s.Points;
+        path.BeginFigure(pts[0].X, pts[0].Y);
+        for (int i = 0; i < pts.Count - 1; i++)
         {
-            path.AddLine(new Vector2(pts[i + 1].X, pts[i + 1].Y));
+            var p0 = pts[i == 0 ? 0 : i - 1];
+            var p1 = pts[i];
+            var p2 = pts[i + 1];
+            var p3 = pts[i + 2 < pts.Count ? i + 2 : pts.Count - 1];
+            var c1 = new Vector2(p1.X + (p2.X - p0.X) / 6f, p1.Y + (p2.Y - p0.Y) / 6f);
+            var c2 = new Vector2(p2.X - (p3.X - p1.X) / 6f, p2.Y - (p3.Y - p1.Y) / 6f);
+            path.AddCubicBezier(c1, c2, new Vector2(p2.X, p2.Y));
         }
         path.EndFigure(CanvasFigureLoop.Open);
-        using var geo = CanvasGeometry.CreatePath(path);
-        ds.DrawGeometry(geo, color, s.Width, s_strokeStyle);
+        return CanvasGeometry.CreatePath(path);
     }
 
-    private void DrawVariableWidthSegments(CanvasDrawingSession ds, Stroke s, Color color, int firstSeg, int lastSeg)
+    // Builds a tapered pressure ribbon — one quad per segment plus a circle per
+    // joint to hide the seams — as a SINGLE winding-fill geometry. Winding fill
+    // makes the overlapping figures union instead of even-odd cancelling.
+    private static CanvasGeometry BuildVariableWidthGeometry(CanvasDrawingSession ds, Stroke s)
     {
         var halfBase = s.Width * 0.5f;
         var pts = s.Points;
 
-        if (firstSeg == 0)
-        {
-            var first = pts[0];
-            ds.FillCircle(first.X, first.Y, halfBase * Math.Max(0.2f, first.Pressure), color);
-        }
-
-        for (int i = firstSeg; i <= lastSeg; i++)
-        {
-            var a = pts[i];
-            var b = pts[i + 1];
-            var dir = new Vector2(b.X - a.X, b.Y - a.Y);
-            var len = dir.Length();
-            if (len < 0.0001f) continue;
-            dir /= len;
-            var n = new Vector2(-dir.Y, dir.X);
-            var wA = halfBase * Math.Max(0.2f, a.Pressure);
-            var wB = halfBase * Math.Max(0.2f, b.Pressure);
-
-            using var path = new CanvasPathBuilder(ds);
-            path.BeginFigure(a.X + n.X * wA, a.Y + n.Y * wA);
-            path.AddLine(b.X + n.X * wB, b.Y + n.Y * wB);
-            path.AddLine(b.X - n.X * wB, b.Y - n.Y * wB);
-            path.AddLine(a.X - n.X * wA, a.Y - n.Y * wA);
-            path.EndFigure(CanvasFigureLoop.Closed);
-            using var quad = CanvasGeometry.CreatePath(path);
-            ds.FillGeometry(quad, color);
-
-            ds.FillCircle(b.X, b.Y, wB, color);
-        }
-    }
-
-    // Builds a tapered ribbon by emitting one filled quad per segment plus a
-    // filled circle at each point to hide the seams between segments.
-    private void DrawVariableWidthStroke(CanvasDrawingSession ds, Stroke s, Color color)
-    {
-        var halfBase = s.Width * 0.5f;
-        var pts = s.Points;
+        using var path = new CanvasPathBuilder(ds);
+        path.SetFilledRegionDetermination(CanvasFilledRegionDetermination.Winding);
 
         // Start cap
         var first = pts[0];
-        ds.FillCircle(first.X, first.Y, halfBase * Math.Max(0.2f, first.Pressure), color);
+        AddCircleFigure(path, first.X, first.Y, halfBase * Math.Max(0.2f, first.Pressure));
 
         for (int i = 1; i < pts.Count; i++)
         {
@@ -477,25 +550,48 @@ public sealed class PageRenderer
             var wA = halfBase * Math.Max(0.2f, a.Pressure);
             var wB = halfBase * Math.Max(0.2f, b.Pressure);
 
-            using var path = new CanvasPathBuilder(ds);
             path.BeginFigure(a.X + n.X * wA, a.Y + n.Y * wA);
             path.AddLine(b.X + n.X * wB, b.Y + n.Y * wB);
             path.AddLine(b.X - n.X * wB, b.Y - n.Y * wB);
             path.AddLine(a.X - n.X * wA, a.Y - n.Y * wA);
             path.EndFigure(CanvasFigureLoop.Closed);
-            using var quad = CanvasGeometry.CreatePath(path);
-            ds.FillGeometry(quad, color);
 
-            ds.FillCircle(b.X, b.Y, wB, color);
+            AddCircleFigure(path, b.X, b.Y, wB);
         }
+
+        return CanvasGeometry.CreatePath(path);
+    }
+
+    // Full-circle figure as two half arcs (a single 360° arc is degenerate —
+    // start and end coincide). Negative sweep so the circle winds the same
+    // direction as the segment quads (left edge forward, right edge back):
+    // under Winding fill, figures that wind OPPOSITE ways cancel where they
+    // overlap, which punched a hole at every quad∩circle joint.
+    private static void AddCircleFigure(CanvasPathBuilder path, float cx, float cy, float r)
+    {
+        if (r <= 0) return;
+        var center = new Vector2(cx, cy);
+        path.BeginFigure(cx + r, cy);
+        path.AddArc(center, r, r, 0f, -MathF.PI);
+        path.AddArc(center, r, r, -MathF.PI, -MathF.PI);
+        path.EndFigure(CanvasFigureLoop.Closed);
     }
 
     private void DrawText(CanvasDrawingSession ds, TextElement t)
     {
-        var fmt = new CanvasTextFormat
+        // Guard every value that feeds Win2D: a negative Rect width/height throws
+        // in the Rect constructor, NaN/∞ throws inside DrawText, and FontSize <= 0
+        // throws when CanvasTextFormat is realized. Any of these inside this native
+        // callback would take the whole process down.
+        if (!IsFinite(t.X) || !IsFinite(t.Y) || !IsFinite(t.Width) || !IsFinite(t.Height))
+            return;
+        if (t.Width <= 0 || t.Height <= 0) return;
+
+        float fontSize = IsFinite(t.FontSize) && t.FontSize > 0 ? t.FontSize : 18f;
+        using var fmt = new CanvasTextFormat
         {
-            FontFamily = t.FontFamily,
-            FontSize = t.FontSize,
+            FontFamily = string.IsNullOrWhiteSpace(t.FontFamily) ? "Segoe UI" : t.FontFamily,
+            FontSize = fontSize,
             FontWeight = t.Bold ? Microsoft.UI.Text.FontWeights.Bold : Microsoft.UI.Text.FontWeights.Normal,
             FontStyle = t.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
             WordWrapping = CanvasWordWrapping.Wrap

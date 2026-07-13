@@ -198,6 +198,27 @@
                     </StackPanel>
                 </Border>
 
+                <!-- ─── Appearance ─────────────────────────────────────────── -->
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="Appearance" Style="{StaticResource H2Style}" />
+                        <Grid ColumnSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="200"/>
+                                <ColumnDefinition Width="200"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Text="Theme" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="ThemeCombo" Grid.Column="1" Width="200">
+                                <ComboBoxItem Content="Use system setting" />
+                                <ComboBoxItem Content="Light" />
+                                <ComboBoxItem Content="Dark" />
+                            </ComboBox>
+                        </Grid>
+                        <TextBlock Text="Choose a light or dark appearance, or follow your Windows setting. Applies across the whole app when you save."
+                                   Style="{StaticResource MutedStyle}" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
+
                 <!-- ─── Layout ─────────────────────────────────────────────── -->
                 <Border Style="{StaticResource CardStyle}">
                     <StackPanel Spacing="10">
@@ -286,6 +307,22 @@
                         <StackPanel Orientation="Horizontal" Spacing="10">
                             <TextBox x:Name="FolderBox" Width="500" IsReadOnly="True" />
                             <Button x:Name="PickFolderBtn" Content="Choose..." />
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- ─── Autosave ──────────────────────────────────────────────── -->
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="Autosave" Style="{StaticResource H2Style}" />
+                        <ToggleSwitch x:Name="AutosaveToggle" Header="Autosave while editing" />
+                        <TextBlock Text="Saves your work automatically a short while after you stop drawing. For PDFs this is a fast recovery save (your edits reopen in YuNotes); the flattened pages other apps see still refresh on a manual save or on close. Turn off to save only with Ctrl+S or when closing."
+                                   TextWrapping="Wrap" Foreground="{ThemeResource AppTextSecondaryBrush}" FontSize="12" />
+                        <StackPanel Orientation="Horizontal" Spacing="10">
+                            <TextBlock Text="Save after (seconds)" VerticalAlignment="Center" Width="200" />
+                            <NumberBox x:Name="AutosaveDelayBox" Minimum="0.5" Maximum="120"
+                                       SmallChange="0.5" LargeChange="5"
+                                       SpinButtonPlacementMode="Inline" Value="2.5" />
                         </StackPanel>
                     </StackPanel>
                 </Border>

@@ -49,6 +49,12 @@
                 BorderBrush="{ThemeResource AppBorderBrush}"
                 BorderThickness="1"
                 Translation="0,0,32">
+            <!-- Free-drag offset from the docked anchor. Declared here (not assigned
+                 at runtime) so the persisted offset is baked into the first frame,
+                 with no post-load reposition flash. -->
+            <Border.RenderTransform>
+                <TranslateTransform x:Name="ToolbarTranslate" />
+            </Border.RenderTransform>
             <Border.Shadow>
                 <ThemeShadow />
             </Border.Shadow>
@@ -304,21 +310,6 @@
                                   ToolTipService.ToolTip="Page width — extend a page left or right">
                         <FontIcon Glyph="&#xf72c;" FontSize="18" />
                     </ToggleButton>
-                    <Border x:Name="SelectionActions" Visibility="Collapsed"
-                            Background="{ThemeResource AppAccentSoftBrush}"
-                            CornerRadius="10" Padding="6,2" Margin="6,0">
-                        <StackPanel x:Name="SelectionActionsPanel" Orientation="Horizontal" Spacing="2">
-                            <Button x:Name="SelDuplicateBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Duplicate (Ctrl+D)">
-                                <FontIcon Glyph="&#xe14d;" />
-                            </Button>
-                            <Button x:Name="SelDeleteBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Delete (Del)">
-                                <FontIcon Glyph="&#xe872;" />
-                            </Button>
-                            <Button x:Name="SelClearBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Clear selection (Esc)">
-                                <FontIcon Glyph="&#xe5cd;" />
-                            </Button>
-                        </StackPanel>
-                    </Border>
                     <Border x:Name="Sep2" Background="{ThemeResource AppBorderBrush}" Width="1" Height="22" Margin="6,0"/>
                     <c:ColorPickerControl x:Name="ColorPicker"
                                           HorizontalAlignment="Center"
@@ -329,6 +320,39 @@
                 </ScrollViewer>
             </Grid>
             </Grid>
+        </Border>
+
+        <!-- Selection action bar — floats over the canvas, decoupled from the
+             toolbar so showing it never resizes a docked toolbar. Position
+             (top/bottom-centre) is set in ApplyToolbarPosition to avoid the
+             toolbar. Plain toolbar brush (no liquid glass — that's toolbar-only). -->
+        <Border x:Name="SelectionActions"
+                Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
+                Canvas.ZIndex="11"
+                HorizontalAlignment="Center" VerticalAlignment="Top"
+                Margin="0,14,0,0"
+                Visibility="Collapsed"
+                CornerRadius="22"
+                Padding="6,4"
+                Background="{ThemeResource AppToolbarBrush}"
+                BorderBrush="{ThemeResource AppBorderBrush}"
+                BorderThickness="1"
+                Translation="0,0,32">
+            <Border.Shadow>
+                <ThemeShadow />
+            </Border.Shadow>
+            <StackPanel x:Name="SelectionActionsPanel" Orientation="Horizontal" Spacing="4">
+                <Button x:Name="SelDuplicateBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Duplicate (Ctrl+D)">
+                    <FontIcon Glyph="&#xe14d;" />
+                </Button>
+                <Button x:Name="SelDeleteBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Delete (Del)">
+                    <FontIcon Glyph="&#xe872;" />
+                </Button>
+                <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" VerticalAlignment="Center" />
+                <Button x:Name="SelClearBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Clear selection (Esc)">
+                    <FontIcon Glyph="&#xe5cd;" />
+                </Button>
+            </StackPanel>
         </Border>
 
         <!-- Find-text panel — floats at top-right of canvas, shown by Search button -->
@@ -457,13 +481,17 @@
         </Border>
 
         <!-- Pinned bar (top, non-floating): back + history/file left, doc title center, view/actions right -->
-        <Border Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3"
-                Background="{ThemeResource AppSurfaceBrush}"
-                BorderBrush="{ThemeResource AppBorderBrush}"
+        <Border x:Name="TopBar"
+                Grid.Row="0" Grid.Column="0" Grid.ColumnSpan="3"
+                Height="48"
+                Background="Transparent"
+                BorderBrush="{ThemeResource AppChromeHairlineBrush}"
                 BorderThickness="0,0,0,1">
-            <!-- 2px vertical padding keeps the bar exactly 48dip tall, matching the
-                 Tall caption-button band so both button rows share a centerline. -->
-            <Grid x:Name="TopBarGrid" Padding="6,2">
+            <!-- Transparent so the window Mica reads through the bar (quieter than a
+                 solid surface, no glass); a soft hairline separates it from the
+                 canvas. Fixed 48dip so the compact button clusters share a
+                 centerline with the Tall caption-button band. -->
+            <Grid x:Name="TopBarGrid" Padding="8,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="*" />
@@ -474,87 +502,127 @@
                      non-client space (controls overlapping it lose input), so it only
                      covers the empty center column, not the button clusters. -->
                 <Border x:Name="TopBarDragRegion" Grid.Column="1"
-                        Background="Transparent" Margin="0,-2" />
+                        Background="Transparent" />
 
-                <!-- Left: back · undo/redo · save/export -->
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="4"
+                <!-- Left: home · undo/redo · save/export -->
+                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8"
                             VerticalAlignment="Center">
-                    <Button x:Name="BackBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Home">
-                        <FontIcon Glyph="&#xe88a;" />
+                    <Button x:Name="BackBtn" Style="{StaticResource TopBarButtonStyle}" ToolTipService.ToolTip="Home">
+                        <FontIcon Glyph="&#xe88a;" FontSize="18" />
                     </Button>
-                    <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" />
-                    <Border Background="{ThemeResource AppSurfaceVariantBrush}" CornerRadius="10" Padding="2">
+                    <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="22"
+                            VerticalAlignment="Center" />
+                    <Border Style="{StaticResource TopBarGroupStyle}">
                         <StackPanel Orientation="Horizontal" Spacing="0">
-                            <Button x:Name="UndoBtn" Style="{StaticResource ToolButtonStyle}"
+                            <Button x:Name="UndoBtn" Style="{StaticResource TopBarSegButtonStyle}"
                                     ToolTipService.ToolTip="Undo (Ctrl+Z)" IsEnabled="False">
-                                <FontIcon Glyph="&#xe166;" />
+                                <FontIcon Glyph="&#xe166;" FontSize="18" />
                             </Button>
-                            <Button x:Name="RedoBtn" Style="{StaticResource ToolButtonStyle}"
+                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
+                            <Button x:Name="RedoBtn" Style="{StaticResource TopBarSegButtonStyle}"
                                     ToolTipService.ToolTip="Redo (Ctrl+Y)" IsEnabled="False">
-                                <FontIcon Glyph="&#xe15a;" />
+                                <FontIcon Glyph="&#xe15a;" FontSize="18" />
                             </Button>
                         </StackPanel>
                     </Border>
-                    <Border Background="{ThemeResource AppSurfaceVariantBrush}" CornerRadius="10" Padding="2">
+                    <Border Style="{StaticResource TopBarGroupStyle}">
                         <StackPanel Orientation="Horizontal" Spacing="0">
-                            <Button x:Name="SaveBtn" Style="{StaticResource ToolButtonStyle}"
+                            <Button x:Name="SaveBtn" Style="{StaticResource TopBarSegButtonStyle}"
                                     ToolTipService.ToolTip="Save (Ctrl+S)">
-                                <FontIcon Glyph="&#xe161;" />
+                                <FontIcon Glyph="&#xe161;" FontSize="18" />
                             </Button>
-                            <Button x:Name="ExportBtn" Style="{StaticResource ToolButtonStyle}"
+                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
+                            <Button x:Name="ExportBtn" Style="{StaticResource TopBarSegButtonStyle}"
                                     ToolTipService.ToolTip="Export">
-                                <FontIcon Glyph="&#xf3b2;" />
+                                <FontIcon Glyph="&#xf3b2;" FontSize="18" />
                             </Button>
                         </StackPanel>
                     </Border>
                 </StackPanel>
 
-                <!-- Center: document title -->
-                <TextBlock x:Name="TopBarTitle" Grid.Column="1"
-                           IsHitTestVisible="False"
-                           FontSize="14" FontWeight="SemiBold"
-                           HorizontalAlignment="Center" VerticalAlignment="Center"
-                           TextTrimming="CharacterEllipsis" />
+                <!-- Center: document title + save state. Non-hit-testable so the
+                     drag region underneath still moves the window. -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10"
+                            HorizontalAlignment="Center" VerticalAlignment="Center"
+                            IsHitTestVisible="False">
+                    <TextBlock x:Name="TopBarTitle"
+                               FontSize="14" FontWeight="SemiBold" MaxWidth="360"
+                               VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" />
+                    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                        <FontIcon x:Name="SaveStateCheck" Glyph="&#xe5ca;" FontSize="14"
+                                  Foreground="{ThemeResource AppSuccessBrush}" VerticalAlignment="Center" />
+                        <Ellipse x:Name="SaveStateDot" Width="6" Height="6"
+                                 Fill="{ThemeResource AppAccentBrush}" Visibility="Collapsed"
+                                 VerticalAlignment="Center" />
+                        <TextBlock x:Name="SaveStateText" Text="Saved"
+                                   FontSize="12" Foreground="{ThemeResource AppSuccessBrush}"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </StackPanel>
 
-                <!-- Right: view · insert actions · settings -->
-                <StackPanel x:Name="ToolbarSecondary" Grid.Column="2" Orientation="Horizontal" Spacing="4"
+                <!-- Right: view · insert menu · settings -->
+                <StackPanel x:Name="ToolbarSecondary" Grid.Column="2" Orientation="Horizontal" Spacing="8"
                             Padding="0,0,4,0" VerticalAlignment="Center">
-                    <Border Background="{ThemeResource AppSurfaceVariantBrush}" CornerRadius="10" Padding="2">
+                    <!-- Fixed slot left of the page sorter (user request); not part of
+                         the reorderable action slots, though the settings hide toggle
+                         still applies. -->
+                    <Button x:Name="ScreenshotBtn" Style="{StaticResource TopBarButtonStyle}" ToolTipService.ToolTip="Take screenshot">
+                        <FontIcon Glyph="&#xe3b0;" FontSize="18" />
+                    </Button>
+                    <Border Style="{StaticResource TopBarGroupStyle}">
                         <StackPanel Orientation="Horizontal" Spacing="0">
-                            <Button x:Name="PagePanelBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Page sorter">
-                                <FontIcon Glyph="&#xe8ef;" />
+                            <Button x:Name="PagePanelBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Page sorter">
+                                <FontIcon Glyph="&#xe8ef;" FontSize="18" />
                             </Button>
-                            <Button x:Name="SearchBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Find text (Ctrl+F)">
-                                <FontIcon Glyph="&#xe8b6;" />
+                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
+                            <Button x:Name="SearchBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Find text (Ctrl+F)">
+                                <FontIcon Glyph="&#xe8b6;" FontSize="18" />
                             </Button>
                         </StackPanel>
                     </Border>
-                    <Border x:Name="TopSep1" Background="{ThemeResource AppBorderBrush}"
-                            Width="1" Height="24" Margin="2,0" />
-                    <Button x:Name="ScreenshotBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Take screenshot">
-                        <FontIcon Glyph="&#xe3b0;" />
-                    </Button>
-                    <Button x:Name="TemplateBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Page template">
-                        <FontIcon Glyph="&#xf79d;" />
-                    </Button>
-                    <Button x:Name="AddPdfPagesBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Add pages from a PDF">
-                        <FontIcon Glyph="&#xe415;" />
-                    </Button>
-                    <Button x:Name="AddPageBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Add blank page">
-                        <FontIcon Glyph="&#xe145;" />
-                    </Button>
-                    <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" />
-                    <Button x:Name="SettingsBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Settings">
-                        <FontIcon Glyph="&#xe8b8;" />
+                    <!-- Invisible anchor: ApplyToolbarOrder re-inserts the reorderable
+                         action slots (Insert menu) right after it. -->
+                    <Border x:Name="TopSep1" Width="0" Visibility="Collapsed" />
+                    <Border x:Name="AddMenuShell" Style="{StaticResource TopBarGroupStyle}">
+                        <Button x:Name="AddMenuBtn" Style="{StaticResource TopBarAddButtonStyle}"
+                                Width="Auto" ToolTipService.ToolTip="Insert">
+                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xe145;" FontSize="16" />
+                                <TextBlock Text="Add" FontSize="13"
+                                           FontFamily="{ThemeResource ContentControlThemeFontFamily}"
+                                           VerticalAlignment="Center" />
+                                <FontIcon Glyph="&#xe5cf;" FontSize="11" />
+                            </StackPanel>
+                            <Button.Flyout>
+                                <MenuFlyout>
+                                    <MenuFlyoutItem x:Name="AddPageBtn" Text="Add blank page">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe145;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="AddPdfPagesBtn" Text="Add pages from a PDF">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe415;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator />
+                                    <MenuFlyoutItem x:Name="TemplateBtn" Text="Page template">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xf79d;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                    </Border>
+                    <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="22"
+                            VerticalAlignment="Center" />
+                    <Button x:Name="SettingsBtn" Style="{StaticResource TopBarButtonStyle}" ToolTipService.ToolTip="Settings">
+                        <FontIcon Glyph="&#xe8b8;" FontSize="18" />
                     </Button>
                 </StackPanel>
             </Grid>
         </Border>
 
-        <!-- Status bar -->
+        <!-- Status bar — matches the top bar's quiet Mica chrome. -->
         <Border Grid.Row="3" Grid.Column="0" Grid.ColumnSpan="3"
-                Background="{ThemeResource AppSurfaceBrush}"
-                BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="0,1,0,0">
+                Background="Transparent"
+                BorderBrush="{ThemeResource AppChromeHairlineBrush}" BorderThickness="0,1,0,0">
             <Grid Padding="12,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
@@ -576,5 +644,48 @@
               Canvas.ZIndex="20" Background="Transparent" Visibility="Collapsed">
             <ProgressRing x:Name="LoadingRing" Width="44" Height="44" IsActive="False" />
         </Grid>
+
+        <!-- Save progress — a custom card while a .pdf is flattened + written.
+             Non-hit-testable so the user can still scroll/zoom the document behind
+             it; editing is blocked separately (canvas EditingSuspended + disabled
+             toolbars) so the document can't be mutated mid-save. -->
+        <Grid x:Name="SaveOverlay"
+              Grid.Row="0" Grid.RowSpan="4" Grid.Column="0" Grid.ColumnSpan="3"
+              Canvas.ZIndex="30" Background="Transparent" IsHitTestVisible="False"
+              Visibility="Collapsed">
+            <Border HorizontalAlignment="Center" VerticalAlignment="Center"
+                    MinWidth="280" CornerRadius="16" Padding="26,22"
+                    Background="{ThemeResource AppToolbarBrush}"
+                    BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1"
+                    Translation="0,0,32">
+                <Border.Shadow><ThemeShadow /></Border.Shadow>
+                <StackPanel Spacing="14">
+                    <TextBlock x:Name="SaveOverlayText" Text="Saving…"
+                               FontSize="15" FontWeight="SemiBold" HorizontalAlignment="Center"
+                               Foreground="{ThemeResource AppTextPrimaryBrush}" />
+                    <ProgressBar x:Name="SaveProgressBar" Width="232" Minimum="0" Maximum="1" Value="0" />
+                    <TextBlock x:Name="SaveOverlaySub" Text="" FontSize="12" HorizontalAlignment="Center"
+                               Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                </StackPanel>
+            </Border>
+        </Grid>
+
+        <!-- Custom auto-dismissing toast (replaces the modal "Saved" dialog). -->
+        <Border x:Name="ToastHost"
+                Grid.Row="1" Grid.RowSpan="2" Grid.Column="0" Grid.ColumnSpan="3"
+                Canvas.ZIndex="40" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="0,0,0,48" Visibility="Collapsed" IsHitTestVisible="False"
+                CornerRadius="20" Padding="16,10"
+                Background="{ThemeResource AppToolbarBrush}"
+                BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1"
+                Translation="0,0,32">
+            <Border.Shadow><ThemeShadow /></Border.Shadow>
+            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <FontIcon x:Name="ToastIcon" Glyph="&#xe5ca;" FontSize="16"
+                          Foreground="{ThemeResource AppSuccessBrush}" />
+                <TextBlock x:Name="ToastText" Text="Saved" FontSize="13" VerticalAlignment="Center"
+                           Foreground="{ThemeResource AppTextPrimaryBrush}" />
+            </StackPanel>
+        </Border>
     </Grid>
 </Page>

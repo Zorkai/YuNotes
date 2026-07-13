@@ -27,6 +27,11 @@ public sealed class EditorContext
 
     public DispatcherQueue? DispatcherQueue { get; set; }
 
+    // While true (e.g. during a save), pen/mouse editing on the canvas is
+    // rejected so the document can't be mutated — but touch pan/pinch and the
+    // ScrollViewer's own scroll/zoom still work, so the user can look around.
+    public bool EditingSuspended { get; set; }
+
     public Action? Invalidate { get; set; }
     // Lightweight invalidate that only redraws the active-stroke overlay, not the
     // whole page. Used during pen / highlighter drawing so the renderer doesn't

@@ -16,6 +16,7 @@ public sealed class PenTool : ITool
     private Stroke? _holdStroke;
     private EditorContext? _holdCtx;
     private ShapeElement? _pendingSnap;
+    private Stroke? _snapSourceStroke;   // raw ink the snap replaced — kept so undo can restore it
     private Vector2 _holdAnchorPos;
     // Movement below this threshold is treated as "pen still" (stylus jitter is
     // typically < 3 px; 10 px gives a comfortable margin without being too sluggish).
@@ -24,12 +25,19 @@ public sealed class PenTool : ITool
     // Post-snap adjustment state: after snap fires the user can still drag to
     // resize/reposition the shape before lifting the pen.
     private bool _inSnapAdjust;
+    // Adjustment must not touch the shape until the pen deliberately moves:
+    // resting-jitter (or the tiny drift of lifting the pen) used to feed the
+    // adjust path immediately, which resized every snap by a few px — and
+    // mangled triangles outright (see AdjustSnapShape).
+    private bool _snapAdjustEngaged;
     private Vector2 _snapFixedPoint; // corner/endpoint that stays fixed during drag
+    private int _snapDragVertex;     // Triangle only: which vertex (0/1/2) follows the pen
 
     public void OnPointerDown(EditorContext ctx, Vector2 p, float pressure)
     {
         StopHoldTimer();
         _pendingSnap = null;
+        _snapSourceStroke = null;
 
         ctx.ActiveStroke = new Stroke
         {
@@ -49,9 +57,15 @@ public sealed class PenTool : ITool
     public void OnPointerMove(EditorContext ctx, Vector2 p, float pressure)
     {
         // Post-snap adjustment: shape recognised, pen still down — let the user
-        // drag to resize before lifting.
+        // drag to resize before lifting. The recognized shape must survive an
+        // unmoving pen, so nothing is touched until the pen leaves the hold
+        // jitter radius.
         if (_inSnapAdjust && _pendingSnap is { } snap)
         {
+            if (!_snapAdjustEngaged
+                && (p - _holdAnchorPos).Length() <= HoldMoveThreshold)
+                return;
+            _snapAdjustEngaged = true;
             AdjustSnapShape(snap, p);
             ctx.ActiveShape = snap;
             ctx.InvalidateLive?.Invoke();
@@ -103,13 +117,32 @@ public sealed class PenTool : ITool
 
         if (_pendingSnap is not null)
         {
-            // Hold-to-snap: discard the raw stroke and commit the recognized shape.
+            // Hold-to-snap: commit the raw stroke first, then replace it with
+            // the recognized shape as a SECOND history step. Nothing is drawn
+            // in between, so the user only ever sees the shape — but one undo
+            // now turns a mis-recognized shape back into the original
+            // handwriting instead of destroying it.
+            var snap = _pendingSnap;
             ctx.ActiveStroke = null;
-            ctx.CurrentPage.Shapes.Add(_pendingSnap);
+            if (_snapSourceStroke is { } raw)
+            {
+                ctx.CurrentPage.Strokes.Add(raw);
+                ctx.Mutated?.Invoke();
+                ctx.CurrentPage.Strokes.Remove(raw);
+            }
+            ctx.CurrentPage.Shapes.Add(snap);
             ctx.ActiveShape = null;
             _pendingSnap = null;
+            _snapSourceStroke = null;
             ctx.Mutated?.Invoke();
-            ctx.Invalidate?.Invoke();
+            // The raw stroke only ever existed on the live overlay, so just
+            // the snapped shape's area needs repainting.
+            var b = Bbox.Of(snap);
+            float bpad = snap.StrokeWidth + 4f;
+            if (ctx.InvalidateRect is { } inv)
+                inv(new Bbox(b.X - bpad, b.Y - bpad, b.W + bpad * 2, b.H + bpad * 2));
+            else
+                ctx.Invalidate?.Invoke();
             return;
         }
 
@@ -154,6 +187,7 @@ public sealed class PenTool : ITool
         _holdStroke = null;
         _holdCtx = null;
         _inSnapAdjust = false;
+        _snapAdjustEngaged = false;
     }
 
     // ── Post-snap adjustment helpers ──────────────────────────────────────────
@@ -187,7 +221,7 @@ public sealed class PenTool : ITool
         return corners[3 - closest]; // 0↔3, 1↔2
     }
 
-    // Moves the adjustable corner/endpoint to `penPos`, keeping `_snapFixedPoint` anchored.
+    // Moves the adjustable corner/endpoint/vertex to `penPos`.
     private void AdjustSnapShape(ShapeElement shape, Vector2 penPos)
     {
         if (shape.Kind is ShapeKind.Line)
@@ -198,6 +232,20 @@ public sealed class PenTool : ITool
             { shape.X2 = penPos.X; shape.Y2 = penPos.Y; }
             else
             { shape.X1 = penPos.X; shape.Y1 = penPos.Y; }
+        }
+        else if (shape.Kind is ShapeKind.Triangle)
+        {
+            // A triangle's X1..Y3 are three FREE VERTICES — the bbox rebuild
+            // below must never run for it (it used to, bulldozing two vertices
+            // into axis-aligned bbox corners the moment the pen jittered after
+            // the snap: triangles collapsed into lines or sprouted right
+            // angles). Drag only the vertex nearest to where the pen held.
+            switch (_snapDragVertex)
+            {
+                case 0:  shape.X1 = penPos.X; shape.Y1 = penPos.Y; break;
+                case 1:  shape.X2 = penPos.X; shape.Y2 = penPos.Y; break;
+                default: shape.X3 = penPos.X; shape.Y3 = penPos.Y; break;
+            }
         }
         else
         {
@@ -215,18 +263,33 @@ public sealed class PenTool : ITool
         if (!ReferenceEquals(ctx.ActiveStroke, stroke)) return;
 
         var snap = ShapeRecognizer.Recognize(stroke.Points, stroke.Color, stroke.Width);
+        ShapeDebugLog.Dump(stroke.Points, snap);
         if (snap is null) return;
 
-        // Replace the live freehand overlay with a clean shape preview.
+        // Replace the live freehand overlay with a clean shape preview. The raw
+        // stroke is retained so the commit on lift can offer it as an undo step.
         _pendingSnap = snap;
+        _snapSourceStroke = stroke;
         ctx.ActiveStroke = null;
         ctx.ActiveShape = snap;
         ctx.InvalidateLive?.Invoke();
 
-        // Enable drag-to-adjust: the corner/endpoint closest to the pen becomes
-        // the draggable handle; the opposite one stays anchored.
-        _snapFixedPoint = OppositeCorner(snap, _holdAnchorPos);
+        // Enable drag-to-adjust: the corner/endpoint/vertex closest to the pen
+        // becomes the draggable handle.
+        if (snap.Kind == ShapeKind.Triangle)
+            _snapDragVertex = NearestTriangleVertex(snap, _holdAnchorPos);
+        else
+            _snapFixedPoint = OppositeCorner(snap, _holdAnchorPos);
+        _snapAdjustEngaged = false;
         _inSnapAdjust = true;
+    }
+
+    private static int NearestTriangleVertex(ShapeElement s, Vector2 penPos)
+    {
+        float d1 = Vector2.DistanceSquared(penPos, new Vector2(s.X1, s.Y1));
+        float d2 = Vector2.DistanceSquared(penPos, new Vector2(s.X2, s.Y2));
+        float d3 = Vector2.DistanceSquared(penPos, new Vector2(s.X3, s.Y3));
+        return d1 <= d2 && d1 <= d3 ? 0 : d2 <= d3 ? 1 : 2;
     }
 }
 

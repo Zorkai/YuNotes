@@ -65,12 +65,28 @@ public sealed class ShapeTool : ITool
         }
 
         if (meaningful)
+        {
             ctx.CurrentPage.Shapes.Add(_active);
-
-        ctx.ActiveShape = null;
-        _active = null;
-        ctx.Mutated?.Invoke();
-        ctx.Invalidate?.Invoke();
+            var committed = _active;
+            ctx.ActiveShape = null;
+            _active = null;
+            ctx.Mutated?.Invoke();
+            // Repaint just the new shape's area — the live preview was a XAML
+            // overlay element, so nothing else on the main canvas changed.
+            var b = Bbox.Of(committed);
+            float pad = committed.StrokeWidth + 4f;
+            if (ctx.InvalidateRect is { } inv)
+                inv(new Bbox(b.X - pad, b.Y - pad, b.W + pad * 2, b.H + pad * 2));
+            else
+                ctx.Invalidate?.Invoke();
+        }
+        else
+        {
+            // Nothing committed (sub-2px drag): no model change, no dirty doc,
+            // no history entry, no repaint. The canvas tears the preview down.
+            ctx.ActiveShape = null;
+            _active = null;
+        }
     }
 
     // Derives triangle vertices from a bbox drag so the shape is always a

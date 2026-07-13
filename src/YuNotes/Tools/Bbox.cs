@@ -57,10 +57,43 @@ public readonly record struct Bbox(float X, float Y, float W, float H)
     {
         float x = Math.Min(s.X1, s.X2);
         float y = Math.Min(s.Y1, s.Y2);
-        float w = Math.Max(1f, Math.Abs(s.X2 - s.X1));
-        float h = Math.Max(1f, Math.Abs(s.Y2 - s.Y1));
+        float maxX = Math.Max(s.X1, s.X2);
+        float maxY = Math.Max(s.Y1, s.Y2);
+        // Triangles carry a third vertex; ignoring it left their bbox roughly
+        // half-width (X1 is the mid-top apex, X3 the bottom-right corner), so
+        // erase/select hit-testing and partial repaints missed the right half.
+        if (s.Kind == ShapeKind.Triangle)
+        {
+            x = Math.Min(x, s.X3);
+            y = Math.Min(y, s.Y3);
+            maxX = Math.Max(maxX, s.X3);
+            maxY = Math.Max(maxY, s.Y3);
+        }
+        else if (s.Rotation != 0f)
+        {
+            // Rect/ellipse rotation is about the bbox center; hit-testing and
+            // repaints need the bounds of the shape as drawn.
+            var rb = RotatedAabb(x, y, maxX, maxY, s.Rotation);
+            x = rb.X; y = rb.Y; maxX = rb.Right; maxY = rb.Bottom;
+        }
+        float w = Math.Max(1f, maxX - x);
+        float h = Math.Max(1f, maxY - y);
         var pad = s.StrokeWidth * 0.5f;
         return new Bbox(x - pad, y - pad, w + pad * 2, h + pad * 2);
+    }
+
+    // Axis-aligned bounds of the rect (minX,minY)-(maxX,maxY) rotated by
+    // rotationDeg about its own center.
+    public static Bbox RotatedAabb(float minX, float minY, float maxX, float maxY, float rotationDeg)
+    {
+        float rad = rotationDeg * MathF.PI / 180f;
+        float c = MathF.Abs(MathF.Cos(rad));
+        float s = MathF.Abs(MathF.Sin(rad));
+        float hw = (maxX - minX) * 0.5f, hh = (maxY - minY) * 0.5f;
+        float cx = (minX + maxX) * 0.5f, cy = (minY + maxY) * 0.5f;
+        float rw = hw * c + hh * s;   // rotated half-extents
+        float rh = hw * s + hh * c;
+        return new Bbox(cx - rw, cy - rh, rw * 2, rh * 2);
     }
 
     public static Bbox Of(TextElement t) => new((float)t.X, (float)t.Y, (float)t.Width, (float)t.Height);

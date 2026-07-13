@@ -133,9 +133,118 @@ public sealed class DocumentService
     // full SQLite blob alongside, so the next open restores editable objects.
     // flatPagePngs: when source PDF is present, these are TRANSPARENT overlays (just
     // user content). When there's no source, they are the full flattened page renders.
-    public void SavePdfContainer(Document doc, byte[][] flatPagePngs, byte[]? thumbnail, PdfContainerService container)
+    // reusePageIndices/previousContainer: pages whose flattened image is
+    // unchanged since the last full save are cloned from the existing container
+    // (reusePageIndices[i] = that file's page index) instead of getting a fresh
+    // render — the caller then skips rendering them entirely, which is what
+    // makes saving a 30-page doc with 2 edited pages fast.
+    public void SavePdfContainer(Document doc, byte[][] flatPagePngs, byte[]? thumbnail, PdfContainerService container,
+                                 int?[]? reusePageIndices = null, byte[]? previousContainer = null)
     {
         var pdfPath = doc.Info.FilePath;
+        var blob = SerializeToBlob(doc, thumbnail);
+        var widths  = new double[doc.Pages.Count];
+        var heights = new double[doc.Pages.Count];
+        for (int i = 0; i < doc.Pages.Count; i++)
+        {
+            widths[i]  = doc.Pages[i].Width;
+            heights[i] = doc.Pages[i].Height;
+        }
+
+        if (doc.SourcePdfBytes is { Length: > 0 } src)
+        {
+            var srcIdx = new int?[doc.Pages.Count];
+            for (int i = 0; i < doc.Pages.Count; i++) srcIdx[i] = doc.Pages[i].SourcePageIndex;
+            container.WriteWithSource(flatPagePngs, widths, heights, srcIdx, src, blob, pdfPath,
+                                      reusePageIndices, previousContainer);
+        }
+        else
+        {
+            container.Write(flatPagePngs, widths, heights, blob, pdfPath,
+                            reusePageIndices, previousContainer);
+        }
+    }
+
+    // Deep-enough clone for a background save: element data is copied, large
+    // immutable blobs (page backgrounds, image PNGs, source PDF bytes) are
+    // shared by reference — those are only ever replaced wholesale, never
+    // mutated in place. Clone on the UI thread (fast: no blob copies), then
+    // Save(clone) from a background thread while the user keeps editing the
+    // original. Used by the .yunote autosave.
+    public static Document CloneForSave(Document d)
+    {
+        var c = new Document
+        {
+            Info = new DocumentInfo
+            {
+                Id = d.Info.Id, Title = d.Info.Title, FilePath = d.Info.FilePath,
+                CreatedAt = d.Info.CreatedAt, ModifiedAt = d.Info.ModifiedAt,
+                PageCount = d.Info.PageCount, ThumbnailPath = d.Info.ThumbnailPath,
+                SourcePdfPath = d.Info.SourcePdfPath
+            },
+            Template = CloneTemplate(d.Template)!,
+            SourcePdfBytes = d.SourcePdfBytes,
+            FlattenPageOrder = d.FlattenPageOrder is null ? null : new List<string>(d.FlattenPageOrder)
+        };
+        foreach (var id in d.FlattenDirtyPageIds) c.FlattenDirtyPageIds.Add(id);
+        foreach (var p in d.Pages)
+        {
+            var np = new NotePage
+            {
+                Id = p.Id, Index = p.Index, Width = p.Width, Height = p.Height,
+                BackgroundLeft = p.BackgroundLeft,
+                BackgroundContentWidth = p.BackgroundContentWidth,
+                BackgroundPng = p.BackgroundPng,
+                SourcePageIndex = p.SourcePageIndex,
+                TemplateOverride = CloneTemplate(p.TemplateOverride)
+            };
+            foreach (var st in p.Strokes)
+            {
+                var sc = new Stroke { Id = st.Id, Kind = st.Kind, Color = st.Color, Width = st.Width, PressureMode = st.PressureMode };
+                sc.Points.AddRange(st.Points);
+                np.Strokes.Add(sc);
+            }
+            foreach (var sh in p.Shapes)
+                np.Shapes.Add(new ShapeElement
+                {
+                    Id = sh.Id, Kind = sh.Kind,
+                    X1 = sh.X1, Y1 = sh.Y1, X2 = sh.X2, Y2 = sh.Y2, X3 = sh.X3, Y3 = sh.Y3,
+                    Rotation = sh.Rotation,
+                    Color = sh.Color, StrokeWidth = sh.StrokeWidth, Filled = sh.Filled
+                });
+            foreach (var t in p.Texts)
+                np.Texts.Add(new TextElement
+                {
+                    Id = t.Id, X = t.X, Y = t.Y, Width = t.Width, Height = t.Height,
+                    Rotation = t.Rotation, Text = t.Text, FontSize = t.FontSize, Color = t.Color,
+                    FontFamily = t.FontFamily, Bold = t.Bold, Italic = t.Italic
+                });
+            foreach (var im in p.Images)
+                np.Images.Add(new ImageElement
+                {
+                    Id = im.Id, X = im.X, Y = im.Y, Width = im.Width, Height = im.Height,
+                    Rotation = im.Rotation, PngData = im.PngData
+                });
+            // TextRuns are not persisted — re-extracted lazily on open.
+            c.Pages.Add(np);
+        }
+        return c;
+    }
+
+    private static TemplateSettings? CloneTemplate(TemplateSettings? t) =>
+        t is null ? null : new TemplateSettings
+        {
+            Kind = t.Kind, Spacing = t.Spacing,
+            LineColorHex = t.LineColorHex, LineThickness = t.LineThickness
+        };
+
+    // Serializes the editable model to a standalone SQLite blob — the same
+    // bytes SavePdfContainer embeds. Touches the live model, so call it on the
+    // UI thread; the returned bytes are then safe to persist from a background
+    // thread (used by the pdf autosave's blob-only container update).
+    public byte[] SerializeToBlob(Document doc, byte[]? thumbnail = null)
+    {
+        var orig = doc.Info.FilePath;
         var temp = Path.Combine(Path.GetTempPath(), $"yunotes-{Guid.NewGuid():N}.sqlite");
         try
         {
@@ -145,27 +254,8 @@ public sealed class DocumentService
                 Save(doc);
                 if (thumbnail is { Length: > 0 }) SaveThumbnail(temp, thumbnail);
             }
-            finally { doc.Info.FilePath = pdfPath; }
-
-            var blob = File.ReadAllBytes(temp);
-            var widths  = new double[doc.Pages.Count];
-            var heights = new double[doc.Pages.Count];
-            for (int i = 0; i < doc.Pages.Count; i++)
-            {
-                widths[i]  = doc.Pages[i].Width;
-                heights[i] = doc.Pages[i].Height;
-            }
-
-            if (doc.SourcePdfBytes is { Length: > 0 } src)
-            {
-                var srcIdx = new int?[doc.Pages.Count];
-                for (int i = 0; i < doc.Pages.Count; i++) srcIdx[i] = doc.Pages[i].SourcePageIndex;
-                container.WriteWithSource(flatPagePngs, widths, heights, srcIdx, src, blob, pdfPath);
-            }
-            else
-            {
-                container.Write(flatPagePngs, widths, heights, blob, pdfPath);
-            }
+            finally { doc.Info.FilePath = orig; }
+            return File.ReadAllBytes(temp);
         }
         finally { try { File.Delete(temp); } catch { } }
     }
@@ -351,7 +441,7 @@ public sealed class DocumentService
 
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = "SELECT id,title,created_at,modified_at,page_count,template_json,source_pdf_path FROM document LIMIT 1";
+            cmd.CommandText = "SELECT id,title,created_at,modified_at,page_count,template_json,source_pdf_path,flatten_json FROM document LIMIT 1";
             using var r = cmd.ExecuteReader();
             if (r.Read())
             {
@@ -366,6 +456,19 @@ public sealed class DocumentService
                     if (t is not null) doc.Template = t;
                 }
                 if (!r.IsDBNull(6)) doc.Info.SourcePdfPath = r.GetString(6);
+                if (!r.IsDBNull(7))
+                {
+                    try
+                    {
+                        var fl = JsonSerializer.Deserialize<FlattenState>(r.GetString(7));
+                        if (fl?.Order is { Count: > 0 })
+                        {
+                            doc.FlattenPageOrder = fl.Order;
+                            foreach (var id in fl.Dirty ?? new()) doc.FlattenDirtyPageIds.Add(id);
+                        }
+                    }
+                    catch { }   // corrupt state just disables reuse for the next save
+                }
             }
         }
 
@@ -397,13 +500,19 @@ public sealed class DocumentService
 
         foreach (var p in doc.Pages)
         {
+            // Per-element try/catch: a single corrupt row (truncated stroke blob,
+            // malformed JSON) should cost that one element, not abort the whole
+            // open and leave the user unable to reach the rest of their document.
             using (var cmd = conn.CreateCommand())
             {
                 cmd.CommandText = "SELECT id,data FROM stroke WHERE page_id=$p";
                 cmd.Parameters.AddWithValue("$p", p.Id);
                 using var r = cmd.ExecuteReader();
                 while (r.Read())
-                    p.Strokes.Add(Stroke.Deserialize((byte[])r["data"], r.GetString(0)));
+                {
+                    try { p.Strokes.Add(Stroke.Deserialize((byte[])r["data"], r.GetString(0))); }
+                    catch { }
+                }
             }
             using (var cmd = conn.CreateCommand())
             {
@@ -412,8 +521,12 @@ public sealed class DocumentService
                 using var r = cmd.ExecuteReader();
                 while (r.Read())
                 {
-                    var sh = JsonSerializer.Deserialize<ShapeElement>(r.GetString(1));
-                    if (sh is not null) p.Shapes.Add(sh);
+                    try
+                    {
+                        var sh = JsonSerializer.Deserialize<ShapeElement>(r.GetString(1));
+                        if (sh is not null) p.Shapes.Add(sh);
+                    }
+                    catch { }
                 }
             }
             using (var cmd = conn.CreateCommand())
@@ -423,8 +536,12 @@ public sealed class DocumentService
                 using var r = cmd.ExecuteReader();
                 while (r.Read())
                 {
-                    var t = JsonSerializer.Deserialize<TextElement>(r.GetString(1));
-                    if (t is not null) p.Texts.Add(t);
+                    try
+                    {
+                        var t = JsonSerializer.Deserialize<TextElement>(r.GetString(1));
+                        if (t is not null) p.Texts.Add(t);
+                    }
+                    catch { }
                 }
             }
             using (var cmd = conn.CreateCommand())
@@ -434,13 +551,17 @@ public sealed class DocumentService
                 using var r = cmd.ExecuteReader();
                 while (r.Read())
                 {
-                    p.Images.Add(new ImageElement
+                    try
                     {
-                        Id = r.GetString(0),
-                        X = r.GetDouble(1), Y = r.GetDouble(2),
-                        Width = r.GetDouble(3), Height = r.GetDouble(4),
-                        PngData = (byte[])r["png"]
-                    });
+                        p.Images.Add(new ImageElement
+                        {
+                            Id = r.GetString(0),
+                            X = r.GetDouble(1), Y = r.GetDouble(2),
+                            Width = r.GetDouble(3), Height = r.GetDouble(4),
+                            PngData = (byte[])r["png"]
+                        });
+                    }
+                    catch { }
                 }
             }
         }
@@ -470,8 +591,8 @@ public sealed class DocumentService
 
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = @"INSERT INTO document(id,title,created_at,modified_at,page_count,template_json,source_pdf_path)
-                                VALUES($id,$t,$c,$m,$pc,$tpl,$src)";
+            cmd.CommandText = @"INSERT INTO document(id,title,created_at,modified_at,page_count,template_json,source_pdf_path,flatten_json)
+                                VALUES($id,$t,$c,$m,$pc,$tpl,$src,$fl)";
             cmd.Parameters.AddWithValue("$id", doc.Info.Id);
             cmd.Parameters.AddWithValue("$t", doc.Info.Title);
             cmd.Parameters.AddWithValue("$c", doc.Info.CreatedAt.ToString("O"));
@@ -479,6 +600,10 @@ public sealed class DocumentService
             cmd.Parameters.AddWithValue("$pc", doc.Pages.Count);
             cmd.Parameters.AddWithValue("$tpl", JsonSerializer.Serialize(doc.Template));
             cmd.Parameters.AddWithValue("$src", (object?)doc.Info.SourcePdfPath ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$fl", doc.FlattenPageOrder is null
+                ? (object)DBNull.Value
+                : JsonSerializer.Serialize(new FlattenState
+                    { Order = doc.FlattenPageOrder, Dirty = new List<string>(doc.FlattenDirtyPageIds) }));
             cmd.ExecuteNonQuery();
         }
 
@@ -545,6 +670,14 @@ public sealed class DocumentService
         }
     }
 
+    // Persisted alongside the document row: which container page each NotePage
+    // was flattened to at the last full save, and which pages changed since.
+    private sealed class FlattenState
+    {
+        public List<string>? Order { get; set; }
+        public List<string>? Dirty { get; set; }
+    }
+
     private static void Exec(SqliteConnection c, string sql)
     {
         using var cmd = c.CreateCommand();
@@ -560,6 +693,7 @@ public sealed class DocumentService
         // Add columns for files created with older schemas (idempotent).
         try { Exec(c, "ALTER TABLE document ADD COLUMN thumbnail BLOB"); } catch { }
         try { Exec(c, "ALTER TABLE document ADD COLUMN source_pdf_path TEXT"); } catch { }
+        try { Exec(c, "ALTER TABLE document ADD COLUMN flatten_json TEXT"); } catch { }
         Exec(c, @"CREATE TABLE IF NOT EXISTS page(
             id TEXT PRIMARY KEY, idx INTEGER, width REAL, height REAL, background_png BLOB,
             template_json TEXT, source_page_index INTEGER)");

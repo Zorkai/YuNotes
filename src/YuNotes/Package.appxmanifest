@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  YuNotes package manifest (single-project MSIX).
+
+  IDENTITY: the Name/Publisher below are placeholders for local sideloading.
+  The self-signed dev certificate's subject MUST match Publisher exactly
+  (packaging/YuNotes.pfx is created with CN=YuNotes). When you reserve the app
+  in Partner Center for the Microsoft Store, replace Identity/@Name,
+  Identity/@Publisher and Properties/PublisherDisplayName with the exact values
+  the Store gives you (Partner Center > Product > Product identity), then build
+  a Store package. See PACKAGING.md.
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="YuNotes.YuNotes"
+    Publisher="CN=YuNotes"
+    Version="1.0.0.0" />
+
+  <Properties>
+    <DisplayName>YuNotes</DisplayName>
+    <PublisherDisplayName>YuNotes</PublisherDisplayName>
+    <Logo>Assets\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="x-generate" />
+  </Resources>
+
+  <Applications>
+    <Application Id="App"
+      Executable="$targetnametoken$.exe"
+      EntryPoint="$targetentrypoint$">
+      <uap:VisualElements
+        DisplayName="YuNotes"
+        Description="YuNotes — a pen-first note-taking and PDF annotation app."
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Square150x150Logo.png"
+        Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile
+          Wide310x150Logo="Assets\Wide310x150Logo.png"
+          Square71x71Logo="Assets\Square71x71Logo.png"
+          Square310x310Logo="Assets\Square310x310Logo.png">
+          <uap:ShowNameOnTiles>
+            <uap:ShowOn Tile="square150x150Logo" />
+            <uap:ShowOn Tile="wide310x150Logo" />
+          </uap:ShowNameOnTiles>
+        </uap:DefaultTile>
+        <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#F5F6FC" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!-- WinUI 3 desktop apps run full trust (they are packaged Win32). -->
+    <rescap:Capability Name="runFullTrust" />
+  </Capabilities>
+</Package>

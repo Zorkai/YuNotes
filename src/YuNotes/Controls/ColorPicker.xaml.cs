@@ -18,6 +18,9 @@ public sealed partial class ColorPickerControl : UserControl
     public ColorPickerControl()
     {
         InitializeComponent();
+        // The swatch borders/glyphs are brushed in code (below), so re-resolve
+        // them when the effective theme flips under a forced Light/Dark override.
+        ActualThemeChanged += (_, __) => Rebuild();
     }
 
     public void SetPresets(IList<string> hexes, Color current)
@@ -53,10 +56,16 @@ public sealed partial class ColorPickerControl : UserControl
 
     private void Rebuild()
     {
+        // Resolve chrome brushes against this control's actual theme (not the app
+        // theme) so a forced Light/Dark override reads correctly on screen.
+        var borderBrush = ThemeBrushes.Brush(ActualTheme, "AppBorderBrush");
+        var accentBrush = ThemeBrushes.Brush(ActualTheme, "AppAccentBrush");
+        var textBrush   = ThemeBrushes.Brush(ActualTheme, "AppTextPrimaryBrush");
+
         // Trigger button — the current color fills the button so the active
         // color is visible at a glance without opening the flyout.
         CurrentColorBtn.Background = new SolidColorBrush(_current);
-        CurrentColorBtn.BorderBrush = (Brush)Application.Current.Resources["AppBorderBrush"];
+        CurrentColorBtn.BorderBrush = borderBrush;
 
         // Flyout content: preset swatches in a row, then a custom-color button.
         FlyoutPanel.Children.Clear();
@@ -72,9 +81,7 @@ public sealed partial class ColorPickerControl : UserControl
                 Style = (Style)Application.Current.Resources["SwatchButtonStyle"],
                 Background = new SolidColorBrush(c),
                 BorderThickness = new Thickness(active ? 2.5 : 1),
-                BorderBrush = active
-                    ? (Brush)Application.Current.Resources["AppAccentBrush"]
-                    : (Brush)Application.Current.Resources["AppBorderBrush"]
+                BorderBrush = active ? accentBrush : borderBrush
             };
             if (active)
             {
@@ -107,8 +114,8 @@ public sealed partial class ColorPickerControl : UserControl
             Style = (Style)Application.Current.Resources["SwatchButtonStyle"],
             Background = new SolidColorBrush(Colors.Transparent),
             BorderThickness = new Thickness(1),
-            BorderBrush = (Brush)Application.Current.Resources["AppBorderBrush"],
-            Foreground = (Brush)Application.Current.Resources["AppTextPrimaryBrush"],
+            BorderBrush = borderBrush,
+            Foreground = textBrush,
             Content = new FontIcon { Glyph = "", FontSize = 14 },
         };
         ToolTipService.SetToolTip(custom, "Custom color");

@@ -7,6 +7,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Media.Animation;
 using WinRT.Interop;
+using YuNotes.Models;
 using YuNotes.Views;
 
 namespace YuNotes;
@@ -44,6 +45,16 @@ public sealed partial class MainWindow : Window
         if (File.Exists(iconPath))
             _appWindow.SetIcon(iconPath);
 
+        // Guard the window's close (X) button: if the editor has unsaved changes,
+        // prompt to save before letting the app exit (same dialog the Back button uses).
+        _appWindow.Closing += OnAppWindowClosing;
+
+        // Apply the saved light/dark theme to the content root (cascades to every
+        // page; the XAML MicaBackdrop and caption buttons follow ActualTheme), and
+        // re-apply whenever settings change so the Settings page takes effect live.
+        ApplyThemeFromSettings();
+        App.Services.Settings.Changed += ApplyThemeFromSettings;
+
         // Slide pages in/out on navigation. Per-navigation animations are applied
         // by mutating _navTheme.DefaultNavigationTransitionInfo (see Navigate):
         // WinUI 3 ignores the transitionInfoOverride parameter of Frame.Navigate.
@@ -58,6 +69,42 @@ public sealed partial class MainWindow : Window
         };
 
         RootFrame.Navigate(typeof(HomePage));
+    }
+
+    // Set once the user has resolved the unsaved-changes prompt (Save or Don't save),
+    // so the re-issued Close() sails through instead of re-prompting.
+    private bool _closeConfirmed;
+
+    // AppWindow.Closing is cancelable (unlike Window.Closed). If the editor holds
+    // unsaved edits, cancel the close, run the same Save/Don't save/Cancel dialog the
+    // Back button uses, and only re-close if the user didn't cancel. Cancel must be
+    // set synchronously before the first await, so it's assigned up front.
+    private async void OnAppWindowClosing(AppWindow sender, AppWindowClosingEventArgs args)
+    {
+        if (_closeConfirmed) return;
+        if (RootFrame.Content is not EditorPage editor || !editor.HasUnsavedChanges) return;
+
+        args.Cancel = true;
+        if (await editor.ConfirmLeaveAsync())
+        {
+            _closeConfirmed = true;
+            Close();
+        }
+    }
+
+    // Maps the persisted theme choice onto the content root. RequestedTheme
+    // cascades to all child content; Default = follow the OS. Guarded so the
+    // frequent settings saves (e.g. last-page tracking) don't churn the tree.
+    private void ApplyThemeFromSettings()
+    {
+        var target = App.Services.Settings.Current.Theme switch
+        {
+            AppThemeMode.Light => ElementTheme.Light,
+            AppThemeMode.Dark  => ElementTheme.Dark,
+            _                  => ElementTheme.Default,
+        };
+        if (RootGrid.RequestedTheme != target)
+            RootGrid.RequestedTheme = target;
     }
 
     private readonly NavigationThemeTransition _navTheme = new();

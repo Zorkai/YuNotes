@@ -20,7 +20,7 @@
         <Button.Flyout>
             <Flyout x:Name="ColorFlyout" Placement="Bottom"
                     ShouldConstrainToRootBounds="True"
-                    FlyoutPresenterStyle="{StaticResource GlassFlyoutPresenterStyle}">
+                    FlyoutPresenterStyle="{StaticResource ColorFlyoutPresenterStyle}">
                 <!-- Constrained popup: keeps the flyout in the main XAML root so
                      the in-app acrylic presenter background can blur app content. -->
                 <StackPanel x:Name="FlyoutPanel" Orientation="Horizontal" Spacing="8" />
