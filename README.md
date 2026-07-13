@@ -12,8 +12,8 @@
 
 ---
 
-![Home screen](https://i.imgur.com/0xPVJFL.png)
-![Editor](https://i.imgur.com/eaLW6i0.png)
+![Home screen](https://i.imgur.com/Z27quaE.png)
+![Editor](https://i.imgur.com/pRc8cRL.png)
 
 -->
 
