@@ -9,4 +9,55 @@
     <Platform>x64</Platform>
     <PlatformTarget>x64</PlatformTarget>
   </PropertyGroup>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       ★  YuNotes version — THE ONE GLOBAL PLACE TO SET IT  ★
+
+       Change this single value and every build picks it up:
+         • the app's assembly version / file version (AssemblyVersion,
+           FileVersion, informational version)
+         • the MSIX package version in Package.appxmanifest (kept in sync
+           automatically by the _StampAppxManifestVersion target below)
+         • the version shown in .msix / .msixupload output file names
+
+       Format: MAJOR.MINOR.BUILD.REVISION (four parts, each 0–65535).
+       The MSIX Identity requires all four parts, so keep the 4-part form.
+       ═══════════════════════════════════════════════════════════════════════ -->
+  <PropertyGroup>
+    <YuNotesVersion>1.1.1.0</YuNotesVersion>
+  </PropertyGroup>
+
+  <!-- Derive the standard assembly version properties from the single value. -->
+  <PropertyGroup>
+    <Version>$(YuNotesVersion)</Version>
+    <AssemblyVersion>$(YuNotesVersion)</AssemblyVersion>
+    <FileVersion>$(YuNotesVersion)</FileVersion>
+  </PropertyGroup>
+
+  <!-- Keep Package.appxmanifest's <Identity Version="…"> in lock-step with
+       YuNotesVersion. Runs at the very start of every build; only rewrites the
+       manifest when the version actually differs, so it doesn't churn the file
+       or trigger needless repackaging. The appx foundation namespace has to be
+       declared for the XPath queries. -->
+  <PropertyGroup>
+    <AppxManifestPath>$(MSBuildProjectDirectory)\Package.appxmanifest</AppxManifestPath>
+  </PropertyGroup>
+
+  <Target Name="_StampAppxManifestVersion"
+          BeforeTargets="PrepareForBuild"
+          Condition="Exists('$(AppxManifestPath)')">
+    <XmlPeek XmlInputPath="$(AppxManifestPath)"
+             Query="/d:Package/d:Identity/@Version"
+             Namespaces="&lt;Namespace Prefix='d' Uri='http://schemas.microsoft.com/appx/manifest/foundation/windows10' /&gt;">
+      <Output TaskParameter="Result" ItemName="_CurrentAppxVersion" />
+    </XmlPeek>
+    <XmlPoke XmlInputPath="$(AppxManifestPath)"
+             Query="/d:Package/d:Identity/@Version"
+             Value="$(YuNotesVersion)"
+             Namespaces="&lt;Namespace Prefix='d' Uri='http://schemas.microsoft.com/appx/manifest/foundation/windows10' /&gt;"
+             Condition="'@(_CurrentAppxVersion)' != '$(YuNotesVersion)'" />
+    <Message Condition="'@(_CurrentAppxVersion)' != '$(YuNotesVersion)'"
+             Importance="high"
+             Text="YuNotes: stamped Package.appxmanifest version @(_CurrentAppxVersion) -> $(YuNotesVersion)" />
+  </Target>
 </Project>

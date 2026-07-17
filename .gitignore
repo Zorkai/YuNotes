@@ -27,6 +27,8 @@ packages/
 # (it's source) — that's why these are specific extensions, not *.appx*.
 packaging/output/
 packaging/release/
+packaging/store-output/
+packaging/exe-output/
 *.msix
 *.msixbundle
 *.msixupload

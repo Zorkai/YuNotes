@@ -9,7 +9,6 @@ public sealed class ServiceContainer
     public PdfContainerService PdfContainer { get; } = new();
     public PdfTextExtractor PdfText { get; } = new();
     public PngExportService PngExport { get; } = new();
-    public ScreenshotService Screenshot { get; } = new();
     public TemplateService Templates { get; } = new();
     public HistoryService History { get; } = new();
 

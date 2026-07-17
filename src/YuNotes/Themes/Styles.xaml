@@ -494,6 +494,15 @@
         <Setter Property="FontFamily" Value="{ThemeResource ContentControlThemeFontFamily}" />
     </Style>
 
+    <!-- Auto-sizing labelled button for the screenshot action bar (Copy/Insert/Save). -->
+    <Style x:Key="ShotActionButtonStyle" TargetType="Button" BasedOn="{StaticResource ToolButtonStyle}">
+        <Setter Property="Width" Value="NaN" />
+        <Setter Property="Height" Value="34" />
+        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="Padding" Value="11,0" />
+        <Setter Property="FontFamily" Value="{ThemeResource ContentControlThemeFontFamily}" />
+    </Style>
+
     <!-- Divider bar between two segments inside a TopBarGroupStyle. -->
     <Style x:Key="TopBarSegDividerStyle" TargetType="Border">
         <Setter Property="Width" Value="1" />

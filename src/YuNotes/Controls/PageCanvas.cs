@@ -1510,7 +1510,21 @@ public sealed class PageCanvas : ContentControl
         if (!PalmRejection.Accept(e)) { e.Handled = true; return; }
         // Fingers never trigger our tools — the outer ScrollViewer's DirectManipulation
         // handles touch pan + pinch-zoom; we just refuse to draw.
-        if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch) return;
+        if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Touch)
+        {
+            // A finger tap outside a committed selection dismisses it, matching the
+            // pen "click outside to clear" behavior below. Touch is owned by the
+            // ScrollViewer (we never capture it), so we act on press: only clear
+            // when the point is outside the box and off the handles, leaving a
+            // finger pan/pinch that starts inside the selection alone.
+            if (!Context.EditingSuspended && HasCommittedSelection())
+            {
+                var tp = ToPageSpace(e);
+                if (!PointInSelectionBounds(tp) && HitTestHandles(tp, out _) == DragMode.None)
+                    ClearSelection();
+            }
+            return;
+        }
         // Editing suspended (e.g. during a save): reject pen/mouse drawing so the
         // document can't be mutated, but scroll/zoom (handled by the ScrollViewer)
         // still works.
@@ -2216,7 +2230,7 @@ public sealed class PageCanvas : ContentControl
         var newImageIds = new List<string>();
         foreach (var s in Page.Strokes.Where(s => Context.SelectedStrokeIds.Contains(s.Id)).ToList())
         {
-            var clone = new Stroke { Kind = s.Kind, Color = s.Color, Width = s.Width };
+            var clone = new Stroke { Kind = s.Kind, Color = s.Color, Width = s.Width, PressureMode = s.PressureMode };
             foreach (var pt in s.Points)
                 clone.Points.Add(new InkPoint(pt.X + offsetX, pt.Y + offsetY, pt.Pressure));
             Page.Strokes.Add(clone);
@@ -2702,6 +2716,12 @@ public sealed class PageCanvas : ContentControl
             foreach (var t in temps) t.Dispose();
         }
     }
+
+    // Draws this page's full content (template + PDF background + elements) into an
+    // arbitrary drawing session using whatever Transform/clip the caller has set.
+    // Used by the in-app screenshot tool to composite a cross-page capture region.
+    public void DrawContentInto(CanvasDrawingSession ds, ICanvasResourceCreator dev)
+        => Renderer.DrawPage(ds, dev, Page, PageTemplate, _bgBitmap, _imageCache);
 
     public byte[] RenderRegionToPng(float x, float y, float w, float h)
     {

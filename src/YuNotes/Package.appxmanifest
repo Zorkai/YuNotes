@@ -1,55 +1,35 @@
-<?xml version="1.0" encoding="utf-8"?>
-
+﻿<?xml version="1.0" encoding="utf-8"?>
 <!--
   YuNotes package manifest (single-project MSIX).
 
-  IDENTITY: the Name/Publisher below are placeholders for local sideloading.
-  The self-signed dev certificate's subject MUST match Publisher exactly
-  (packaging/YuNotes.pfx is created with CN=YuNotes). When you reserve the app
-  in Partner Center for the Microsoft Store, replace Identity/@Name,
-  Identity/@Publisher and Properties/PublisherDisplayName with the exact values
-  the Store gives you (Partner Center > Product > Product identity), then build
-  a Store package. See PACKAGING.md.
+  IDENTITY: these are the real Microsoft Store values reserved in Partner Center
+  (Product > Product identity). The Store signs Store packages itself, so a Store
+  build uses signing OFF. NOTE: the self-signed sideload flow (packaging/build.ps1
+  + install.ps1) creates a cert with subject CN=YuNotes, which NO LONGER matches
+  the Publisher below — to sideload for local testing you must regenerate the dev
+  cert with the same subject as Publisher (see PACKAGING.md), or build Store-mode
+  (unsigned) and test through the Store's package flighting instead.
 -->
-<Package
-  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
-  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
-  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
-
-  <Identity
-    Name="YuNotes.YuNotes"
-    Publisher="CN=YuNotes"
-    Version="1.0.0.0" />
-
+<Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10" xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10" xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities" IgnorableNamespaces="uap rescap">
+  <!-- NOTE: Version is set from ONE place — <YuNotesVersion> in the repo-root
+       Directory.Build.props — and stamped in here automatically at build time.
+       Don't hand-edit the Version below; a build will overwrite it to match. -->
+  <Identity Name="YunusOztrk.YuNotes" Publisher="CN=65825C0F-789D-4193-9961-838FD29CFB57" Version="1.0.0.0" />
   <Properties>
     <DisplayName>YuNotes</DisplayName>
-    <PublisherDisplayName>YuNotes</PublisherDisplayName>
+    <PublisherDisplayName>Yunus Oztürk</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
-
   <Dependencies>
     <TargetDeviceFamily Name="Windows.Universal" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
   </Dependencies>
-
   <Resources>
     <Resource Language="x-generate" />
   </Resources>
-
   <Applications>
-    <Application Id="App"
-      Executable="$targetnametoken$.exe"
-      EntryPoint="$targetentrypoint$">
-      <uap:VisualElements
-        DisplayName="YuNotes"
-        Description="YuNotes — a pen-first note-taking and PDF annotation app."
-        BackgroundColor="transparent"
-        Square150x150Logo="Assets\Square150x150Logo.png"
-        Square44x44Logo="Assets\Square44x44Logo.png">
-        <uap:DefaultTile
-          Wide310x150Logo="Assets\Wide310x150Logo.png"
-          Square71x71Logo="Assets\Square71x71Logo.png"
-          Square310x310Logo="Assets\Square310x310Logo.png">
+    <Application Id="App" Executable="$targetnametoken$.exe" EntryPoint="$targetentrypoint$">
+      <uap:VisualElements DisplayName="YuNotes" Description="YuNotes — a pen-first note-taking and PDF annotation app." BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png" Square44x44Logo="Assets\Square44x44Logo.png">
+        <uap:DefaultTile Wide310x150Logo="Assets\Wide310x150Logo.png" Square71x71Logo="Assets\Square71x71Logo.png" Square310x310Logo="Assets\Square310x310Logo.png">
           <uap:ShowNameOnTiles>
             <uap:ShowOn Tile="square150x150Logo" />
             <uap:ShowOn Tile="wide310x150Logo" />
@@ -57,9 +37,33 @@
         </uap:DefaultTile>
         <uap:SplashScreen Image="Assets\SplashScreen.png" BackgroundColor="#F5F6FC" />
       </uap:VisualElements>
+      <Extensions>
+        <!-- Register YuNotes as a handler for .pdf so it appears in Explorer's
+             "Open with" menu and can be set as the default PDF app. Windows does
+             not steal the default automatically; the user chooses. -->
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="pdf">
+            <uap:DisplayName>PDF Document</uap:DisplayName>
+            <uap:Logo>Assets\Square44x44Logo.png</uap:Logo>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.pdf</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+        <!-- YuNotes' own native notebook format, so double-clicking a saved note
+             opens it. Remove this block if you don't want the .yunote association. -->
+        <uap:Extension Category="windows.fileTypeAssociation">
+          <uap:FileTypeAssociation Name="yunote">
+            <uap:DisplayName>YuNotes Notebook</uap:DisplayName>
+            <uap:Logo>Assets\Square44x44Logo.png</uap:Logo>
+            <uap:SupportedFileTypes>
+              <uap:FileType>.yunote</uap:FileType>
+            </uap:SupportedFileTypes>
+          </uap:FileTypeAssociation>
+        </uap:Extension>
+      </Extensions>
     </Application>
   </Applications>
-
   <Capabilities>
     <!-- WinUI 3 desktop apps run full trust (they are packaged Win32). -->
     <rescap:Capability Name="runFullTrust" />

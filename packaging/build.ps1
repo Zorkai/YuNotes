@@ -4,10 +4,12 @@
   Builds a signed YuNotes .msix for local sideloading.
 
 .DESCRIPTION
-  1. Creates a self-signed code-signing certificate (CN=YuNotes) on first run and
-     exports it to YuNotes.pfx / YuNotes.cer beside this script. The certificate
-     subject MUST equal the Package.appxmanifest <Identity Publisher>, or Windows
-     rejects the package.
+  1. Creates a self-signed code-signing certificate whose subject equals the
+     Package.appxmanifest <Identity Publisher> (read from the manifest at build
+     time, so it always matches) and exports it to YuNotes.pfx / YuNotes.cer
+     beside this script. The subject MUST equal Publisher or Windows rejects the
+     package; when the manifest Publisher changes (e.g. to the real Store
+     CN=<GUID>), this script regenerates the cert automatically.
   2. Builds the project with MSIX packaging enabled and signs the package.
 
   Output: packaging\output\<...>\YuNotes_<ver>_x64.msix
@@ -35,34 +37,54 @@ $pfxPassword = "YuNotes"   # dev cert only — not a secret
 # build fails with APPX0105 ("key file may be password protected"), so the store
 # is the reliable path. We also export a .cer (for install-time trust) and a .pfx
 # (portable backup / CI).
+#
+# The cert subject must equal the manifest Publisher, so read it from the manifest
+# rather than hard-coding -- that way changing identity (e.g. to the Store's
+# CN=<GUID>) transparently regenerates a matching dev cert.
+$manifest  = Join-Path $repo "src\YuNotes\Package.appxmanifest"
+[xml]$mx   = Get-Content $manifest -Raw
+$publisher = $mx.Package.Identity.Publisher
+if (-not $publisher) { throw "Could not read Identity/@Publisher from $manifest" }
+Write-Host "Manifest Publisher (cert subject): $publisher" -ForegroundColor Cyan
+
 $storeCert = Get-ChildItem "Cert:\CurrentUser\My" |
-    Where-Object { $_.Subject -eq "CN=YuNotes" } | Select-Object -First 1
+    Where-Object { $_.Subject -eq $publisher } | Select-Object -First 1
+
+# Fall back to the exported .pfx, but only if its subject still matches Publisher
+# (a stale pfx from a previous identity must not be reused).
+if (-not $storeCert -and (Test-Path $pfx)) {
+    $sec = ConvertTo-SecureString -String $pfxPassword -Force -AsPlainText
+    try {
+        $probe = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($pfx, $pfxPassword)
+        if ($probe.Subject -eq $publisher) {
+            Write-Host "Importing existing YuNotes.pfx into CurrentUser\My..." -ForegroundColor Cyan
+            $storeCert = Import-PfxCertificate -FilePath $pfx `
+                -CertStoreLocation "Cert:\CurrentUser\My" -Password $sec
+        } else {
+            Write-Host "YuNotes.pfx subject ($($probe.Subject)) != Publisher - regenerating." -ForegroundColor Yellow
+        }
+    } catch { Write-Host "Could not read YuNotes.pfx - regenerating." -ForegroundColor Yellow }
+}
 
 if (-not $storeCert) {
-    if (Test-Path $pfx) {
-        Write-Host "Importing existing YuNotes.pfx into CurrentUser\My..." -ForegroundColor Cyan
-        $sec = ConvertTo-SecureString -String $pfxPassword -Force -AsPlainText
-        $storeCert = Import-PfxCertificate -FilePath $pfx `
-            -CertStoreLocation "Cert:\CurrentUser\My" -Password $sec
-    } else {
-        Write-Host "Creating self-signed dev certificate (CN=YuNotes)..." -ForegroundColor Cyan
-        $storeCert = New-SelfSignedCertificate `
-            -Type CodeSigningCert `
-            -Subject "CN=YuNotes" `
-            -KeyUsage DigitalSignature `
-            -KeyExportPolicy Exportable `
-            -FriendlyName "YuNotes Dev Cert" `
-            -CertStoreLocation "Cert:\CurrentUser\My" `
-            -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
-        $sec = ConvertTo-SecureString -String $pfxPassword -Force -AsPlainText
-        Export-PfxCertificate -Cert $storeCert -FilePath $pfx -Password $sec | Out-Null
-        Write-Host "  wrote $pfx"
-    }
+    Write-Host "Creating self-signed dev certificate ($publisher)..." -ForegroundColor Cyan
+    $storeCert = New-SelfSignedCertificate `
+        -Type CodeSigningCert `
+        -Subject $publisher `
+        -KeyUsage DigitalSignature `
+        -KeyExportPolicy Exportable `
+        -FriendlyName "YuNotes Dev Cert" `
+        -CertStoreLocation "Cert:\CurrentUser\My" `
+        -TextExtension @("2.5.29.37={text}1.3.6.1.5.5.7.3.3", "2.5.29.19={text}")
+    $sec = ConvertTo-SecureString -String $pfxPassword -Force -AsPlainText
+    Export-PfxCertificate -Cert $storeCert -FilePath $pfx -Password $sec | Out-Null
+    Write-Host "  wrote $pfx"
 }
-if (-not (Test-Path $cer)) {
-    Export-Certificate -Cert $storeCert -FilePath $cer | Out-Null
-    Write-Host "  wrote $cer"
-}
+
+# Always (re)export the .cer for the resolved cert so install.ps1 trusts the
+# exact cert that signed this build.
+Export-Certificate -Cert $storeCert -FilePath $cer -Force | Out-Null
+Write-Host "  wrote $cer"
 $thumb = $storeCert.Thumbprint
 Write-Host "Signing with cert thumbprint $thumb"
 

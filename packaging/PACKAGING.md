@@ -11,6 +11,28 @@ The app used to be *unpackaged* (a loose `YuNotes.exe`). The switch is in
 
 ---
 
+## Set the version (one global place)
+
+The app version lives in **one** spot: `<YuNotesVersion>` in the repo-root
+[`Directory.Build.props`](../Directory.Build.props). Change it there and every
+build picks it up automatically:
+
+- the assembly / file version compiled into `YuNotes.exe`,
+- the MSIX package version in `Package.appxmanifest` (stamped in at build time —
+  don't hand-edit it there; a build overwrites it to match),
+- the version in the `.msix` / `.msixupload` / standalone-exe output.
+
+```xml
+<!-- Directory.Build.props -->
+<YuNotesVersion>1.0.0.0</YuNotesVersion>
+```
+
+Use the four-part `MAJOR.MINOR.BUILD.REVISION` form — the MSIX identity requires
+all four parts. For a Store update, bump this (Partner Center rejects a resubmit
+with the same or a lower version).
+
+---
+
 ## Install it on this PC (sideload)
 
 Everything is scripted in this folder.
@@ -50,6 +72,38 @@ packaging\uninstall.ps1
 
 …or just right-click YuNotes in the Start menu → Uninstall, or remove it from
 Settings → Apps. All three do the same thing.
+
+---
+
+## Build a standalone single-file `.exe` (no install, no folder)
+
+If you want a plain portable app instead of an MSIX — one `YuNotes.exe` you can
+copy anywhere and double-click, with **no certificate, no install step, and no
+supporting folder** — build it with:
+
+```powershell
+packaging\publish-exe.ps1
+```
+
+…or double-click **`Build Standalone EXE.bat`**.
+
+- Output: `packaging\exe-output\YuNotes.exe` (~104 MB). A `YuNotes.pdb` is emitted
+  beside it — that's just debug symbols; you can ignore/delete it, only the `.exe`
+  is needed to run.
+- The exe is **unpackaged** (`WindowsPackageType=None`) and **self-contained**: it
+  bundles the .NET 8 runtime, the Windows App SDK runtime, and every managed/native
+  dependency plus `resources.pri` **inside the single file** (`PublishSingleFile` +
+  `IncludeAllContentForSelfExtract`). Nothing needs to be preinstalled on the
+  target PC.
+- On first launch it self-extracts its native components to a per-user temp folder,
+  so the very first start is a little slower; later starts are normal.
+- This is independent of the MSIX build — the project still builds a packaged app
+  by default (`build.ps1` / `build-store.ps1`). The exe build uses the publish
+  profile `src/YuNotes/Properties/PublishProfiles/win-x64-exe.pubxml` and touches
+  none of the packaged settings.
+- Trade-offs vs. MSIX: no Start-menu entry, no auto-update, and **file
+  associations (.pdf / .yunote) don't register** (those come from the MSIX
+  manifest on install). It's meant for portable / "just run it" distribution.
 
 ---
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
@@ -402,6 +403,103 @@ public sealed partial class InkCanvasControl : UserControl
         return _pageCanvases[index].RenderToPng(scale);
     }
 
+    // ── In-app screenshot capture ───────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders the given rectangle (in this control's own coordinate space, i.e. the
+    /// same space returned by <c>element.TransformToVisual(Canvas)</c>) into a crisp
+    /// PNG by re-rendering the underlying document content — not by grabbing screen
+    /// pixels. Every page overlapping the region contributes its slice, so a capture
+    /// that spans the seam between two pages composites both. Areas that aren't over a
+    /// page (margins, gaps) come out white. Returns null if the region is degenerate.
+    /// </summary>
+    public byte[]? CaptureRegionPng(Windows.Foundation.Rect regionInControl)
+    {
+        if (regionInControl.Width < 2 || regionInControl.Height < 2) return null;
+
+        float zoom = (float)Scroller.ZoomFactor;
+        // Aim for ~2.5× page-space resolution regardless of the current zoom so the
+        // capture is crisp whether the user is zoomed in or out. Clamped for sanity.
+        float captureScale = Math.Clamp(2.5f / Math.Max(zoom, 0.05f), 1f, 4f);
+
+        // Bound total output to ~16 MP so a huge selection can't blow up memory.
+        double outWd = regionInControl.Width * captureScale;
+        double outHd = regionInControl.Height * captureScale;
+        double pxCount = outWd * outHd;
+        const double maxPx = 16_000_000;
+        if (pxCount > maxPx)
+        {
+            double k = Math.Sqrt(maxPx / pxCount);
+            captureScale *= (float)k; outWd *= k; outHd *= k;
+        }
+        int outW = Math.Max(1, (int)Math.Round(outWd));
+        int outH = Math.Max(1, (int)Math.Round(outHd));
+
+        var device = Microsoft.Graphics.Canvas.CanvasDevice.GetSharedDevice();
+        using var target = new Microsoft.Graphics.Canvas.CanvasRenderTarget(device, outW, outH, 96f);
+        using (var ds = target.CreateDrawingSession())
+        {
+            ds.Clear(Microsoft.UI.Colors.White);
+            foreach (var pc in _pageCanvases)
+            {
+                if (pc.ActualWidth < 1 || pc.ActualHeight < 1) continue;
+
+                // Page rectangle expressed in this control's coordinate space (folds
+                // in the ScrollViewer zoom/offset), intersected with the capture region.
+                Windows.Foundation.Rect pageRect;
+                Windows.Foundation.Point tl, br;
+                try
+                {
+                    pageRect = pc.TransformToVisual(this)
+                        .TransformBounds(new Windows.Foundation.Rect(0, 0, pc.ActualWidth, pc.ActualHeight));
+                    double ix = Math.Max(pageRect.X, regionInControl.X);
+                    double iy = Math.Max(pageRect.Y, regionInControl.Y);
+                    double ir = Math.Min(pageRect.Right, regionInControl.Right);
+                    double ib = Math.Min(pageRect.Bottom, regionInControl.Bottom);
+                    if (ir - ix < 0.5 || ib - iy < 0.5) continue;
+
+                    // Overlap corners mapped into the page's local coordinates.
+                    var toPage = this.TransformToVisual(pc);
+                    tl = toPage.TransformPoint(new Windows.Foundation.Point(ix, iy));
+                    br = toPage.TransformPoint(new Windows.Foundation.Point(ir, ib));
+
+                    // Destination sub-rect within the output bitmap (in pixels).
+                    float dx = (float)((ix - regionInControl.X) * captureScale);
+                    float dy = (float)((iy - regionInControl.Y) * captureScale);
+                    float dw = (float)((ir - ix) * captureScale);
+                    float dh = (float)((ib - iy) * captureScale);
+
+                    float sx = (float)tl.X, sy = (float)tl.Y;
+                    float srcW = (float)(br.X - tl.X), srcH = (float)(br.Y - tl.Y);
+                    if (srcW < 0.01f || srcH < 0.01f) continue;
+
+                    // page-local → output-pixel: shift the source origin to 0, scale to
+                    // the destination size, then offset into the destination sub-rect.
+                    var mtx = System.Numerics.Matrix3x2.CreateTranslation(-sx, -sy)
+                            * System.Numerics.Matrix3x2.CreateScale(dw / srcW, dh / srcH)
+                            * System.Numerics.Matrix3x2.CreateTranslation(dx, dy);
+
+                    // Clip to the destination sub-rect (created while the transform is
+                    // identity so the rect is in pixel space) so this page can't paint
+                    // over a neighbour's slice.
+                    ds.Transform = System.Numerics.Matrix3x2.Identity;
+                    using (ds.CreateLayer(1f, new Windows.Foundation.Rect(dx, dy, dw, dh)))
+                    {
+                        ds.Transform = mtx;
+                        pc.DrawContentInto(ds, device);
+                    }
+                    ds.Transform = System.Numerics.Matrix3x2.Identity;
+                }
+                catch { /* transform can throw if a page isn't laid out yet — skip it */ }
+            }
+        }
+
+        using var ms = new System.IO.MemoryStream();
+        target.SaveAsync(ms.AsRandomAccessStream(),
+            Microsoft.Graphics.Canvas.CanvasBitmapFileFormat.Png).AsTask().GetAwaiter().GetResult();
+        return ms.ToArray();
+    }
+
     public void SetZoom(double zoom)
     {
         var newZoom = (float)zoom;
@@ -423,6 +521,31 @@ public sealed partial class InkCanvasControl : UserControl
     public bool HasSelection =>
         (Context.SelectedStrokeIds.Count + Context.SelectedTextIds.Count +
          Context.SelectedImageIds.Count + Context.SelectedShapeIds.Count) > 0;
+
+    /// <summary>
+    /// Bounding box of the current selection expressed in the coordinate space of
+    /// <paramref name="relativeTo"/> (e.g. the editor's root grid), with page zoom
+    /// and scroll folded in so it maps to where the selection sits on screen.
+    /// Returns false when nothing is selected.
+    /// </summary>
+    public bool TryGetSelectionScreenBounds(UIElement relativeTo, out Windows.Foundation.Rect bounds)
+    {
+        bounds = default;
+        var pc = ActivePageCanvas;
+        if (pc is null || !pc.SelectionBbox(out var b)) return false;
+        try
+        {
+            var t = pc.TransformToVisual(relativeTo);
+            var tl = t.TransformPoint(new Windows.Foundation.Point(b.X, b.Y));
+            var br = t.TransformPoint(new Windows.Foundation.Point(b.Right, b.Bottom));
+            bounds = new Windows.Foundation.Rect(tl, br);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     public void RefreshTemplates()
     {
@@ -478,6 +601,51 @@ public sealed partial class InkCanvasControl : UserControl
     public void ClearSelection() => ActivePageCanvas?.ClearSelection();
     public byte[]? RenderRegionOfCurrentPage(float x, float y, float w, float h)
         => ActivePageCanvas?.RenderRegionToPng(x, y, w, h);
+
+    /// <summary>
+    /// Drops a pasted image onto the active page, centred in the current viewport,
+    /// sized to its real aspect ratio, selected and ready to drag. Used by Ctrl+V /
+    /// the clipboard paste button. Returns true if it placed an image.
+    /// </summary>
+    public bool PasteImageAtViewportCenter(byte[] png)
+    {
+        var pc = ActivePageCanvas;
+        if (pc is null || png.Length == 0) return false;
+        var page = pc.Page;
+
+        // Map the viewport centre into the page's local coordinates (folds in the
+        // ScrollViewer zoom/offset), then clamp inside the page so a paste while the
+        // centre sits over a margin/gap still lands on the sheet.
+        Windows.Foundation.Point c;
+        try { c = this.TransformToVisual(pc).TransformPoint(new Windows.Foundation.Point(ActualWidth / 2, ActualHeight / 2)); }
+        catch { c = new Windows.Foundation.Point(page.Width / 2, page.Height / 2); }
+        double cx = Math.Clamp(c.X, 0, page.Width);
+        double cy = Math.Clamp(c.Y, 0, page.Height);
+
+        // Size to the image's real aspect (longest side ~360 page units).
+        double w = 320, h = 240;
+        if (ImageTool.TryGetPngSize(png, out int pw, out int ph) && pw > 0 && ph > 0)
+        {
+            double longest = 360.0, s = longest / Math.Max(pw, ph);
+            w = pw * s; h = ph * s;
+        }
+
+        var img = new ImageElement
+        {
+            X = cx - w / 2, Y = cy - h / 2, Width = w, Height = h, PngData = png
+        };
+        page.Images.Add(img);
+        Context.CurrentPage = page;
+        // Select the pasted image so its transform handles appear immediately.
+        Context.SelectedStrokeIds.Clear(); Context.SelectedShapeIds.Clear();
+        Context.SelectedTextIds.Clear();   Context.SelectedImageIds.Clear();
+        Context.SelectedImageIds.Add(img.Id);
+        Context.Mutated?.Invoke();
+        Context.SelectionChanged?.Invoke();
+        Context.ToolRequested?.Invoke(ToolKind.RectSelect);
+        Context.Invalidate?.Invoke();
+        return true;
+    }
 
     // ── Cross-page selection move ────────────────────────────────────────────
     //

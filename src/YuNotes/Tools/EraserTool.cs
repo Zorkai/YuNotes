@@ -142,7 +142,7 @@ public sealed class EraserTool : ITool
                 ctx.CurrentPage.Strokes.RemoveAt(i);
                 foreach (var seg in segments)
                 {
-                    var ns = new Stroke { Kind = s.Kind, Color = s.Color, Width = s.Width };
+                    var ns = new Stroke { Kind = s.Kind, Color = s.Color, Width = s.Width, PressureMode = s.PressureMode };
                     ns.Points.AddRange(seg);
                     ctx.CurrentPage.Strokes.Insert(i, ns);
                 }

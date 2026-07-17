@@ -99,7 +99,7 @@
                                 Style="{StaticResource ToolChevronButtonStyle}"
                                 ToolTipService.ToolTip="Pen options">
                             <FontIcon x:Name="PenChevronIcon" Glyph="&#xe5cf;" FontSize="8"
-                                      Foreground="White" />
+                                      Foreground="{ThemeResource AppTextPrimaryBrush}" />
                             <Button.Flyout>
                                 <Flyout x:Name="PenFlyout" Placement="Bottom"
                                         ShouldConstrainToRootBounds="True"
@@ -153,7 +153,7 @@
                                 Style="{StaticResource ToolChevronButtonStyle}"
                                 ToolTipService.ToolTip="Eraser options">
                             <FontIcon x:Name="EraserChevronIcon" Glyph="&#xe5cf;" FontSize="8"
-                                      Foreground="White" />
+                                      Foreground="{ThemeResource AppTextPrimaryBrush}" />
                             <Button.Flyout>
                                 <Flyout x:Name="EraserFlyout" Placement="Bottom"
                                         ShouldConstrainToRootBounds="True"
@@ -193,6 +193,12 @@
                     <ToggleButton x:Name="ToolImage" Style="{StaticResource ToolToggleButtonStyle}" ToolTipService.ToolTip="Image">
                         <FontIcon Glyph="&#xe3f4;" />
                     </ToggleButton>
+                    <!-- Appears only while the clipboard holds an image (Ctrl+V also pastes). -->
+                    <Button x:Name="ToolPaste" Style="{StaticResource ToolButtonStyle}"
+                            Visibility="Collapsed"
+                            ToolTipService.ToolTip="Paste image from clipboard (Ctrl+V)">
+                        <FontIcon Glyph="&#xe14f;" FontSize="18" />
+                    </Button>
                     <Grid x:Name="ShapeGroup" VerticalAlignment="Center">
                         <ToggleButton x:Name="ToolShape" Style="{StaticResource ToolToggleButtonStyle}"
                                       ToolTipService.ToolTip="Shape">
@@ -206,7 +212,7 @@
                                 Style="{StaticResource ToolChevronButtonStyle}"
                                 ToolTipService.ToolTip="Shape options">
                             <FontIcon x:Name="ShapeChevronIcon" Glyph="&#xe5cf;" FontSize="8"
-                                      Foreground="White" />
+                                      Foreground="{ThemeResource AppTextPrimaryBrush}" />
                             <Button.Flyout>
                                 <Flyout x:Name="ShapeFlyout" Placement="Bottom"
                                         ShouldConstrainToRootBounds="True"
@@ -271,7 +277,7 @@
                                 Style="{StaticResource ToolChevronButtonStyle}"
                                 ToolTipService.ToolTip="Select options">
                             <FontIcon x:Name="SelectChevronIcon" Glyph="&#xe5cf;" FontSize="8"
-                                      Foreground="White" />
+                                      Foreground="{ThemeResource AppTextPrimaryBrush}" />
                             <Button.Flyout>
                                 <Flyout x:Name="SelectFlyout" Placement="Bottom"
                                         ShouldConstrainToRootBounds="True"
@@ -687,5 +693,70 @@
                            Foreground="{ThemeResource AppTextPrimaryBrush}" />
             </StackPanel>
         </Border>
+
+        <!-- In-app screenshot region selector. Hit-testable so it intercepts all
+             pointer input while active; drag a rectangle over the notes, then pick
+             Copy / Insert / Save. The capture is re-rendered from the document, not
+             grabbed from screen pixels, so it stays crisp. -->
+        <Grid x:Name="ScreenshotOverlay"
+              Grid.Row="0" Grid.RowSpan="4" Grid.Column="0" Grid.ColumnSpan="3"
+              Canvas.ZIndex="45" Background="#01000000" Visibility="Collapsed"
+              IsTabStop="True">
+            <Canvas x:Name="ScreenshotCanvas">
+                <!-- Four dim panels masking everything outside the selection. -->
+                <Rectangle x:Name="MaskTop"    Fill="#59000000" IsHitTestVisible="False"/>
+                <Rectangle x:Name="MaskBottom" Fill="#59000000" IsHitTestVisible="False"/>
+                <Rectangle x:Name="MaskLeft"   Fill="#59000000" IsHitTestVisible="False"/>
+                <Rectangle x:Name="MaskRight"  Fill="#59000000" IsHitTestVisible="False"/>
+                <!-- Selection outline. -->
+                <Border x:Name="ScreenshotRect" Visibility="Collapsed" IsHitTestVisible="False"
+                        BorderBrush="{ThemeResource AppAccentBrush}" BorderThickness="2"
+                        CornerRadius="2"/>
+                <!-- Action bar, shown after the drag ends. -->
+                <Border x:Name="ScreenshotActions" Visibility="Collapsed"
+                        CornerRadius="12" Padding="6"
+                        Background="{ThemeResource AppToolbarBrush}"
+                        BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1"
+                        Translation="0,0,32">
+                    <Border.Shadow><ThemeShadow/></Border.Shadow>
+                    <StackPanel Orientation="Horizontal" Spacing="2">
+                        <Button x:Name="ShotCopyBtn" Style="{StaticResource ShotActionButtonStyle}"
+                                ToolTipService.ToolTip="Copy to clipboard">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xe14d;" FontSize="16"/>
+                                <TextBlock Text="Copy" FontSize="13" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="ShotInsertBtn" Style="{StaticResource ShotActionButtonStyle}"
+                                ToolTipService.ToolTip="Insert into this note">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xe439;" FontSize="16"/>
+                                <TextBlock Text="Insert" FontSize="13" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="ShotSaveBtn" Style="{StaticResource ShotActionButtonStyle}"
+                                ToolTipService.ToolTip="Save as PNG">
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xe161;" FontSize="16"/>
+                                <TextBlock Text="Save" FontSize="13" VerticalAlignment="Center"/>
+                            </StackPanel>
+                        </Button>
+                        <Border Width="1" Margin="4,4" Background="{ThemeResource AppBorderBrush}"/>
+                        <Button x:Name="ShotCancelBtn" Style="{StaticResource ShotActionButtonStyle}"
+                                ToolTipService.ToolTip="Cancel (Esc)">
+                            <FontIcon Glyph="&#xe5cd;" FontSize="16"/>
+                        </Button>
+                    </StackPanel>
+                </Border>
+            </Canvas>
+            <!-- Hint pill. -->
+            <Border VerticalAlignment="Top" HorizontalAlignment="Center"
+                    Margin="0,72,0,0" CornerRadius="16" Padding="14,8" IsHitTestVisible="False"
+                    Background="{ThemeResource AppToolbarBrush}"
+                    BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1">
+                <TextBlock Text="Drag to capture a region  ·  Esc to cancel" FontSize="13"
+                           Foreground="{ThemeResource AppTextPrimaryBrush}"/>
+            </Border>
+        </Grid>
     </Grid>
 </Page>

@@ -49,6 +49,30 @@ public partial class App : Application
         Services.Initialize();
         MainWindow = new MainWindow();
         MainWindow.Activate();
+
+        // If Explorer launched us via a file association (.pdf / .yunote), open
+        // that file in the editor on top of the home page.
+        TryOpenActivationFile();
+    }
+
+    // When the app is started by opening an associated file, Windows delivers the
+    // file through the AppLifecycle activation args (not OnLaunched's args). Read
+    // them and route the path through the normal editor-open flow.
+    private static void TryOpenActivationFile()
+    {
+        try
+        {
+            var activation = Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs();
+            if (activation?.Kind == Microsoft.Windows.AppLifecycle.ExtendedActivationKind.File
+                && activation.Data is Windows.ApplicationModel.Activation.IFileActivatedEventArgs fileArgs
+                && fileArgs.Files.Count > 0
+                && fileArgs.Files[0] is Windows.Storage.StorageFile file
+                && !string.IsNullOrEmpty(file.Path))
+            {
+                YuNotes.MainWindow.Navigate<Views.EditorPage>(file.Path);
+            }
+        }
+        catch (Exception ex) { LogError(ex, "OnLaunched file activation"); }
     }
 
     private static void Append(string detail)
