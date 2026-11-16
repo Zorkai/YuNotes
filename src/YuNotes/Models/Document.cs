@@ -12,6 +12,10 @@ public sealed class TemplateSettings
     public double Spacing { get; set; } = 32;
     public string LineColorHex { get; set; } = "#FFE0E3EA";
     public double LineThickness { get; set; } = 1;
+    // When true, the template is drawn only where YuNotes owns the page — blank
+    // pages and page-extension strips — and never over imported PDF content.
+    // Default false keeps older documents drawing over the whole page.
+    public bool SkipImportedPdf { get; set; }
 }
 
 public sealed class DocumentInfo

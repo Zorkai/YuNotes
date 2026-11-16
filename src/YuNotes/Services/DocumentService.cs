@@ -235,7 +235,8 @@ public sealed class DocumentService
         t is null ? null : new TemplateSettings
         {
             Kind = t.Kind, Spacing = t.Spacing,
-            LineColorHex = t.LineColorHex, LineThickness = t.LineThickness
+            LineColorHex = t.LineColorHex, LineThickness = t.LineThickness,
+            SkipImportedPdf = t.SkipImportedPdf
         };
 
     // Serializes the editable model to a standalone SQLite blob — the same
@@ -400,13 +401,15 @@ public sealed class DocumentService
 
     // Create a new YuNotes .pdf with a single blank page, ready to draw on. The PDF
     // also carries the SQLite editable state embedded inside it.
-    public Document CreatePdf(string path, string title, PdfContainerService container, TemplateKind template = TemplateKind.Blank)
+    public Document CreatePdf(string path, string title, PdfContainerService container,
+                              TemplateKind template = TemplateKind.Blank, double? templateSpacing = null)
     {
         if (File.Exists(path)) File.Delete(path);
         var doc = new Document();
         doc.Info.Title = title;
         doc.Info.FilePath = path;
         doc.Template.Kind = template;
+        if (templateSpacing is double sp) doc.Template.Spacing = sp;
         doc.Pages.Add(new NotePage { Index = 0 });
 
         var tempSqlite = Path.Combine(Path.GetTempPath(), $"yunotes-{Guid.NewGuid():N}.sqlite");

@@ -1419,6 +1419,10 @@ public sealed partial class EditorPage : Page
         catch (Exception ex) { await Notify("Export failed", ex.Message); }
     }
 
+    // A page whose background is imported PDF content (as opposed to a YuNotes
+    // blank page). Shared with PageRenderer's clip so they always agree.
+    private static bool IsPdfPage(NotePage p) => Rendering.PageRenderer.HasImportedPdf(p);
+
     // Template dialog with visual previews and apply-current / apply-all choice
     private async Task ChooseTemplateAsync()
     {
@@ -1426,6 +1430,8 @@ public sealed partial class EditorPage : Page
 
         var kinds = (TemplateKind[])Enum.GetValues(typeof(TemplateKind));
         var selected = _doc.Template.Kind;
+        var sizePicker = new TemplateSizePicker(selected,
+            (Canvas.ActivePage?.TemplateOverride ?? _doc.Template).Spacing);
 
         var previewsPanel = new ItemsControl();
         previewsPanel.ItemsPanel = MakeWrap();
@@ -1460,6 +1466,7 @@ public sealed partial class EditorPage : Page
             btn.Click += (s, _) =>
             {
                 selected = (TemplateKind)((Button)s).Tag;
+                sizePicker.SetKind(selected);
                 foreach (Button candidate in previewsPanel.Items.OfType<Button>())
                 {
                     var b = (Border)candidate.Content;
@@ -1477,6 +1484,31 @@ public sealed partial class EditorPage : Page
         var root = new StackPanel { Spacing = 12, MinWidth = 540 };
         root.Children.Add(new TextBlock { Text = "Choose a template, then apply to the current page or to every page.", Foreground = (Brush)Application.Current.Resources["AppTextSecondaryBrush"] });
         root.Children.Add(previewsPanel);
+        root.Children.Add(sizePicker.View);
+
+        // Where to draw — only asked when the note has imported PDF pages, since
+        // otherwise every page is YuNotes' own and the answer makes no difference.
+        // "Safe areas" = YuNotes blank pages + page-extension strips, never over
+        // the imported PDF content itself.
+        bool hasPdfPages = _doc.Pages.Any(IsPdfPage);
+        RadioButtons? scopeChoice = null;
+        if (hasPdfPages)
+        {
+            var effective = Canvas.ActivePage?.TemplateOverride ?? _doc.Template;
+            // A note that never had a template defaults to the safe choice.
+            bool skipPdf = effective.Kind == TemplateKind.Blank || effective.SkipImportedPdf;
+            scopeChoice = new RadioButtons
+            {
+                Header = "Where to draw the template",
+                Items =
+                {
+                    "Only on YuNotes pages and page extensions (not over imported PDF content)",
+                    "Everywhere, including over imported PDF content"
+                },
+                SelectedIndex = skipPdf ? 0 : 1
+            };
+            root.Children.Add(scopeChoice);
+        }
 
         var dlg = new ContentDialog
         {
@@ -1490,6 +1522,7 @@ public sealed partial class EditorPage : Page
         };
         var res = await dlg.ShowAsync();
         if (res == ContentDialogResult.None) return;
+        bool skipImportedPdf = scopeChoice?.SelectedIndex == 0;
 
         if (res == ContentDialogResult.Primary)
         {
@@ -1499,17 +1532,23 @@ public sealed partial class EditorPage : Page
             page.TemplateOverride = new TemplateSettings
             {
                 Kind = selected,
-                Spacing = _doc.Template.Spacing,
+                Spacing = sizePicker.Spacing,
                 LineColorHex = _doc.Template.LineColorHex,
-                LineThickness = _doc.Template.LineThickness
+                LineThickness = _doc.Template.LineThickness,
+                SkipImportedPdf = skipImportedPdf
             };
         }
         else
         {
             // Apply to all pages — set document template and drop every per-page override.
             _doc.Template.Kind = selected;
+            _doc.Template.Spacing = sizePicker.Spacing;
+            _doc.Template.SkipImportedPdf = skipImportedPdf;
             foreach (var p in _doc.Pages) p.TemplateOverride = null;
         }
+        // Template changes alter every affected page's flattened PDF image.
+        _doc.IsDirty = true;
+        _doc.MarkFlattenDirty(res == ContentDialogResult.Primary ? Canvas.ActivePage : null);
 
         Canvas.RefreshTemplates();
         Canvas.InvalidateAll();
@@ -1630,12 +1669,12 @@ public sealed partial class EditorPage : Page
         Canvas.CommitPageExtension(page, isLeft ? YuNotes.Controls.ExtendSide.Left : YuNotes.Controls.ExtendSide.Right, amount);
     }
 
-    internal static UIElement BuildTemplatePreview(TemplateKind kind, double w, double h)
+    internal static UIElement BuildTemplatePreview(TemplateKind kind, double w, double h, double spacing = 14)
     {
         // Render the template lines as XAML primitives (cheap and crisp).
         var canvas = new XamlCanvas { Width = w, Height = h, Background = new SolidColorBrush(Colors.White) };
         var lineBrush = new SolidColorBrush(Color.FromArgb(255, 200, 205, 215));
-        double spacing = 14;
+        spacing = Math.Max(2, spacing);
         switch (kind)
         {
             case TemplateKind.Blank:
@@ -2738,7 +2777,8 @@ public sealed partial class EditorPage : Page
             TemplateOverride = src.TemplateOverride is { } t
                 ? new TemplateSettings
                     { Kind = t.Kind, Spacing = t.Spacing,
-                      LineColorHex = t.LineColorHex, LineThickness = t.LineThickness }
+                      LineColorHex = t.LineColorHex, LineThickness = t.LineThickness,
+                      SkipImportedPdf = t.SkipImportedPdf }
                 : null
         };
 

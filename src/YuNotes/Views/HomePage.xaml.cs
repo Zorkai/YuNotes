@@ -851,6 +851,7 @@ public sealed partial class HomePage : Page
         var accent = (Brush)Application.Current.Resources["AppAccentBrush"];
         var border = (Brush)Application.Current.Resources["AppBorderBrush"];
         var previewRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+        var sizePicker = new TemplateSizePicker(selectedTemplate, TemplateSizePicker.DefaultSpacing);
 
         foreach (TemplateKind k in (TemplateKind[])Enum.GetValues(typeof(TemplateKind)))
         {
@@ -884,6 +885,7 @@ public sealed partial class HomePage : Page
             btn.Click += (s, _) =>
             {
                 selectedTemplate = (TemplateKind)((Button)s).Tag;
+                sizePicker.SetKind(selectedTemplate);
                 foreach (Button cand in previewRow.Children.OfType<Button>())
                 {
                     var b = (Border)cand.Content;
@@ -905,6 +907,7 @@ public sealed partial class HomePage : Page
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = previewRow
         });
+        root.Children.Add(sizePicker.View);
 
         var dlg = new ContentDialog
         {
@@ -920,7 +923,8 @@ public sealed partial class HomePage : Page
             : App.Services.Settings.Current.DocumentsFolder;
         Directory.CreateDirectory(folder);
         var path = UniquePath(folder, title, ".pdf");
-        var doc  = App.Services.Documents.CreatePdf(path, title, App.Services.PdfContainer, selectedTemplate);
+        var doc  = App.Services.Documents.CreatePdf(path, title, App.Services.PdfContainer, selectedTemplate,
+                                                       sizePicker.Spacing);
         TouchRecent(doc.Info.FilePath);
         MainWindow.Navigate<EditorPage>(doc, new DrillInNavigationTransitionInfo());
     }

@@ -90,6 +90,12 @@ public sealed class PageRenderer
     // crop of the PDF background at zoomed-in resolution (see PageCanvas.
     // UpdateHiResBackground) — drawn over the base bitmap, under the template
     // and ink.
+    // True when the page's background is imported PDF content rather than a
+    // YuNotes blank page. Keyed on the model (not on whether the bitmap is
+    // loaded yet) so the template never flashes over the PDF while it decodes.
+    public static bool HasImportedPdf(NotePage page) =>
+        page.BackgroundPng is { Length: > 0 } || page.SourcePageIndex is not null;
+
     public void DrawPage(CanvasDrawingSession ds, ICanvasResourceCreator dev, NotePage page, TemplateSettings template,
                          CanvasBitmap? backgroundBitmap, System.Collections.Generic.IDictionary<string, CanvasBitmap>? imageCache = null,
                          string? skipTextId = null, bool overlayOnly = false,
@@ -188,7 +194,26 @@ public sealed class PageRenderer
                     ds.DrawImage(hiResBackground, hr, hiResBackground.Bounds, 1f, interp);
                 }
             }
-            _templates.DrawTemplate(ds, totalWidth, page.Height, template);
+            if (template.SkipImportedPdf && HasImportedPdf(page))
+            {
+                // Template only where YuNotes owns the page: the extension strips
+                // left and right of the PDF content. Each strip draws the full
+                // template under a clip so the pattern stays aligned across them.
+                float pdfLeft  = (float)page.BackgroundLeft + previewExtLeft;
+                float pdfRight = pdfLeft + (page.BackgroundContentWidth > 0
+                                     ? (float)page.BackgroundContentWidth
+                                     : (float)page.Width - (float)page.BackgroundLeft);
+                if (pdfLeft > 0.5f)
+                    using (ds.CreateLayer(1f, new Rect(0, 0, pdfLeft, page.Height)))
+                        _templates.DrawTemplate(ds, totalWidth, page.Height, template);
+                if (totalWidth - pdfRight > 0.5f)
+                    using (ds.CreateLayer(1f, new Rect(pdfRight, 0, totalWidth - pdfRight, page.Height)))
+                        _templates.DrawTemplate(ds, totalWidth, page.Height, template);
+            }
+            else
+            {
+                _templates.DrawTemplate(ds, totalWidth, page.Height, template);
+            }
         }
 
         // When previewing a left extension, shift all element drawing right so
