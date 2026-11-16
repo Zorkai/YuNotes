@@ -2222,6 +2222,53 @@ public sealed class PageCanvas : ContentControl
         _canvas.Invalidate();
     }
 
+    // True when the selection holds anything that has a color (ink, shapes, text).
+    public bool SelectionHasRecolorable =>
+        Context.SelectedStrokeIds.Count + Context.SelectedShapeIds.Count + Context.SelectedTextIds.Count > 0;
+
+    // True when every selected colorable item is a highlighter stroke — the
+    // selection bar then offers the highlighter presets instead of the pen ones.
+    public bool SelectionIsAllHighlighter =>
+        Context.SelectedStrokeIds.Count > 0
+        && Context.SelectedShapeIds.Count == 0 && Context.SelectedTextIds.Count == 0
+        && Page.Strokes.Where(s => Context.SelectedStrokeIds.Contains(s.Id))
+                       .All(s => s.Kind == StrokeKind.Highlighter);
+
+    // Color of the first selected colorable item, used to mark the active swatch.
+    public Color? SelectionColor()
+    {
+        foreach (var id in Context.SelectedStrokeIds)
+            if (Page.Strokes.FirstOrDefault(s => s.Id == id) is { } s) return s.Color;
+        foreach (var id in Context.SelectedShapeIds)
+            if (Page.Shapes.FirstOrDefault(s => s.Id == id) is { } sh) return sh.Color;
+        foreach (var id in Context.SelectedTextIds)
+            if (Page.Texts.FirstOrDefault(t => t.Id == id) is { } t) return t.Color;
+        return null;
+    }
+
+    // Recolors the selected strokes, shapes and text boxes in place. Highlighter
+    // strokes keep their own alpha so they stay translucent; pen strokes stay
+    // opaque even if a (translucent) highlighter swatch was picked. Recorded as
+    // one undoable mutation via Context.Mutated, like Delete/Duplicate.
+    public void RecolorSelection(Color c)
+    {
+        bool changed = false;
+        foreach (var s in Page.Strokes.Where(s => Context.SelectedStrokeIds.Contains(s.Id)))
+        {
+            var nc = Color.FromArgb(s.Kind == StrokeKind.Highlighter ? s.Color.A : (byte)255, c.R, c.G, c.B);
+            if (!nc.Equals(s.Color)) { s.Color = nc; changed = true; }
+        }
+        foreach (var sh in Page.Shapes.Where(s => Context.SelectedShapeIds.Contains(s.Id)))
+            if (!sh.Color.Equals(c)) { sh.Color = c; changed = true; }
+        foreach (var t in Page.Texts.Where(t => Context.SelectedTextIds.Contains(t.Id)))
+            if (!t.Color.Equals(c)) { t.Color = c; changed = true; }
+        if (!changed) return;
+
+        Context.Mutated?.Invoke();
+        if (SelectionBbox(out var b)) InvalidateSelectionRegion(b, 0);
+        else _canvas.Invalidate();
+    }
+
     public void DuplicateSelection(float offsetX = 24, float offsetY = 24)
     {
         var newStrokeIds = new List<string>();

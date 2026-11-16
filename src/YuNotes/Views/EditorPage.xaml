@@ -348,6 +348,11 @@
                 <ThemeShadow />
             </Border.Shadow>
             <StackPanel x:Name="SelectionActionsPanel" Orientation="Horizontal" Spacing="4">
+                <c:ColorPickerControl x:Name="SelColorPicker"
+                                      VerticalAlignment="Center"
+                                      Margin="2,0"
+                                      ToolTipService.ToolTip="Change color" />
+                <Border x:Name="SelColorSep" Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" VerticalAlignment="Center" />
                 <Button x:Name="SelDuplicateBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Duplicate (Ctrl+D)">
                     <FontIcon Glyph="&#xe14d;" />
                 </Button>

@@ -163,6 +163,8 @@ public sealed partial class EditorPage : Page
         SelDeleteBtn.Click += (_, __) => { Canvas.DeleteSelection(); UpdateSelectionUi(); };
         SelDuplicateBtn.Click += (_, __) => { Canvas.DuplicateSelection(); UpdateSelectionUi(); };
         SelClearBtn.Click += (_, __) => { Canvas.ClearSelection(); UpdateSelectionUi(); };
+        // Selection bar color: recolors the selected ink / shapes / text in place.
+        SelColorPicker.ColorChanged += (_, c) => Canvas.RecolorSelection(c);
 
         PagePanelBtn.Click += (_, __) => TogglePagePanel();
         PageEditModeBtn.Click += (_, __) => { _pagePanelEditMode = !_pagePanelEditMode; ClearPageSelection(); if (_pagePanelOpen) _ = RefreshPagePanelAsync(); };
@@ -193,6 +195,13 @@ public sealed partial class EditorPage : Page
         ColorPicker.ColorChanged += (_, c) =>
         {
             Canvas.Context.CurrentColor = c;
+            // With a selection active (select tools only), the toolbar color also
+            // recolors the selected items, matching the selection bar's button.
+            if ((_selected is ToolKind.Lasso or ToolKind.RectSelect) && Canvas.SelectionHasRecolorable)
+            {
+                Canvas.RecolorSelection(c);
+                SyncSelectionColorPicker();
+            }
         };
         WidthPicker.WidthChanged += (_, w) =>
         {
@@ -453,6 +462,7 @@ public sealed partial class EditorPage : Page
 
         // Color and width pickers follow the floating toolbar size
         ColorPicker.SetButtonSize(colorBtn);
+        SelColorPicker.SetButtonSize(colorBtn);
         WidthPicker.SetChipSize(chip, chipDot);
     }
 
@@ -1973,6 +1983,7 @@ public sealed partial class EditorPage : Page
     {
         if (Canvas.HasSelection)
         {
+            SyncSelectionColorPicker();
             SelectionActions.Visibility = Visibility.Visible;
             PositionSelectionActions();
         }
@@ -1980,6 +1991,25 @@ public sealed partial class EditorPage : Page
         {
             SelectionActions.Visibility = Visibility.Collapsed;
         }
+    }
+
+    // Shows the selection bar's color button only when something colorable is
+    // selected (not just images), with the highlighter presets for an
+    // all-highlighter selection and the first item's color marked as current.
+    private void SyncSelectionColorPicker()
+    {
+        bool show = Canvas.SelectionHasRecolorable;
+        SelColorPicker.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        SelColorSep.Visibility = SelColorPicker.Visibility;
+        if (!show) return;
+
+        var s = App.Services.Settings.Current;
+        bool hl = Canvas.SelectionIsAllHighlighter;
+        var presets = hl ? s.HighlighterPresetColors : s.PenPresetColors;
+        var current = Canvas.SelectionColor() ?? Canvas.Context.CurrentColor;
+        // Highlighter presets carry their alpha, so match them raw; pen presets
+        // are opaque.
+        SelColorPicker.SetPresets(presets, hl ? current : Color.FromArgb(255, current.R, current.G, current.B));
     }
 
     // Float the Duplicate/Delete/Clear bar just above the selected content (like the

@@ -599,6 +599,10 @@ public sealed partial class InkCanvasControl : UserControl
     public void DeleteSelection() => ActivePageCanvas?.DeleteSelection();
     public void DuplicateSelection() => ActivePageCanvas?.DuplicateSelection();
     public void ClearSelection() => ActivePageCanvas?.ClearSelection();
+    public void RecolorSelection(Windows.UI.Color c) => ActivePageCanvas?.RecolorSelection(c);
+    public bool SelectionHasRecolorable => ActivePageCanvas?.SelectionHasRecolorable == true;
+    public bool SelectionIsAllHighlighter => ActivePageCanvas?.SelectionIsAllHighlighter == true;
+    public Windows.UI.Color? SelectionColor() => ActivePageCanvas?.SelectionColor();
     public byte[]? RenderRegionOfCurrentPage(float x, float y, float w, float h)
         => ActivePageCanvas?.RenderRegionToPng(x, y, w, h);
 
