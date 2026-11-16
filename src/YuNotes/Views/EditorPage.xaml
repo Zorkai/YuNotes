@@ -575,9 +575,12 @@
                 <!-- Right: view · insert menu · settings -->
                 <StackPanel x:Name="ToolbarSecondary" Grid.Column="2" Orientation="Horizontal" Spacing="8"
                             Padding="0,0,4,0" VerticalAlignment="Center">
-                    <!-- Fixed slot left of the page sorter (user request); not part of
-                         the reorderable action slots, though the settings hide toggle
-                         still applies. -->
+                    <!-- Fixed slots left of the page sorter (user request); not part of
+                         the reorderable action slots, though the settings hide toggles
+                         still apply. -->
+                    <Button x:Name="TemplateBtn" Style="{StaticResource TopBarButtonStyle}" ToolTipService.ToolTip="Page template">
+                        <FontIcon Glyph="&#xf79d;" FontSize="18" />
+                    </Button>
                     <Button x:Name="ScreenshotBtn" Style="{StaticResource TopBarButtonStyle}" ToolTipService.ToolTip="Take screenshot">
                         <FontIcon Glyph="&#xe3b0;" FontSize="18" />
                     </Button>
@@ -612,10 +615,6 @@
                                     </MenuFlyoutItem>
                                     <MenuFlyoutItem x:Name="AddPdfPagesBtn" Text="Add pages from a PDF">
                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe415;" /></MenuFlyoutItem.Icon>
-                                    </MenuFlyoutItem>
-                                    <MenuFlyoutSeparator />
-                                    <MenuFlyoutItem x:Name="TemplateBtn" Text="Page template">
-                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xf79d;" /></MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
                                 </MenuFlyout>
                             </Button.Flyout>

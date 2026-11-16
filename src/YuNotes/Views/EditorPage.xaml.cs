@@ -195,9 +195,12 @@ public sealed partial class EditorPage : Page
         ColorPicker.ColorChanged += (_, c) =>
         {
             Canvas.Context.CurrentColor = c;
-            // With a selection active (select tools only), the toolbar color also
-            // recolors the selected items, matching the selection bar's button.
-            if ((_selected is ToolKind.Lasso or ToolKind.RectSelect) && Canvas.SelectionHasRecolorable)
+            // With a selection active, the toolbar color also recolors the selected
+            // items, matching the selection bar's button. Deliberately not gated on
+            // _selected being a select tool: a pen-barrel lasso is momentary, so
+            // _selected stays Pen while the selection lives. Leaving a select tool
+            // clears the selection (SelectTool), so a live one is always intended.
+            if (Canvas.HasSelection && Canvas.SelectionHasRecolorable)
             {
                 Canvas.RecolorSelection(c);
                 SyncSelectionColorPicker();
@@ -492,10 +495,10 @@ public sealed partial class EditorPage : Page
         foreach (var key in drawOrder) ToolbarPrimary.Children.Insert(idx++, toolMap[key]);
 
         // Reorderable action slots in ToolbarSecondary. The insert actions
-        // (blank page / PDF pages / template) live inside AddMenuBtn's menu,
-        // and the screenshot button has a FIXED slot left of the page sorter
-        // (user request) — so only the Add menu itself is placed here. A saved
-        // "Screenshot" entry in ToolbarActionOrder is simply ignored.
+        // (blank page / PDF pages) live inside AddMenuBtn's menu, and the
+        // template and screenshot buttons have FIXED slots left of the page
+        // sorter (user request) — so only the Add menu itself is placed here.
+        // Saved "Template"/"Screenshot" entries in ToolbarActionOrder are ignored.
         var actionMap = new Dictionary<string, UIElement>
         {
             ["Add"] = AddMenuShell,
@@ -535,15 +538,15 @@ public sealed partial class EditorPage : Page
         ShapeGroup.Visibility     = Show("Shape");
         SelectGroup.Visibility    = Show("Select");
 
-        // Secondary bar — action buttons. The insert actions are menu items now;
-        // hiding one hides its row, and the whole Insert menu button collapses
-        // only when all three are hidden.
+        // Secondary bar — action buttons. Template and Screenshot are fixed
+        // buttons; the page-insert actions are menu items, hiding one hides its
+        // row, and the Insert menu button collapses only when both are hidden.
         ScreenshotBtn.Visibility   = Show("Screenshot");
+        TemplateBtn.Visibility     = Show("Template");
         AddPageBtn.Visibility      = Show("AddPage");
         AddPdfPagesBtn.Visibility  = Show("AddPdfPages");
         ExportBtn.Visibility       = Show("Export");
-        TemplateBtn.Visibility     = Show("Template");
-        bool anyAddVisible = !IsHidden("AddPage") || !IsHidden("AddPdfPages") || !IsHidden("Template");
+        bool anyAddVisible = !IsHidden("AddPage") || !IsHidden("AddPdfPages");
         AddMenuShell.Visibility = anyAddVisible ? Visibility.Visible : Visibility.Collapsed;
         // TopSep1 is an invisible layout anchor for ApplyToolbarOrder — leave it collapsed.
     }

@@ -33,6 +33,11 @@ public sealed class AppSettings
         "#8033CCFF"
     };
 
+    // Up to 3 most recent custom colors picked via the color flyout's custom
+    // picker (newest first, "#AARRGGBB"), shown after the presets. Colors that
+    // match a preset are never stored.
+    public List<string> RecentCustomColors { get; set; } = new();
+
     // Pen buttons
     public PenButtonAction BarrelButtonAction { get; set; } = PenButtonAction.Eraser;
 

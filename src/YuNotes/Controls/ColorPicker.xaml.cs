@@ -21,6 +21,47 @@ public sealed partial class ColorPickerControl : UserControl
         // The swatch borders/glyphs are brushed in code (below), so re-resolve
         // them when the effective theme flips under a forced Light/Dark override.
         ActualThemeChanged += (_, __) => Rebuild();
+        // Several pickers share the recent-colors list (toolbar + selection bar),
+        // so refresh on open to pick up colors added through another one.
+        ColorFlyout.Opening += (_, __) => Rebuild();
+    }
+
+    private const int MaxRecentCustomColors = 3;
+
+    private static bool SameRgb(Color a, Color b) => a.R == b.R && a.G == b.G && a.B == b.B;
+
+    private bool MatchesPreset(Color c)
+    {
+        foreach (var hex in _presets)
+            if (TryParseHex(hex, out var p) && SameRgb(p, c)) return true;
+        return false;
+    }
+
+    // Newest-first recent custom colors, skipping any that match a current preset.
+    private List<Color> RecentColors()
+    {
+        var list = new List<Color>();
+        foreach (var hex in App.Services.Settings.Current.RecentCustomColors)
+            if (TryParseHex(hex, out var c) && !MatchesPreset(c) && !list.Exists(x => SameRgb(x, c)))
+                list.Add(c);
+        return list;
+    }
+
+    private void RememberCustomColor(Color c)
+    {
+        if (MatchesPreset(c)) return;
+        var settings = App.Services.Settings.Current;
+        var list = settings.RecentCustomColors;
+        list.RemoveAll(h => TryParseHex(h, out var x) && SameRgb(x, c));
+        list.Insert(0, ToHex(c));
+        if (list.Count > MaxRecentCustomColors) list.RemoveRange(MaxRecentCustomColors, list.Count - MaxRecentCustomColors);
+        App.Services.Settings.Save();
+    }
+
+    private static bool TryParseHex(string hex, out Color c)
+    {
+        try { c = ParseHex(hex); return true; }
+        catch { c = default; return false; }
     }
 
     public void SetPresets(IList<string> hexes, Color current)
@@ -67,11 +108,29 @@ public sealed partial class ColorPickerControl : UserControl
         CurrentColorBtn.Background = new SolidColorBrush(_current);
         CurrentColorBtn.BorderBrush = borderBrush;
 
-        // Flyout content: preset swatches in a row, then a custom-color button.
+        // Flyout content: preset swatches in a row, then up to 3 recent custom
+        // colors (behind a thin divider), then a custom-color button.
         FlyoutPanel.Children.Clear();
         foreach (var hex in _presets)
+            if (TryParseHex(hex, out var c)) AddSwatch(c, null);
+
+        var recent = RecentColors();
+        if (recent.Count > 0)
         {
-            var c = ParseHex(hex);
+            bool vertical = FlyoutPanel.Orientation == Orientation.Vertical;
+            FlyoutPanel.Children.Add(new Border
+            {
+                Background = borderBrush,
+                Width = vertical ? 24 : 1,
+                Height = vertical ? 1 : 24,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            foreach (var c in recent) AddSwatch(c, "Recent custom color");
+        }
+
+        void AddSwatch(Color c, string? tooltip)
+        {
             bool active = ColorEqual(c, _current);
             var swatch = new Button
             {
@@ -96,11 +155,12 @@ public sealed partial class ColorPickerControl : UserControl
                         : Color.FromArgb(0xFF, 0x1B, 0x1F, 0x2A))
                 };
             }
+            if (tooltip is not null) ToolTipService.SetToolTip(swatch, tooltip);
             var captured = c;
             swatch.Click += (_, __) =>
             {
-                SetCurrent(captured, fire: true);
                 ColorFlyout.Hide();
+                SetCurrent(captured, fire: true);
             };
             FlyoutPanel.Children.Add(swatch);
         }
@@ -138,7 +198,10 @@ public sealed partial class ColorPickerControl : UserControl
                 XamlRoot = this.XamlRoot
             };
             if (await dlg.ShowAsync() == ContentDialogResult.Primary)
+            {
+                RememberCustomColor(picker.Color);
                 SetCurrent(picker.Color, fire: true);
+            }
         };
         FlyoutPanel.Children.Add(custom);
     }
