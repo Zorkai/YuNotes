@@ -6,8 +6,9 @@ using YuNotes.Models;
 namespace YuNotes.Services;
 
 // Document-level undo/redo via snapshots of the editable content
-// (strokes, texts, images). Backgrounds + template are not snapshotted —
-// they don't change frequently and would blow up memory.
+// (strokes, texts, images) plus page templates (document template and each
+// page's override — a few fields, so cheap). Backgrounds are not snapshotted —
+// they don't change and would blow up memory.
 public sealed class HistoryService
 {
     private const int MaxStack = 60;
@@ -82,6 +83,17 @@ internal sealed class DocSnapshot
 {
     private readonly List<PageSnapshot> _pages = new();
     private readonly Dictionary<string, PageSnapshot> _byId = new();
+    // Document-wide template, always captured fresh (it's tiny), so undoing
+    // "Apply to all pages" restores it.
+    private TemplateSettings _docTemplate = new();
+
+    internal static TemplateSettings? CloneTemplate(TemplateSettings? t) =>
+        t is null ? null : new TemplateSettings
+        {
+            Kind = t.Kind, Spacing = t.Spacing,
+            LineColorHex = t.LineColorHex, LineThickness = t.LineThickness,
+            SkipImportedPdf = t.SkipImportedPdf
+        };
 
     // Copy-on-write: when `changedPage` is known, every other page's snapshot
     // is shared by reference from `prev`. PageSnapshots are immutable after
@@ -89,7 +101,7 @@ internal sealed class DocSnapshot
     // missing from `prev` (page added since) is simply built fresh.
     public static DocSnapshot From(Document d, DocSnapshot? prev = null, NotePage? changedPage = null)
     {
-        var s = new DocSnapshot();
+        var s = new DocSnapshot { _docTemplate = CloneTemplate(d.Template)! };
         foreach (var p in d.Pages)
         {
             if (prev is not null && changedPage is not null && !ReferenceEquals(p, changedPage)
@@ -105,6 +117,7 @@ internal sealed class DocSnapshot
                 Width = p.Width,
                 BackgroundLeft = p.BackgroundLeft,
                 BackgroundContentWidth = p.BackgroundContentWidth,
+                TemplateOverride = CloneTemplate(p.TemplateOverride),
             };
             foreach (var st in p.Strokes)
             {
@@ -162,6 +175,14 @@ internal sealed class DocSnapshot
 
     public void ApplyTo(Document d)
     {
+        // Copy fields into the live object rather than replacing it, so anything
+        // holding a reference to Document.Template stays valid.
+        d.Template.Kind = _docTemplate.Kind;
+        d.Template.Spacing = _docTemplate.Spacing;
+        d.Template.LineColorHex = _docTemplate.LineColorHex;
+        d.Template.LineThickness = _docTemplate.LineThickness;
+        d.Template.SkipImportedPdf = _docTemplate.SkipImportedPdf;
+
         // Restore by page id; ignores any newly added pages (rare; user can save first).
         foreach (var ps in _pages)
         {
@@ -172,6 +193,7 @@ internal sealed class DocSnapshot
             p.Width = ps.Width;
             p.BackgroundLeft = ps.BackgroundLeft;
             p.BackgroundContentWidth = ps.BackgroundContentWidth;
+            p.TemplateOverride = CloneTemplate(ps.TemplateOverride);
 
             p.Strokes.Clear();
             foreach (var st in ps.Strokes)
@@ -218,6 +240,7 @@ internal sealed class PageSnapshot
     public double Width;
     public double BackgroundLeft;
     public double BackgroundContentWidth;
+    public TemplateSettings? TemplateOverride;
     public List<Stroke> Strokes = new();
     public List<ShapeElement> Shapes = new();
     public List<TextElement> Texts = new();

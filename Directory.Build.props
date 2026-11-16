@@ -24,7 +24,7 @@
        The MSIX Identity requires all four parts, so keep the 4-part form.
        ═══════════════════════════════════════════════════════════════════════ -->
   <PropertyGroup>
-    <YuNotesVersion>1.1.6.0</YuNotesVersion>
+    <YuNotesVersion>1.1.7.0</YuNotesVersion>
   </PropertyGroup>
 
   <!-- Derive the standard assembly version properties from the single value. -->

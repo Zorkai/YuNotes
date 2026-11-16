@@ -952,12 +952,14 @@ public sealed partial class EditorPage : Page
     {
         AfterHistoryStep(App.Services.History.Undo());
         Canvas.ResizeAllCanvases();  // page.Width may have changed (extension undo)
+        Canvas.RefreshTemplates();   // template may have changed (template undo)
         Canvas.InvalidateAll();
     }
     private void DoRedo()
     {
         AfterHistoryStep(App.Services.History.Redo());
         Canvas.ResizeAllCanvases();
+        Canvas.RefreshTemplates();
         Canvas.InvalidateAll();
     }
 
