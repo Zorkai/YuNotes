@@ -46,7 +46,21 @@ public sealed class HistoryService
     public void RecordMutation(NotePage? changedPage = null)
     {
         if (_doc is null || _current is null) return;
-        _undo.Push(_current);
+        Push(DocSnapshot.From(_doc, _current, changedPage));
+    }
+
+    // For adding, deleting or reordering pages: no page's CONTENT changed, so
+    // every page already in the previous snapshot is shared and only newly
+    // added pages are captured — O(new pages), not O(document).
+    public void RecordPageListChange()
+    {
+        if (_doc is null || _current is null) return;
+        Push(DocSnapshot.From(_doc, _current, changedPage: null, shareExisting: true));
+    }
+
+    private void Push(DocSnapshot next)
+    {
+        _undo.Push(_current!);
         if (_undo.Count > MaxStack)
         {
             var tmp = _undo.ToArray();
@@ -54,7 +68,7 @@ public sealed class HistoryService
             for (int i = tmp.Length - 2; i >= 0; i--) _undo.Push(tmp[i]);
         }
         _redo.Clear();
-        _current = DocSnapshot.From(_doc, _current, changedPage);
+        _current = next;
         StateChanged?.Invoke();
     }
 
@@ -106,12 +120,16 @@ internal sealed class DocSnapshot
     // is shared by reference from `prev`. PageSnapshots are immutable after
     // creation (ApplyTo clones OUT of them), so sharing is safe. A page id
     // missing from `prev` (page added since) is simply built fresh.
-    public static DocSnapshot From(Document d, DocSnapshot? prev = null, NotePage? changedPage = null)
+    // `shareExisting`: share EVERY page present in `prev` (page-list changes,
+    // where no page's content changed).
+    public static DocSnapshot From(Document d, DocSnapshot? prev = null, NotePage? changedPage = null,
+                                   bool shareExisting = false)
     {
         var s = new DocSnapshot { _docTemplate = CloneTemplate(d.Template)! };
         foreach (var p in d.Pages)
         {
-            if (prev is not null && changedPage is not null && !ReferenceEquals(p, changedPage)
+            if (prev is not null
+                && (shareExisting || (changedPage is not null && !ReferenceEquals(p, changedPage)))
                 && prev._byId.TryGetValue(p.Id, out var shared))
             {
                 s.Add(shared);

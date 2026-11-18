@@ -1145,7 +1145,8 @@ public sealed partial class EditorPage : Page
     // undo right after a save could be silently lost on close.)
     private void AfterHistoryStep(IReadOnlyList<string> changedPageIds)
     {
-        if (_doc is null || changedPageIds.Count == 0) return;
+        if (_doc is null) return;
+        if (changedPageIds.Count == 0 && !App.Services.History.LastStepChangedPageSet) return;
         _doc.IsDirty = true;
         foreach (var id in changedPageIds) _doc.FlattenDirtyPageIds.Add(id);
         UpdateSaveStateUi();
@@ -1209,7 +1210,7 @@ public sealed partial class EditorPage : Page
         var newPage = new NotePage { Index = _doc.Pages.Count, Width = newW, Height = last?.Height ?? 1754 };
         _doc.Pages.Add(newPage);
         Canvas.Rebuild();
-        App.Services.History.RecordMutation(newPage);   // undoable: undo removes the page
+        App.Services.History.RecordPageListChange();   // undoable: undo removes the page
         UpdateHistoryUi();
         MarkPageSetChanged();
         if (_pagePanelOpen) _ = RefreshPagePanelAsync();
@@ -1233,7 +1234,7 @@ public sealed partial class EditorPage : Page
                 _doc.Pages.Add(p);
             }
             Canvas.Rebuild();
-            App.Services.History.RecordMutation();   // undoable: undo removes the added pages
+            App.Services.History.RecordPageListChange();   // undoable: undo removes the added pages
             UpdateHistoryUi();
             MarkPageSetChanged();
             if (_pagePanelOpen) _ = RefreshPagePanelAsync();
@@ -2880,7 +2881,7 @@ public sealed partial class EditorPage : Page
 
         for (int i = 0; i < _doc.Pages.Count; i++) _doc.Pages[i].Index = i;
         Canvas.Rebuild();
-        App.Services.History.Bind(_doc);
+        App.Services.History.RecordPageListChange();   // undoable
         UpdateHistoryUi();
         MarkPageSetChanged();
 
@@ -2904,7 +2905,7 @@ public sealed partial class EditorPage : Page
         var dlg = new ContentDialog
         {
             Title = "Delete pages",
-            Content = $"Delete {indices.Count} selected pages? This cannot be undone.",
+            Content = $"Delete {indices.Count} selected pages? You can bring them back with Undo (Ctrl+Z).",
             PrimaryButtonText = "Delete",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close,
@@ -2917,7 +2918,7 @@ public sealed partial class EditorPage : Page
 
         for (int i = 0; i < _doc.Pages.Count; i++) _doc.Pages[i].Index = i;
         Canvas.Rebuild();
-        App.Services.History.Bind(_doc);
+        App.Services.History.RecordPageListChange();   // undoable
         UpdateHistoryUi();
         MarkPageSetChanged();
 
@@ -2934,7 +2935,7 @@ public sealed partial class EditorPage : Page
         _doc.Pages.Insert(index + 1, clone);
         for (int i = 0; i < _doc.Pages.Count; i++) _doc.Pages[i].Index = i;
         Canvas.Rebuild();
-        App.Services.History.RecordMutation(clone);   // undoable
+        App.Services.History.RecordPageListChange();   // undoable
         UpdateHistoryUi();
         MarkPageSetChanged();
         await RefreshPagePanelAsync();
@@ -3006,7 +3007,7 @@ public sealed partial class EditorPage : Page
         _doc.Pages.Insert(index, newPage);
         for (int i = 0; i < _doc.Pages.Count; i++) _doc.Pages[i].Index = i;
         Canvas.Rebuild();
-        App.Services.History.RecordMutation(newPage);   // undoable
+        App.Services.History.RecordPageListChange();   // undoable
         UpdateHistoryUi();
         MarkPageSetChanged();
         if (_pagePanelOpen) _ = RefreshPagePanelAsync();
@@ -3021,7 +3022,7 @@ public sealed partial class EditorPage : Page
         _doc.Pages.Insert(to, page);
         for (int i = 0; i < _doc.Pages.Count; i++) _doc.Pages[i].Index = i;
         Canvas.Rebuild();
-        App.Services.History.Bind(_doc);
+        App.Services.History.RecordPageListChange();   // undoable
         UpdateHistoryUi();
         MarkPageSetChanged();
         await RefreshPagePanelAsync();
@@ -3038,7 +3039,7 @@ public sealed partial class EditorPage : Page
         var dlg = new ContentDialog
         {
             Title = "Delete page",
-            Content = $"Delete page {index + 1}? This cannot be undone.",
+            Content = $"Delete page {index + 1}? You can bring it back with Undo (Ctrl+Z).",
             PrimaryButtonText = "Delete",
             CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Close,
@@ -3050,7 +3051,7 @@ public sealed partial class EditorPage : Page
         _doc.Pages.RemoveAt(index);
         for (int i = 0; i < _doc.Pages.Count; i++) _doc.Pages[i].Index = i;
         Canvas.Rebuild();
-        App.Services.History.Bind(_doc);
+        App.Services.History.RecordPageListChange();   // undoable
         UpdateHistoryUi();
         MarkPageSetChanged();
         await RefreshPagePanelAsync();

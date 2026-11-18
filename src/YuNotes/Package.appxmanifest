@@ -14,7 +14,7 @@
   <!-- NOTE: Version is set from ONE place — <YuNotesVersion> in the repo-root
        Directory.Build.props — and stamped in here automatically at build time.
        Don't hand-edit the Version below; a build will overwrite it to match. -->
-  <Identity Name="YunusOztrk.YuNotes" Publisher="CN=65825C0F-789D-4193-9961-838FD29CFB57" Version="1.1.20.0" />
+  <Identity Name="YunusOztrk.YuNotes" Publisher="CN=65825C0F-789D-4193-9961-838FD29CFB57" Version="1.1.21.0" />
   <Properties>
     <DisplayName>YuNotes</DisplayName>
     <PublisherDisplayName>Yunus Oztürk</PublisherDisplayName>
