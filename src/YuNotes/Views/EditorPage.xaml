@@ -551,16 +551,30 @@
                     </Border>
                 </StackPanel>
 
-                <!-- Center: document title + save state. Non-hit-testable so the
-                     drag region underneath still moves the window. -->
+                <!-- Center: document title + save state. Sits over the drag region,
+                     which owns all input there; only TopBarTitleHost is carved out
+                     as a passthrough rect (UpdateTitlePassthrough) so the title can
+                     be clicked to rename while the rest still drags the window. -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10"
-                            HorizontalAlignment="Center" VerticalAlignment="Center"
-                            IsHitTestVisible="False">
-                    <TextBlock x:Name="TopBarTitle"
-                               FontSize="14" FontWeight="SemiBold" MaxWidth="360"
-                               VerticalAlignment="Center"
-                               TextTrimming="CharacterEllipsis" />
-                    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <Grid x:Name="TopBarTitleHost" VerticalAlignment="Center">
+                        <Button x:Name="TopBarTitleBtn"
+                                Background="Transparent" BorderThickness="0"
+                                Padding="8,4" CornerRadius="6"
+                                ToolTipService.ToolTip="Rename">
+                            <TextBlock x:Name="TopBarTitle"
+                                       FontSize="14" FontWeight="SemiBold" MaxWidth="360"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis" />
+                        </Button>
+                        <TextBox x:Name="TopBarTitleBox"
+                                 Visibility="Collapsed"
+                                 FontSize="14" FontWeight="SemiBold"
+                                 MinWidth="200" MaxWidth="360"
+                                 VerticalAlignment="Center" />
+                    </Grid>
+                    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
+                                IsHitTestVisible="False">
                         <FontIcon x:Name="SaveStateCheck" Glyph="&#xe5ca;" FontSize="14"
                                   Foreground="{ThemeResource AppSuccessBrush}" VerticalAlignment="Center" />
                         <Ellipse x:Name="SaveStateDot" Width="6" Height="6"

@@ -245,7 +245,22 @@ public sealed partial class EditorPage : Page
         {
             MainWindow.SetDragRegion(TopBarDragRegion);
             TopBarGrid.Padding = new Thickness(6, 2, 6 + MainWindow.CaptionButtonInset, 2);
+            UpdateTitlePassthrough();
         };
+        Unloaded += (_, __) => SetTitlePassthrough(null);
+
+        // Click-to-rename title.
+        // The title moves (not just resizes) when toolbar buttons beside it
+        // show/hide, so track every layout pass; UpdateTitlePassthrough only
+        // touches the OS region when the bounds actually changed.
+        TopBarTitleHost.LayoutUpdated += (_, __) => UpdateTitlePassthrough();
+        TopBarTitleBtn.Click += (_, __) => BeginTitleEdit();
+        TopBarTitleBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == VirtualKey.Enter) { e.Handled = true; _ = EndTitleEditAsync(commit: true); }
+            else if (e.Key == VirtualKey.Escape) { e.Handled = true; _ = EndTitleEditAsync(commit: false); }
+        };
+        TopBarTitleBox.LostFocus += (_, __) => _ = EndTitleEditAsync(commit: true);
 
         DragHandle.PointerPressed += DragHandle_PointerPressed;
         DragHandle.PointerMoved += DragHandle_PointerMoved;
@@ -638,6 +653,150 @@ public sealed partial class EditorPage : Page
             LoadingRing.IsActive = false;
             LoadingOverlay.Visibility = Visibility.Collapsed;
         }
+    }
+
+    // ── Click-to-rename title ─────────────────────────────────────────────────
+
+    // The top bar's center column is the window drag region (SetTitleBar), which
+    // swallows all input. Carve the title out as a passthrough rect so it gets
+    // clicks; re-run whenever its bounds can change.
+    private void UpdateTitlePassthrough()
+    {
+        if (XamlRoot is null || TopBarTitleHost.ActualWidth <= 0) return;
+        try
+        {
+            var b = TopBarTitleHost.TransformToVisual(null)
+                .TransformBounds(new Windows.Foundation.Rect(0, 0, TopBarTitleHost.ActualWidth, TopBarTitleHost.ActualHeight));
+            double s = XamlRoot.RasterizationScale;
+            var r = new Windows.Graphics.RectInt32(
+                (int)Math.Floor(b.X * s), (int)Math.Floor(b.Y * s),
+                (int)Math.Ceiling(b.Width * s), (int)Math.Ceiling(b.Height * s));
+            if (_titlePassthrough is { } last && last.X == r.X && last.Y == r.Y
+                && last.Width == r.Width && last.Height == r.Height) return;
+            SetTitlePassthrough(r);
+        }
+        catch (Exception ex) { App.LogError(ex, "UpdateTitlePassthrough"); }
+    }
+
+    private Windows.Graphics.RectInt32? _titlePassthrough;
+
+    // null clears it (page unloaded), so other pages' title bars are unaffected.
+    private bool _titlePassthroughErrorLogged;
+
+    private void SetTitlePassthrough(Windows.Graphics.RectInt32? rect)
+    {
+        try
+        {
+            MainWindow.SetTitleBarPassthrough(
+                rect is { } r ? new[] { r } : Array.Empty<Windows.Graphics.RectInt32>());
+            // Cache only on success so a failed attempt is retried on the next
+            // layout pass instead of being treated as applied.
+            _titlePassthrough = rect;
+        }
+        catch (Exception ex)
+        {
+            // Clearing on Unloaded can run after the window is gone (app closing):
+            // nothing to clear then, so stay quiet.
+            if (rect is null) return;
+            // UpdateTitlePassthrough runs on every layout pass — log once, not per frame.
+            if (!_titlePassthroughErrorLogged) App.LogError(ex, "SetTitlePassthrough");
+            _titlePassthroughErrorLogged = true;
+        }
+    }
+
+    private bool _editingTitle;
+
+    private void BeginTitleEdit()
+    {
+        if (_doc is null || _editingTitle) return;
+        _editingTitle = true;
+        TopBarTitleBox.Text = _doc.Info.Title;
+        TopBarTitleBtn.Visibility = Visibility.Collapsed;
+        TopBarTitleBox.Visibility = Visibility.Visible;
+        TopBarTitleBox.Focus(FocusState.Programmatic);
+        TopBarTitleBox.SelectAll();
+    }
+
+    private async Task EndTitleEditAsync(bool commit)
+    {
+        if (!_editingTitle) return;
+        _editingTitle = false;   // guards the LostFocus that hiding the box triggers
+        var text = TopBarTitleBox.Text;
+        TopBarTitleBox.Visibility = Visibility.Collapsed;
+        TopBarTitleBtn.Visibility = Visibility.Visible;
+        if (commit) await RenameDocumentAsync(text);
+    }
+
+    // Renames the note: its title (embedded, shown on the home screen) and its
+    // file on disk to match, carrying path-keyed settings (recents, last page)
+    // over to the new path. If the file can't be renamed (e.g. open in another
+    // app) the title still changes and the user is told.
+    private async Task RenameDocumentAsync(string requested)
+    {
+        if (_doc is null) return;
+        var title = (requested ?? "").Trim();
+        if (title.Length == 0 || title == _doc.Info.Title) return;
+
+        // Don't move the file out from under an in-flight save.
+        while (_saving) await Task.Delay(100);
+
+        _doc.Info.Title = title;
+        TopBarTitle.Text = title;
+
+        var oldPath = _doc.Info.FilePath;
+        string? fileError = null;
+        if (!string.IsNullOrEmpty(oldPath) && File.Exists(oldPath))
+        {
+            var safeName = string.Concat(title.Select(c => System.IO.Path.GetInvalidFileNameChars().Contains(c) ? '_' : c)).Trim().TrimEnd('.');
+            if (safeName.Length > 0)
+            {
+                var dir = System.IO.Path.GetDirectoryName(oldPath)!;
+                var ext = System.IO.Path.GetExtension(oldPath);
+                var newPath = System.IO.Path.Combine(dir, safeName + ext);
+                bool sameFile = string.Equals(newPath, oldPath, StringComparison.OrdinalIgnoreCase);
+                // Another file already has that name: add " (2)", " (3)", …
+                for (int n = 2; !sameFile && File.Exists(newPath); n++)
+                    newPath = System.IO.Path.Combine(dir, $"{safeName} ({n}){ext}");
+
+                if (newPath != oldPath)
+                {
+                    try
+                    {
+                        if (sameFile)
+                        {
+                            // Case-only rename: Windows needs a hop through a temp name.
+                            var tmp = oldPath + ".rename-" + Guid.NewGuid().ToString("N");
+                            File.Move(oldPath, tmp);
+                            File.Move(tmp, newPath);
+                        }
+                        else File.Move(oldPath, newPath);
+
+                        _doc.Info.FilePath = newPath;
+                        if (string.Equals(_doc.Info.SourcePdfPath, oldPath, StringComparison.OrdinalIgnoreCase))
+                            _doc.Info.SourcePdfPath = newPath;
+
+                        var settings = App.Services.Settings.Current;
+                        for (int i = 0; i < settings.RecentDocuments.Count; i++)
+                            if (string.Equals(settings.RecentDocuments[i], oldPath, StringComparison.OrdinalIgnoreCase))
+                                settings.RecentDocuments[i] = newPath;
+                        if (settings.LastPageByDocument.Remove(oldPath, out var lastPage))
+                            settings.LastPageByDocument[newPath] = lastPage;
+                        App.Services.Settings.Save();
+                    }
+                    catch (Exception ex) { fileError = ex.Message; }
+                }
+            }
+        }
+
+        App.MainWindow!.Title = $"YuNotes — {System.IO.Path.GetFileName(_doc.Info.FilePath)}";
+        // Persist the new embedded title.
+        _doc.IsDirty = true;
+        UpdateSaveStateUi();
+        ScheduleAutosave();
+
+        if (fileError is not null)
+            await Notify("Couldn't rename the file",
+                $"The note is now called “{title}”, but its file kept its old name: {fileError}");
     }
 
     private void Load(Document d)

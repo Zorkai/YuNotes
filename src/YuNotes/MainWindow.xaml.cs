@@ -154,6 +154,21 @@ public sealed partial class MainWindow : Window
         if (App.MainWindow is MainWindow mw) mw.SetTitleBar(element);
     }
 
+    // Carves interactive rects out of the SetTitleBar drag region so they get
+    // clicks (e.g. the editor's click-to-rename title). Rects are in physical
+    // pixels relative to the window's client area; none clears them. Uses the
+    // AppWindow resolved from this window's HWND in the constructor: going
+    // through App.MainWindow.AppWindow instead threw a NullReferenceException
+    // on every editor open, leaving the title unclickable.
+    public static void SetTitleBarPassthrough(params Windows.Graphics.RectInt32[] rects)
+    {
+        if (App.MainWindow is not MainWindow mw) return;
+        var src = Microsoft.UI.Input.InputNonClientPointerSource.GetForWindowId(mw._appWindow.Id)
+                  ?? throw new InvalidOperationException(
+                         $"InputNonClientPointerSource.GetForWindowId returned null for window {mw._appWindow.Id.Value}");
+        src.SetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Passthrough, rects);
+    }
+
     // Width in DIPs the caption buttons occupy at the window's top-right. Pages
     // pad their top bars by this so content doesn't sit under min/max/close.
     public static double CaptionButtonInset
