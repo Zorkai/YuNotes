@@ -6,9 +6,10 @@ using YuNotes.Models;
 namespace YuNotes.Services;
 
 // Document-level undo/redo via snapshots of the editable content
-// (strokes, texts, images) plus page templates (document template and each
-// page's override — a few fields, so cheap). Backgrounds are not snapshotted —
-// they don't change and would blow up memory.
+// (strokes, texts, images), page templates (document template and each page's
+// override — a few fields, so cheap) and the page list itself (order + enough
+// per-page state to recreate a page), so adding pages can be undone/redone.
+// Page background bytes are immutable and shared by reference, never copied.
 public sealed class HistoryService
 {
     private const int MaxStack = 60;
@@ -21,6 +22,10 @@ public sealed class HistoryService
 
     public bool CanUndo => _undo.Count > 0;
     public bool CanRedo => _redo.Count > 0;
+
+    // True when the last Undo/Redo added, removed or reordered pages — the
+    // caller must then rebuild the page views, not just repaint them.
+    public bool LastStepChangedPageSet { get; private set; }
 
     public void Bind(Document doc)
     {
@@ -58,22 +63,24 @@ public sealed class HistoryService
     // (dirty the doc, invalidate their flattened images). Empty = no-op.
     public IReadOnlyList<string> Undo()
     {
+        LastStepChangedPageSet = false;
         if (_doc is null || _current is null || _undo.Count == 0) return Array.Empty<string>();
         _redo.Push(_current);
         var prev = _current;
         _current = _undo.Pop();
-        _current.ApplyTo(_doc);
+        LastStepChangedPageSet = _current.ApplyTo(_doc);
         StateChanged?.Invoke();
         return DocSnapshot.ChangedPageIds(prev, _current);
     }
 
     public IReadOnlyList<string> Redo()
     {
+        LastStepChangedPageSet = false;
         if (_doc is null || _current is null || _redo.Count == 0) return Array.Empty<string>();
         _undo.Push(_current);
         var prev = _current;
         _current = _redo.Pop();
-        _current.ApplyTo(_doc);
+        LastStepChangedPageSet = _current.ApplyTo(_doc);
         StateChanged?.Invoke();
         return DocSnapshot.ChangedPageIds(prev, _current);
     }
@@ -115,6 +122,9 @@ internal sealed class DocSnapshot
             {
                 PageId = p.Id,
                 Width = p.Width,
+                Height = p.Height,
+                BackgroundPng = p.BackgroundPng,       // immutable bytes — shared
+                SourcePageIndex = p.SourcePageIndex,
                 BackgroundLeft = p.BackgroundLeft,
                 BackgroundContentWidth = p.BackgroundContentWidth,
                 TemplateOverride = CloneTemplate(p.TemplateOverride),
@@ -173,7 +183,13 @@ internal sealed class DocSnapshot
         return ids;
     }
 
-    public void ApplyTo(Document d)
+    // Restores the snapshot onto the live document, including its page list:
+    // pages missing from the document (e.g. a page whose "add" was undone, now
+    // being redone) are recreated, pages not in the snapshot (an added page
+    // being undone) are dropped, and the order is restored. Live NotePage
+    // objects are reused by id so views and references to them stay valid.
+    // Returns true when the page list changed (pages added/removed/reordered).
+    public bool ApplyTo(Document d)
     {
         // Copy fields into the live object rather than replacing it, so anything
         // holding a reference to Document.Template stays valid.
@@ -183,14 +199,21 @@ internal sealed class DocSnapshot
         d.Template.LineThickness = _docTemplate.LineThickness;
         d.Template.SkipImportedPdf = _docTemplate.SkipImportedPdf;
 
-        // Restore by page id; ignores any newly added pages (rare; user can save first).
+        var live = new Dictionary<string, NotePage>();
+        foreach (var lp in d.Pages) live[lp.Id] = lp;
+        var ordered = new List<NotePage>(_pages.Count);
+
         foreach (var ps in _pages)
         {
-            var p = d.Pages.FirstOrDefault(x => x.Id == ps.PageId);
-            if (p is null) continue;
+            if (!live.TryGetValue(ps.PageId, out var p))
+                p = new NotePage { Id = ps.PageId };
+            ordered.Add(p);
 
             // Restore page dimensions (changed by extend/reset operations).
             p.Width = ps.Width;
+            p.Height = ps.Height;
+            p.BackgroundPng = ps.BackgroundPng;
+            p.SourcePageIndex = ps.SourcePageIndex;
             p.BackgroundLeft = ps.BackgroundLeft;
             p.BackgroundContentWidth = ps.BackgroundContentWidth;
             p.TemplateOverride = CloneTemplate(ps.TemplateOverride);
@@ -231,6 +254,17 @@ internal sealed class DocSnapshot
             // they are re-extracted with the correct BackgroundLeft offset.
             p.TextRuns.Clear();
         }
+
+        bool pageSetChanged = ordered.Count != d.Pages.Count;
+        for (int i = 0; !pageSetChanged && i < ordered.Count; i++)
+            pageSetChanged = !ReferenceEquals(ordered[i], d.Pages[i]);
+        if (pageSetChanged)
+        {
+            d.Pages.Clear();
+            foreach (var p in ordered) d.Pages.Add(p);
+        }
+        for (int i = 0; i < d.Pages.Count; i++) d.Pages[i].Index = i;
+        return pageSetChanged;
     }
 }
 
@@ -238,6 +272,9 @@ internal sealed class PageSnapshot
 {
     public string PageId = "";
     public double Width;
+    public double Height;
+    public byte[]? BackgroundPng;
+    public int? SourcePageIndex;
     public double BackgroundLeft;
     public double BackgroundContentWidth;
     public TemplateSettings? TemplateOverride;

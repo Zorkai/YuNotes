@@ -1110,15 +1110,32 @@ public sealed partial class EditorPage : Page
     private void DoUndo()
     {
         AfterHistoryStep(App.Services.History.Undo());
-        Canvas.ResizeAllCanvases();  // page.Width may have changed (extension undo)
-        Canvas.RefreshTemplates();   // template may have changed (template undo)
-        Canvas.InvalidateAll();
+        RefreshAfterHistoryStep();
     }
     private void DoRedo()
     {
         AfterHistoryStep(App.Services.History.Redo());
-        Canvas.ResizeAllCanvases();
-        Canvas.RefreshTemplates();
+        RefreshAfterHistoryStep();
+    }
+
+    private void RefreshAfterHistoryStep()
+    {
+        if (App.Services.History.LastStepChangedPageSet && _doc is not null)
+        {
+            // Pages were added or removed (undo/redo of adding pages): rebuild
+            // the page views. Drop a selection that may point at a removed page,
+            // and keep the active page valid.
+            Canvas.ClearSelection();
+            if (Canvas.Context.CurrentPage is { } cur && !_doc.Pages.Contains(cur))
+                Canvas.Context.CurrentPage = _doc.Pages.LastOrDefault() ?? cur;
+            Canvas.Rebuild();
+            _selectedPages.Clear(); _selectionAnchor = -1;
+            if (_pagePanelOpen) _ = RefreshPagePanelAsync();
+            UpdateSelectionUi();
+            return;
+        }
+        Canvas.ResizeAllCanvases();  // page.Width may have changed (extension undo)
+        Canvas.RefreshTemplates();   // template may have changed (template undo)
         Canvas.InvalidateAll();
     }
 
@@ -1189,9 +1206,10 @@ public sealed partial class EditorPage : Page
         var last = _doc.Pages.LastOrDefault();
         // Use the pre-extension width so extended PDF pages don't dictate new-page size.
         double newW = last?.BackgroundContentWidth > 0 ? last.BackgroundContentWidth : last?.Width ?? 1240;
-        _doc.Pages.Add(new NotePage { Index = _doc.Pages.Count, Width = newW, Height = last?.Height ?? 1754 });
+        var newPage = new NotePage { Index = _doc.Pages.Count, Width = newW, Height = last?.Height ?? 1754 };
+        _doc.Pages.Add(newPage);
         Canvas.Rebuild();
-        App.Services.History.Bind(_doc);   // page set changed; reset history
+        App.Services.History.RecordMutation(newPage);   // undoable: undo removes the page
         UpdateHistoryUi();
         MarkPageSetChanged();
         if (_pagePanelOpen) _ = RefreshPagePanelAsync();
@@ -1215,8 +1233,9 @@ public sealed partial class EditorPage : Page
                 _doc.Pages.Add(p);
             }
             Canvas.Rebuild();
-            App.Services.History.Bind(_doc);
+            App.Services.History.RecordMutation();   // undoable: undo removes the added pages
             UpdateHistoryUi();
+            MarkPageSetChanged();
             if (_pagePanelOpen) _ = RefreshPagePanelAsync();
         }
         catch (Exception ex) { await Notify("Add pages failed", ex.Message); }
@@ -2915,7 +2934,7 @@ public sealed partial class EditorPage : Page
         _doc.Pages.Insert(index + 1, clone);
         for (int i = 0; i < _doc.Pages.Count; i++) _doc.Pages[i].Index = i;
         Canvas.Rebuild();
-        App.Services.History.Bind(_doc);
+        App.Services.History.RecordMutation(clone);   // undoable
         UpdateHistoryUi();
         MarkPageSetChanged();
         await RefreshPagePanelAsync();
@@ -2987,7 +3006,7 @@ public sealed partial class EditorPage : Page
         _doc.Pages.Insert(index, newPage);
         for (int i = 0; i < _doc.Pages.Count; i++) _doc.Pages[i].Index = i;
         Canvas.Rebuild();
-        App.Services.History.Bind(_doc);
+        App.Services.History.RecordMutation(newPage);   // undoable
         UpdateHistoryUi();
         MarkPageSetChanged();
         if (_pagePanelOpen) _ = RefreshPagePanelAsync();
