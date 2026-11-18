@@ -53,13 +53,18 @@ public sealed partial class InkCanvasControl : UserControl
         Context.ToolRequested = kind => ToolRequested?.Invoke(this, kind);
         Context.RequestPan = (dx, dy) =>
         {
-            Scroller.ChangeView(Scroller.HorizontalOffset + dx, Scroller.VerticalOffset + dy, null, disableAnimation: true);
+            // Hand-tool / middle-drag panning stops at the end of the document;
+            // the pull-to-add-page zone below it is for scroll gestures only.
+            double v = Scroller.VerticalOffset + dy;
+            v = Math.Min(v, Math.Max(PullRestOffset(), Scroller.VerticalOffset));
+            Scroller.ChangeView(Scroller.HorizontalOffset + dx, v, null, disableAnimation: true);
         };
         Context.RulerChanged = () =>
         {
             foreach (var pc in _pageCanvases) pc.SyncRulerOverlay();
         };
         Scroller.ViewChanged += OnScrollerViewChanged;
+        HookPullToAddPage();
 
         // ScrollViewer's DirectManipulation tracker grabs pen input for panning before
         // the inner PageCanvas can capture it for drawing. Suppress manipulation-based
@@ -117,6 +122,7 @@ public sealed partial class InkCanvasControl : UserControl
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _viewSettleTimer;
     private void OnScrollerViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
     {
+        OnPullViewChanged(e.IsIntermediate);
         if (e.IsIntermediate)
         {
             if (_viewSettleTimer is null)
@@ -246,6 +252,8 @@ public sealed partial class InkCanvasControl : UserControl
     {
         PagesPanel.Children.Clear();
         _pageCanvases.Clear();
+        _pullZone = null;
+        _pullRingHost = null;
         if (Document is null || _renderer is null || _palm is null || _router is null) return;
 
         PagesPanel.Spacing = SeamlessPages ? 0 : 24;
@@ -311,26 +319,375 @@ public sealed partial class InkCanvasControl : UserControl
             var first = Document.Pages[0];
             stdW = first.BackgroundContentWidth > 0 ? first.BackgroundContentWidth : first.Width;
         }
-        var addBtn = new Microsoft.UI.Xaml.Controls.Button
+        BuildAddPageControls(stdW);
+    }
+
+    // ── Pull to add page ────────────────────────────────────────────────────────
+    //
+    // Scrolling on past the end of the document fills a ring around the "+"
+    // button; letting go once it's full adds a page. Implemented as real scroll
+    // space (the "pull zone") below the button, so it works the same for mouse
+    // wheel, precision touchpad, touch and the scrollbar: how far the view is
+    // scrolled into the zone IS the progress.
+    //
+    //  • Arrive, then insist: a scroll that started above the end can't add a
+    //    page. A wheel spin stops at the end; a fling (inertia) that carries
+    //    into the zone just bounces back. Only a new push that starts at the
+    //    end arms the gesture — so reaching the end of a note never adds pages
+    //    by accident.
+    //  • Letting go: lifting fingers (touch/touchpad — the start of inertia or
+    //    the end of the manipulation), or pausing the wheel briefly.
+    //  • Below 100% the ring drains and the view springs back to the end.
+
+    // On-screen distance (DIPs) to push past the end for 100%.
+    private const double PullDistance = 260;
+    private const double PullFullThreshold = 0.995;
+
+    private Grid? _pullZone;
+    private Grid? _pullRingHost;
+    private Microsoft.UI.Xaml.Shapes.Ellipse? _pullTrack;
+    private Microsoft.UI.Xaml.Shapes.Ellipse? _pullFull;
+    private Microsoft.UI.Xaml.Shapes.Path? _pullArc;
+    private Button? _addBtn;
+    private FontIcon? _addIcon;
+    private TextBlock? _pullLabel;
+
+    private bool _pullArmed;          // the current push may add a page
+    private bool _pullInManipulation; // DirectManipulation (touch/touchpad) active
+    private bool _pullViewMoving;     // last ViewChanged was intermediate
+    private bool _pullSnappingBack;   // our own spring-back animation is running
+    private bool _pullInertiaSeen;    // already handled "let go" for this manipulation
+    private bool _pullWheelCarry;     // a wheel scroll began above the end: stop there
+    private bool _pullCommitting;
+    private DateTime _pullLastWheel = DateTime.MinValue;
+    private double _pullProgress;
+    private double _pullZoneZoom = -1;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _pullReleaseTimer;
+    private static readonly Microsoft.UI.Xaml.Media.SolidColorBrush PullWhite = new(Microsoft.UI.Colors.White);
+
+    private static Microsoft.UI.Xaml.Media.Brush Res(string key) =>
+        (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[key];
+
+    private bool PullWheelRecent => (DateTime.UtcNow - _pullLastWheel).TotalMilliseconds < 600;
+
+    private double PullProgressAt(double offset) =>
+        Math.Clamp((offset - PullRestOffset()) / PullDistance, 0, 1);
+
+    private void BuildAddPageControls(double stdW)
+    {
+        const double ring = 64, track = 58;
+
+        _addIcon = new FontIcon
+        {
+            Glyph = "", FontSize = 20,
+            RenderTransformOrigin = new Windows.Foundation.Point(0.5, 0.5),
+            RenderTransform = new Microsoft.UI.Xaml.Media.RotateTransform(),
+        };
+        _addBtn = new Button
         {
             Width = 52, Height = 52,
             CornerRadius = new CornerRadius(26),
             HorizontalAlignment = HorizontalAlignment.Center,
-            Margin = SeamlessPages ? new Thickness(0, 8, 0, 0) : new Thickness(0, 8, 0, 24),
-            Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppSurfaceVariantBrush"],
-            BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["AppBorderBrush"],
+            VerticalAlignment = VerticalAlignment.Center,
+            Background = Res("AppSurfaceVariantBrush"),
+            BorderBrush = Res("AppBorderBrush"),
             BorderThickness = new Thickness(1.5),
-            Content = new Microsoft.UI.Xaml.Controls.FontIcon { Glyph = "", FontSize = 20 }
+            Content = _addIcon,
+            // Little "pop" when the ring completes.
+            CenterPoint = new System.Numerics.Vector3(26, 26, 0),
+            ScaleTransition = new Vector3Transition { Duration = TimeSpan.FromMilliseconds(160) },
         };
-        Microsoft.UI.Xaml.Controls.ToolTipService.SetToolTip(addBtn, "Add page");
-        addBtn.Click += (_, __) => AddPageRequested?.Invoke(this, EventArgs.Empty);
-        var addBtnWrapper = new Grid
+        ToolTipService.SetToolTip(_addBtn, "Add page (or keep scrolling down past the end)");
+        _addBtn.Click += (_, __) => AddPageRequested?.Invoke(this, EventArgs.Empty);
+
+        _pullTrack = new Microsoft.UI.Xaml.Shapes.Ellipse
+        {
+            Width = track, Height = track,
+            Stroke = Res("AppBorderBrush"), StrokeThickness = 3,
+            Opacity = 0,
+            OpacityTransition = new ScalarTransition { Duration = TimeSpan.FromMilliseconds(140) },
+        };
+        _pullArc = new Microsoft.UI.Xaml.Shapes.Path
+        {
+            Stroke = Res("AppAccentBrush"), StrokeThickness = 3,
+            StrokeStartLineCap = Microsoft.UI.Xaml.Media.PenLineCap.Round,
+            StrokeEndLineCap = Microsoft.UI.Xaml.Media.PenLineCap.Round,
+            Visibility = Visibility.Collapsed,
+        };
+        _pullFull = new Microsoft.UI.Xaml.Shapes.Ellipse
+        {
+            Width = track, Height = track,
+            Stroke = Res("AppAccentBrush"), StrokeThickness = 3,
+            Visibility = Visibility.Collapsed,
+        };
+        _pullRingHost = new Grid
+        {
+            Width = ring, Height = ring,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            Margin = SeamlessPages ? new Thickness(0, 2, 0, 0) : new Thickness(0, 2, 0, 18),
+        };
+        _pullRingHost.Children.Add(_pullTrack);
+        _pullRingHost.Children.Add(_pullArc);
+        _pullRingHost.Children.Add(_pullFull);
+        _pullRingHost.Children.Add(_addBtn);
+
+        var addBtnWrapper = new Grid { Width = stdW, HorizontalAlignment = HorizontalAlignment.Left };
+        addBtnWrapper.Children.Add(_pullRingHost);
+        PagesPanel.Children.Add(addBtnWrapper);
+
+        // The pull zone: empty scroll space revealed as the user pushes past
+        // the end. Its hint label sits at the top, right under the button.
+        _pullLabel = new TextBlock
+        {
+            FontSize = 12,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 6, 0, 0),
+            Foreground = Res("AppTextSecondaryBrush"),
+            Opacity = 0,
+            OpacityTransition = new ScalarTransition { Duration = TimeSpan.FromMilliseconds(140) },
+            IsHitTestVisible = false,
+        };
+        _pullZone = new Grid
         {
             Width = stdW,
+            Height = PullDistance,   // corrected by UpdatePullZoneHeight once laid out
             HorizontalAlignment = HorizontalAlignment.Left,
+            Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Microsoft.UI.Colors.Transparent),
         };
-        addBtnWrapper.Children.Add(addBtn);
-        PagesPanel.Children.Add(addBtnWrapper);
+        _pullZone.Children.Add(_pullLabel);
+        PagesPanel.Children.Add(_pullZone);
+
+        _pullArmed = false;
+        _pullWheelCarry = false;
+        _pullSnappingBack = false;
+        _pullZoneZoom = -1;
+        _pullProgress = 0;
+    }
+
+    private void HookPullToAddPage()
+    {
+        Scroller.ViewChanging += OnPullViewChanging;
+        Scroller.DirectManipulationStarted += (_, __) =>
+        {
+            _pullInManipulation = true;
+            _pullInertiaSeen = false;
+            _pullReleaseTimer?.Stop();
+            // Our own spring-back can surface as a manipulation; don't let it arm.
+            if (_pullSnappingBack) return;
+            if (!PullWheelRecent)
+                _pullArmed = Scroller.VerticalOffset >= PullRestOffset() - 1;
+        };
+        Scroller.DirectManipulationCompleted += (_, __) =>
+        {
+            _pullInManipulation = false;
+            SchedulePullRelease();
+        };
+        Scroller.AddHandler(PointerWheelChangedEvent, new PointerEventHandler(OnPullWheel), handledEventsToo: true);
+        Scroller.SizeChanged += (_, __) => UpdatePullZoneHeight();
+        PagesPanel.SizeChanged += (_, __) => UpdatePullZoneHeight();
+    }
+
+    // Scroll offset at which the end of the document (just above the pull zone)
+    // meets the bottom of the viewport — where the view rests.
+    private double PullRestOffset()
+    {
+        if (_pullZone is null) return double.MaxValue;
+        try
+        {
+            double top = _pullZone.TransformToVisual(ContentRoot).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
+            return Math.Max(0, top * Scroller.ZoomFactor - Scroller.ViewportHeight);
+        }
+        catch { return double.MaxValue; }
+    }
+
+    // Size the zone so the farthest the view can scroll is exactly 100%,
+    // whatever the zoom and even when the note is shorter than the window.
+    private void UpdatePullZoneHeight()
+    {
+        if (_pullZone is null) return;
+        double zoom = Scroller.ZoomFactor <= 0 ? 1 : Scroller.ZoomFactor;
+        double top;
+        try { top = _pullZone.TransformToVisual(ContentRoot).TransformPoint(new Windows.Foundation.Point(0, 0)).Y; }
+        catch { return; }
+        double v = Scroller.ViewportHeight;
+        double h = Math.Max(0, (PullDistance + Math.Max(v, top * zoom)) / zoom - top - ContentRoot.Padding.Bottom);
+        if (double.IsNaN(_pullZone.Height) || Math.Abs(_pullZone.Height - h) > 0.5)
+            _pullZone.Height = h;
+        _pullZoneZoom = zoom;
+    }
+
+    private void OnPullWheel(object sender, PointerRoutedEventArgs e)
+    {
+        var props = e.GetCurrentPoint(Scroller).Properties;
+        // Ctrl = zoom, Shift / tilt = horizontal scroll.
+        if (props.IsHorizontalMouseWheel ||
+            (e.KeyModifiers & (Windows.System.VirtualKeyModifiers.Control | Windows.System.VirtualKeyModifiers.Shift)) != 0)
+            return;
+        _pullLastWheel = DateTime.UtcNow;
+        _pullSnappingBack = false;
+        if (props.MouseWheelDelta < 0)   // scrolling down
+        {
+            if (Scroller.VerticalOffset >= PullRestOffset() - 1) { _pullArmed = true; _pullWheelCarry = false; }
+            else if (!_pullArmed) _pullWheelCarry = true;
+        }
+        // Even if the view can't move (already at 100%), the pause after the
+        // last notch is the "let go".
+        SchedulePullRelease();
+    }
+
+    private void OnPullViewChanging(object? sender, ScrollViewerViewChangingEventArgs e)
+    {
+        if (_pullZone is null || _pullCommitting) return;
+        double rest = PullRestOffset();
+        double next = e.NextView.VerticalOffset;
+
+        if (next > rest + 0.5 && !_pullSnappingBack && _pullWheelCarry && !_pullArmed)
+        {
+            // A wheel scroll that began above the end stops AT the end.
+            _pullWheelCarry = false;
+            DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, PullRestOffset(), null, disableAnimation: true));
+            return;
+        }
+
+        if (e.IsInertial && !_pullInertiaSeen && !PullWheelRecent && _pullInManipulation)
+        {
+            // Fingers just lifted with momentum: that's "letting go".
+            _pullInertiaSeen = true;
+            if (_pullArmed && _pullProgress >= PullFullThreshold) { CommitPull(); return; }
+            _pullArmed = false;   // momentum alone never adds a page
+        }
+
+        SetPullProgress(Math.Clamp((next - rest) / PullDistance, 0, 1));
+    }
+
+    // Called from OnScrollerViewChanged.
+    private void OnPullViewChanged(bool isIntermediate)
+    {
+        _pullViewMoving = isIntermediate;
+        if (isIntermediate) return;
+        if (Math.Abs(Scroller.ZoomFactor - _pullZoneZoom) > 0.0005) UpdatePullZoneHeight();
+        if (_pullSnappingBack)
+        {
+            _pullSnappingBack = false;
+            SetPullProgress(PullProgressAt(Scroller.VerticalOffset));
+            return;
+        }
+        if (!_pullInManipulation) SchedulePullRelease();
+    }
+
+    private void SchedulePullRelease()
+    {
+        if (_pullZone is null) return;
+        if (_pullReleaseTimer is null)
+        {
+            _pullReleaseTimer = DispatcherQueue.CreateTimer();
+            _pullReleaseTimer.IsRepeating = false;
+            _pullReleaseTimer.Tick += (_, __) => EvaluatePullRelease();
+        }
+        _pullReleaseTimer.Stop();
+        // A wheel has no "release": a short pause after the last notch is it.
+        _pullReleaseTimer.Interval = TimeSpan.FromMilliseconds(PullWheelRecent ? 420 : 40);
+        _pullReleaseTimer.Start();
+    }
+
+    private void EvaluatePullRelease()
+    {
+        if (_pullZone is null || _pullCommitting || _pullInManipulation || _pullSnappingBack) return;
+        if (_pullViewMoving) return;   // the final ViewChanged reschedules us
+        double rest = PullRestOffset();
+        double p = PullProgressAt(Scroller.VerticalOffset);
+        if (_pullArmed && p >= PullFullThreshold) { CommitPull(); return; }
+
+        _pullArmed = false;
+        _pullWheelCarry = false;
+        if (Scroller.VerticalOffset > rest + 0.5)
+        {
+            // Not far enough: drain the ring and spring back to the end.
+            _pullSnappingBack = true;
+            SetPullProgress(p);
+            Scroller.ChangeView(null, rest, null, disableAnimation: false);
+        }
+        else SetPullProgress(0);
+    }
+
+    private void CommitPull()
+    {
+        if (_pullCommitting) return;
+        _pullCommitting = true;
+        _pullArmed = false;
+        _pullWheelCarry = false;
+        _pullReleaseTimer?.Stop();
+        // Rebuild replaces these controls; defer out of the scroll event.
+        DispatcherQueue.TryEnqueue(() =>
+        {
+            try
+            {
+                AddPageRequested?.Invoke(this, EventArgs.Empty);
+                // Glide to the new page so it's clearly there.
+                ScrollToPageDeferred(_pageCanvases.Count - 1);
+            }
+            finally { _pullCommitting = false; }
+        });
+    }
+
+    private void SetPullProgress(double p)
+    {
+        _pullProgress = p;
+        if (_pullRingHost is null || _pullTrack is null || _pullArc is null || _pullFull is null
+            || _addBtn is null || _addIcon is null || _pullLabel is null) return;
+
+        bool active = p > 0.001;
+        bool full = _pullArmed && p >= PullFullThreshold;
+
+        _pullTrack.Opacity = active ? 1 : 0;
+        if (_pullArmed && active && !full)
+        {
+            _pullArc.Data = PullArcGeometry(p, 32, 29);
+            _pullArc.Visibility = Visibility.Visible;
+        }
+        else _pullArc.Visibility = Visibility.Collapsed;
+        _pullFull.Visibility = full ? Visibility.Visible : Visibility.Collapsed;
+
+        // The "+" turns with the pull and lights up when it's ready.
+        if (_addIcon.RenderTransform is Microsoft.UI.Xaml.Media.RotateTransform rt)
+            rt.Angle = _pullArmed ? p * 90 : 0;
+        _addBtn.Scale = full ? new System.Numerics.Vector3(1.12f, 1.12f, 1) : System.Numerics.Vector3.One;
+        _addBtn.Background = Res(full ? "AppAccentBrush" : "AppSurfaceVariantBrush");
+        if (full) _addIcon.Foreground = PullWhite;
+        else _addIcon.ClearValue(IconElement.ForegroundProperty);
+
+        if (!active || _pullSnappingBack)
+        {
+            _pullLabel.Opacity = 0;
+            return;
+        }
+        _pullLabel.Text = !_pullArmed ? "Scroll down again to add a page"
+                        : full ? "Let go to add a page"
+                        : "Keep scrolling to add a page";
+        _pullLabel.Foreground = Res(full ? "AppAccentBrush" : "AppTextSecondaryBrush");
+        _pullLabel.Opacity = 1;
+    }
+
+    // Clockwise arc from 12 o'clock covering fraction p of the circle.
+    private static Microsoft.UI.Xaml.Media.Geometry PullArcGeometry(double p, double c, double r)
+    {
+        double a = p * 2 * Math.PI;
+        var fig = new Microsoft.UI.Xaml.Media.PathFigure
+        {
+            StartPoint = new Windows.Foundation.Point(c, c - r),
+            IsClosed = false,
+        };
+        fig.Segments.Add(new Microsoft.UI.Xaml.Media.ArcSegment
+        {
+            Point = new Windows.Foundation.Point(c + r * Math.Sin(a), c - r * Math.Cos(a)),
+            Size = new Windows.Foundation.Size(r, r),
+            IsLargeArc = a > Math.PI,
+            SweepDirection = Microsoft.UI.Xaml.Media.SweepDirection.Clockwise,
+        });
+        var g = new Microsoft.UI.Xaml.Media.PathGeometry();
+        g.Figures.Add(fig);
+        return g;
     }
 
     /// <summary>
