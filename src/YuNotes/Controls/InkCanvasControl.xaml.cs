@@ -330,17 +330,18 @@ public sealed partial class InkCanvasControl : UserControl
     // wheel, precision touchpad, touch and the scrollbar: how far the view is
     // scrolled into the zone IS the progress.
     //
-    //  • Arrive, then insist: a scroll that started above the end can't add a
-    //    page. A wheel spin stops at the end; a fling (inertia) that carries
-    //    into the zone just bounces back. Only a new push that starts at the
-    //    end arms the gesture — so reaching the end of a note never adds pages
-    //    by accident.
-    //  • Letting go: lifting fingers (touch/touchpad — the start of inertia or
-    //    the end of the manipulation), or pausing the wheel briefly.
-    //  • Below 100% the ring drains and the view springs back to the end.
+    //  • Touchpad / touch: only finger-driven movement fills the ring. Pushing
+    //    past the end with fingers down always counts — wherever the swipe
+    //    started, even if it began mid-fling — so it never "refuses" to fill.
+    //    Momentum alone never fills: a fling that reaches the end stops there.
+    //  • Mouse wheel: notches that arrive once the view is at the end fill the
+    //    ring; a fast spin that reaches the end from above stops at the end.
+    //  • Letting go: lifting fingers (the moment momentum takes over, or the
+    //    manipulation ends), or pausing the wheel briefly. At 100% a page is
+    //    added; below, the ring drains and the view springs back right away.
 
     // On-screen distance (DIPs) to push past the end for 100%.
-    private const double PullDistance = 260;
+    private const double PullDistance = 240;
     private const double PullFullThreshold = 0.995;
 
     private Grid? _pullZone;
@@ -356,6 +357,11 @@ public sealed partial class InkCanvasControl : UserControl
     private bool _pullInManipulation; // DirectManipulation (touch/touchpad) active
     private bool _pullViewMoving;     // last ViewChanged was intermediate
     private bool _pullSnappingBack;   // our own spring-back animation is running
+    private DateTime _pullSnapAt;
+    // Spring-back in flight. Time-boxed so a ChangeView that never reports back
+    // (e.g. swallowed mid-manipulation) can't wedge the gesture.
+    private bool PullSnapping =>
+        _pullSnappingBack && (DateTime.UtcNow - _pullSnapAt).TotalMilliseconds < 1000;
     private bool _pullInertiaSeen;    // already handled "let go" for this manipulation
     private bool _pullWheelCarry;     // a wheel scroll began above the end: stop there
     private bool _pullCommitting;
@@ -470,13 +476,12 @@ public sealed partial class InkCanvasControl : UserControl
         Scroller.ViewChanging += OnPullViewChanging;
         Scroller.DirectManipulationStarted += (_, __) =>
         {
+            // Fingers down: the user takes over from any spring-back. Arming
+            // happens in OnPullViewChanging, from finger-driven movement only.
             _pullInManipulation = true;
             _pullInertiaSeen = false;
+            _pullSnappingBack = false;
             _pullReleaseTimer?.Stop();
-            // Our own spring-back can surface as a manipulation; don't let it arm.
-            if (_pullSnappingBack) return;
-            if (!PullWheelRecent)
-                _pullArmed = Scroller.VerticalOffset >= PullRestOffset() - 1;
         };
         Scroller.DirectManipulationCompleted += (_, __) =>
         {
@@ -541,8 +546,9 @@ public sealed partial class InkCanvasControl : UserControl
         if (_pullZone is null || _pullCommitting) return;
         double rest = PullRestOffset();
         double next = e.NextView.VerticalOffset;
+        bool inZone = next > rest + 0.5;
 
-        if (next > rest + 0.5 && !_pullSnappingBack && _pullWheelCarry && !_pullArmed)
+        if (inZone && !PullSnapping && _pullWheelCarry && !_pullArmed)
         {
             // A wheel scroll that began above the end stops AT the end.
             _pullWheelCarry = false;
@@ -550,15 +556,47 @@ public sealed partial class InkCanvasControl : UserControl
             return;
         }
 
-        if (e.IsInertial && !_pullInertiaSeen && !PullWheelRecent && _pullInManipulation)
+        if (_pullInManipulation && !PullWheelRecent)
         {
-            // Fingers just lifted with momentum: that's "letting go".
-            _pullInertiaSeen = true;
-            if (_pullArmed && _pullProgress >= PullFullThreshold) { CommitPull(); return; }
-            _pullArmed = false;   // momentum alone never adds a page
+            if (!e.IsInertial)
+            {
+                // Fingers on the touchpad / screen. Pushing past the end with
+                // them IS insisting — arm, wherever this swipe started.
+                _pullInertiaSeen = false;
+                // (Not while our spring-back animation drives the view — a real
+                // new touch clears that flag in DirectManipulationStarted.)
+                if (inZone && !PullSnapping) _pullArmed = true;
+            }
+            else if (!_pullInertiaSeen)
+            {
+                // Fingers just lifted and momentum took over: "letting go".
+                _pullInertiaSeen = true;
+                if (_pullArmed && _pullProgress >= PullFullThreshold) { CommitPull(); return; }
+                _pullArmed = false;
+                if (inZone || _pullProgress > 0) { SpringBack(); return; }
+            }
+            else if (inZone && !_pullArmed && !PullSnapping)
+            {
+                // A fling's momentum reached the end: stop there instead of
+                // sailing on into the empty pull zone.
+                SpringBack();
+                return;
+            }
         }
 
         SetPullProgress(Math.Clamp((next - rest) / PullDistance, 0, 1));
+    }
+
+    // Drain the ring and glide back to the end of the document, interrupting
+    // any momentum still carrying the view into the pull zone.
+    private void SpringBack()
+    {
+        _pullArmed = false;
+        _pullWheelCarry = false;
+        _pullSnappingBack = true;
+        _pullSnapAt = DateTime.UtcNow;
+        SetPullProgress(PullProgressAt(Scroller.VerticalOffset));
+        DispatcherQueue.TryEnqueue(() => Scroller.ChangeView(null, PullRestOffset(), null, disableAnimation: false));
     }
 
     // Called from OnScrollerViewChanged.
@@ -569,9 +607,10 @@ public sealed partial class InkCanvasControl : UserControl
         if (Math.Abs(Scroller.ZoomFactor - _pullZoneZoom) > 0.0005) UpdatePullZoneHeight();
         if (_pullSnappingBack)
         {
+            // Spring-back finished (or was cut short). If the view still isn't
+            // at the end, the release check below sends it back again.
             _pullSnappingBack = false;
             SetPullProgress(PullProgressAt(Scroller.VerticalOffset));
-            return;
         }
         if (!_pullInManipulation) SchedulePullRelease();
     }
@@ -593,7 +632,7 @@ public sealed partial class InkCanvasControl : UserControl
 
     private void EvaluatePullRelease()
     {
-        if (_pullZone is null || _pullCommitting || _pullInManipulation || _pullSnappingBack) return;
+        if (_pullZone is null || _pullCommitting || _pullInManipulation || PullSnapping) return;
         if (_pullViewMoving) return;   // the final ViewChanged reschedules us
         double rest = PullRestOffset();
         double p = PullProgressAt(Scroller.VerticalOffset);
@@ -601,13 +640,8 @@ public sealed partial class InkCanvasControl : UserControl
 
         _pullArmed = false;
         _pullWheelCarry = false;
-        if (Scroller.VerticalOffset > rest + 0.5)
-        {
-            // Not far enough: drain the ring and spring back to the end.
-            _pullSnappingBack = true;
-            SetPullProgress(p);
-            Scroller.ChangeView(null, rest, null, disableAnimation: false);
-        }
+        // Not far enough: drain the ring and spring back to the end.
+        if (Scroller.VerticalOffset > rest + 0.5) SpringBack();
         else SetPullProgress(0);
     }
 
@@ -637,11 +671,13 @@ public sealed partial class InkCanvasControl : UserControl
         if (_pullRingHost is null || _pullTrack is null || _pullArc is null || _pullFull is null
             || _addBtn is null || _addIcon is null || _pullLabel is null) return;
 
-        bool active = p > 0.001;
+        // Only a real (finger/wheel) push shows the ring; momentum bouncing off
+        // the end stays quiet. While springing back the ring just drains.
+        bool active = p > 0.001 && (_pullArmed || PullSnapping);
         bool full = _pullArmed && p >= PullFullThreshold;
 
         _pullTrack.Opacity = active ? 1 : 0;
-        if (_pullArmed && active && !full)
+        if (active && !full)
         {
             _pullArc.Data = PullArcGeometry(p, 32, 29);
             _pullArc.Visibility = Visibility.Visible;
@@ -651,20 +687,18 @@ public sealed partial class InkCanvasControl : UserControl
 
         // The "+" turns with the pull and lights up when it's ready.
         if (_addIcon.RenderTransform is Microsoft.UI.Xaml.Media.RotateTransform rt)
-            rt.Angle = _pullArmed ? p * 90 : 0;
+            rt.Angle = active ? p * 90 : 0;
         _addBtn.Scale = full ? new System.Numerics.Vector3(1.12f, 1.12f, 1) : System.Numerics.Vector3.One;
         _addBtn.Background = Res(full ? "AppAccentBrush" : "AppSurfaceVariantBrush");
         if (full) _addIcon.Foreground = PullWhite;
         else _addIcon.ClearValue(IconElement.ForegroundProperty);
 
-        if (!active || _pullSnappingBack)
+        if (!active || !_pullArmed || PullSnapping)
         {
             _pullLabel.Opacity = 0;
             return;
         }
-        _pullLabel.Text = !_pullArmed ? "Scroll down again to add a page"
-                        : full ? "Let go to add a page"
-                        : "Keep scrolling to add a page";
+        _pullLabel.Text = full ? "Let go to add a page" : "Keep scrolling to add a page";
         _pullLabel.Foreground = Res(full ? "AppAccentBrush" : "AppTextSecondaryBrush");
         _pullLabel.Opacity = 1;
     }
