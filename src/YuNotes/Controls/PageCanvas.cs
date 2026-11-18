@@ -800,7 +800,7 @@ public sealed class PageCanvas : ContentControl
                 dispatcher.TryEnqueue(() =>
                 {
                     if (gen != _bgHiResGen) return;   // superseded or cleared
-                    var device = _canvas.Device;
+                    var device = TryGetCanvasDevice();
                     if (device is null) return;
                     CanvasBitmap bitmap;
                     try
@@ -1005,10 +1005,21 @@ public sealed class PageCanvas : ContentControl
     private Image? _freezeImage;
     private bool _unfreezeAfterDraw;
 
+    // CanvasVirtualControl.Device THROWS (ArgumentException, "does not currently
+    // have a CanvasDevice") rather than returning null until the control has
+    // created its device — e.g. canvases just recreated by InkCanvasControl.
+    // Rebuild (adding a page) that haven't loaded/drawn yet. Callers treat null
+    // as "skip" or fall back to the shared device.
+    private CanvasDevice? TryGetCanvasDevice()
+    {
+        try { return _canvas.ReadyToDraw ? _canvas.Device : null; }
+        catch { return null; }
+    }
+
     public void FreezeViewportForDpiChange(Windows.Foundation.Rect viewRect, float oldScale)
     {
         UnfreezeViewport();
-        var device = _canvas.Device;
+        var device = TryGetCanvasDevice();
         if (device is null || viewRect.Width < 1 || viewRect.Height < 1) return;
         try
         {
@@ -1998,7 +2009,7 @@ public sealed class PageCanvas : ContentControl
 
         try
         {
-            var device = _canvas.Device ?? CanvasDevice.GetSharedDevice();
+            var device = TryGetCanvasDevice() ?? CanvasDevice.GetSharedDevice();
             // Render at the canvas backing scale so the ghost is crisp at the
             // current zoom; cap total pixels for page-sized selections.
             float scale = Math.Clamp(_canvas.DpiScale, 1f, 4f);
