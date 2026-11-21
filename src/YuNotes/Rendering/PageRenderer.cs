@@ -602,7 +602,7 @@ public sealed class PageRenderer
     // direction as the segment quads (left edge forward, right edge back):
     // under Winding fill, figures that wind OPPOSITE ways cancel where they
     // overlap, which punched a hole at every quad∩circle joint.
-    private static void AddCircleFigure(CanvasPathBuilder path, float cx, float cy, float r)
+    internal static void AddCircleFigure(CanvasPathBuilder path, float cx, float cy, float r)
     {
         if (r <= 0) return;
         var center = new Vector2(cx, cy);
