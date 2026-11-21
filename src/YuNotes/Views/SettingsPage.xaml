@@ -5,6 +5,10 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Background="{ThemeResource AppBackgroundBrush}">
 
+    <!-- Control Center layout: quick tiles for the switches people flip often,
+         an Updates card with a progress ring and stage track, then one Expander
+         per area for the detailed settings. A search box filters all three, and
+         a save bar slides in only when something changed. -->
     <Page.Resources>
         <DataTemplate x:Key="ToolItemTemplate">
             <Grid ColumnSpacing="12" Padding="0,2">
@@ -23,13 +27,152 @@
                           VerticalAlignment="Center" Margin="0"/>
             </Grid>
         </DataTemplate>
+
+        <!-- Expanders blend with the app's cards instead of the default Fluent fill. -->
+        <StaticResource x:Key="ExpanderHeaderBackground" ResourceKey="AppSurfaceBrush" />
+        <StaticResource x:Key="ExpanderContentBackground" ResourceKey="AppSurfaceBrush" />
+        <StaticResource x:Key="ExpanderHeaderBorderBrush" ResourceKey="AppBorderBrush" />
+        <StaticResource x:Key="ExpanderContentBorderBrush" ResourceKey="AppBorderBrush" />
+
+        <Style x:Key="SectionExpanderStyle" TargetType="Expander">
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Padding" Value="20,16,20,20" />
+        </Style>
+
+        <!-- Quick-settings tile: an outlined card that fills with the accent when on.
+             Content is the icon + label; the template adds the On/Off line. -->
+        <Style x:Key="SettingsTileStyle" TargetType="ToggleButton">
+            <Setter Property="HorizontalAlignment" Value="Stretch" />
+            <Setter Property="VerticalAlignment" Value="Stretch" />
+            <Setter Property="HorizontalContentAlignment" Value="Left" />
+            <Setter Property="VerticalContentAlignment" Value="Top" />
+            <Setter Property="MinHeight" Value="100" />
+            <Setter Property="Padding" Value="14,12" />
+            <Setter Property="CornerRadius" Value="14" />
+            <Setter Property="Background" Value="{ThemeResource AppSurfaceBrush}" />
+            <Setter Property="BorderBrush" Value="{ThemeResource AppBorderBrush}" />
+            <Setter Property="BorderThickness" Value="1" />
+            <Setter Property="Foreground" Value="{ThemeResource AppTextPrimaryBrush}" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Grid x:Name="RootGrid">
+                            <Border Background="{TemplateBinding Background}"
+                                    BorderBrush="{TemplateBinding BorderBrush}"
+                                    BorderThickness="{TemplateBinding BorderThickness}"
+                                    CornerRadius="{TemplateBinding CornerRadius}" />
+                            <Border x:Name="OnLayer" Background="{ThemeResource AppAccentBrush}"
+                                    CornerRadius="{TemplateBinding CornerRadius}" Opacity="0">
+                                <Border.OpacityTransition><ScalarTransition Duration="0:0:0.15" /></Border.OpacityTransition>
+                            </Border>
+                            <Border x:Name="HoverLayer" Background="{ThemeResource AppSurfaceVariantBrush}"
+                                    CornerRadius="{TemplateBinding CornerRadius}" Opacity="0">
+                                <Border.OpacityTransition><ScalarTransition Duration="0:0:0.1" /></Border.OpacityTransition>
+                            </Border>
+                            <Grid Padding="{TemplateBinding Padding}" RowSpacing="2">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="*" />
+                                    <RowDefinition Height="Auto" />
+                                </Grid.RowDefinitions>
+                                <ContentPresenter x:Name="ContentPresenter"
+                                                  Content="{TemplateBinding Content}"
+                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
+                                                  HorizontalAlignment="Stretch"
+                                                  VerticalAlignment="Stretch"
+                                                  Foreground="{TemplateBinding Foreground}" />
+                                <TextBlock x:Name="StateText" Grid.Row="1" Text="Off" FontSize="12"
+                                           Opacity="0.7" Foreground="{TemplateBinding Foreground}" />
+                            </Grid>
+                            <VisualStateManager.VisualStateGroups>
+                                <VisualStateGroup x:Name="CommonStates">
+                                    <VisualState x:Name="Normal" />
+                                    <VisualState x:Name="PointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="HoverLayer.Opacity" Value="0.6" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Pressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="HoverLayer.Opacity" Value="0.9" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Disabled">
+                                        <VisualState.Setters>
+                                            <Setter Target="RootGrid.Opacity" Value="0.45" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="Checked">
+                                        <VisualState.Setters>
+                                            <Setter Target="OnLayer.Opacity" Value="1" />
+                                            <Setter Target="ContentPresenter.Foreground" Value="White" />
+                                            <Setter Target="StateText.Foreground" Value="White" />
+                                            <Setter Target="StateText.Text" Value="On" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="CheckedPointerOver">
+                                        <VisualState.Setters>
+                                            <Setter Target="OnLayer.Opacity" Value="0.88" />
+                                            <Setter Target="ContentPresenter.Foreground" Value="White" />
+                                            <Setter Target="StateText.Foreground" Value="White" />
+                                            <Setter Target="StateText.Text" Value="On" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="CheckedPressed">
+                                        <VisualState.Setters>
+                                            <Setter Target="OnLayer.Opacity" Value="0.75" />
+                                            <Setter Target="ContentPresenter.Foreground" Value="White" />
+                                            <Setter Target="StateText.Foreground" Value="White" />
+                                            <Setter Target="StateText.Text" Value="On" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                    <VisualState x:Name="CheckedDisabled">
+                                        <VisualState.Setters>
+                                            <Setter Target="OnLayer.Opacity" Value="1" />
+                                            <Setter Target="RootGrid.Opacity" Value="0.45" />
+                                            <Setter Target="ContentPresenter.Foreground" Value="White" />
+                                            <Setter Target="StateText.Foreground" Value="White" />
+                                            <Setter Target="StateText.Text" Value="On" />
+                                        </VisualState.Setters>
+                                    </VisualState>
+                                </VisualStateGroup>
+                            </VisualStateManager.VisualStateGroups>
+                        </Grid>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="StepBarStyle" TargetType="ProgressBar">
+            <Setter Property="Maximum" Value="100" />
+            <Setter Property="MinHeight" Value="4" />
+            <Setter Property="Height" Value="4" />
+            <Setter Property="CornerRadius" Value="2" />
+            <Setter Property="Foreground" Value="{ThemeResource AppAccentBrush}" />
+            <Setter Property="Background" Value="{ThemeResource AppBorderBrush}" />
+        </Style>
+        <Style x:Key="StepLabelStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="{StaticResource FontSizeCaption}" />
+            <Setter Property="Foreground" Value="{ThemeResource AppTextSecondaryBrush}" />
+        </Style>
+        <Style x:Key="RowHintStyle" TargetType="TextBlock" BasedOn="{StaticResource MutedStyle}">
+            <Setter Property="FontSize" Value="{StaticResource FontSizeCaption}" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <Style x:Key="SubheadStyle" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Foreground" Value="{ThemeResource AppTextPrimaryBrush}" />
+        </Style>
     </Page.Resources>
+
     <Grid>
         <Grid.RowDefinitions>
             <!-- 48 = Tall caption-button band height, so the header buttons share
                  a centerline with minimize/maximize/close. -->
             <RowDefinition Height="48"/>
             <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <Border Grid.Row="0" Background="{ThemeResource AppSurfaceBrush}"
                 BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="0,0,0,1">
@@ -49,218 +192,316 @@
                      non-client space (controls overlapping it lose input), so it only
                      covers the empty middle column. -->
                 <Border x:Name="HeaderDragRegion" Grid.Column="1" Background="Transparent" Margin="0,-6" />
-                <Button x:Name="SaveBtn" Grid.Column="2" Content="Save" Padding="22,8" CornerRadius="10"
-                        Background="{ThemeResource AppAccentBrush}" Foreground="White" BorderThickness="0"
-                        VerticalAlignment="Center"/>
+                <AutoSuggestBox x:Name="SettingsSearch" Grid.Column="2" Width="280"
+                                PlaceholderText="Search settings (Ctrl+F)" QueryIcon="Find"
+                                VerticalAlignment="Center" />
             </Grid>
         </Border>
 
-        <ScrollViewer x:Name="RootScroller" Grid.Row="1" Padding="32,20,32,40">
-            <StackPanel Spacing="20" MaxWidth="900" HorizontalAlignment="Center">
+        <ScrollViewer x:Name="RootScroller" Grid.Row="1" Padding="32,24,32,40">
+            <StackPanel x:Name="RootStack" Spacing="14" MaxWidth="920" HorizontalAlignment="Stretch">
                 <StackPanel.ChildrenTransitions>
                     <TransitionCollection>
                         <EntranceThemeTransition IsStaggeringEnabled="True" />
                     </TransitionCollection>
                 </StackPanel.ChildrenTransitions>
 
-                <!-- ─── Preset colors ──────────────────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="12">
-                        <TextBlock Text="Preset colors" Style="{StaticResource H2Style}" />
-                        <TextBlock Text="Colors shown in the toolbar flyout per tool. Add as many as you like."
-                                   Style="{StaticResource MutedStyle}" />
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <RadioButton x:Name="ColorToolPen" Content="Pen" IsChecked="True" GroupName="ColorTool"/>
-                            <RadioButton x:Name="ColorToolHighlighter" Content="Highlighter" GroupName="ColorTool"/>
+                <!-- ─── Quick tiles ───────────────────────────────────────────── -->
+                <Grid x:Name="TileGrid" ColumnSpacing="10" RowSpacing="10">
+                    <ToggleButton x:Name="PressureEnabledBox" Style="{StaticResource SettingsTileStyle}"
+                                  ToolTipService.ToolTip="Vary stroke width with pen pressure">
+                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe746;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Pressure" FontWeight="SemiBold" /></StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="PalmToggle" Style="{StaticResource SettingsTileStyle}"
+                                  ToolTipService.ToolTip="Ignore your hand resting on the screen while writing">
+                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe764;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Palm rejection" FontWeight="SemiBold" /></StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="HoldToSnapToggle" Style="{StaticResource SettingsTileStyle}"
+                                  ToolTipService.ToolTip="Draw a shape, then hold still for about 750 ms to snap it to a perfect line, ellipse or rectangle">
+                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe7c8;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Hold to snap" FontWeight="SemiBold" /></StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="AutosaveToggle" Style="{StaticResource SettingsTileStyle}"
+                                  ToolTipService.ToolTip="Save automatically a short while after you stop drawing">
+                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe161;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Autosave" FontWeight="SemiBold" /></StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="AutoUpdateToggle" Style="{StaticResource SettingsTileStyle}"
+                                  ToolTipService.ToolTip="Download updates in the background and install them when you close YuNotes">
+                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe8d7;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Auto-update" FontWeight="SemiBold" /></StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="LiquidGlassBox" Style="{StaticResource SettingsTileStyle}"
+                                  ToolTipService.ToolTip="Render the floating toolbar as refractive glass. Turn off to fall back to plain acrylic">
+                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe798;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Liquid glass" FontWeight="SemiBold" /></StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="SeamlessPagesBox" Style="{StaticResource SettingsTileStyle}"
+                                  ToolTipService.ToolTip="No gap between pages">
+                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe8ed;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Seamless pages" FontWeight="SemiBold" /></StackPanel>
+                    </ToggleButton>
+                    <ToggleButton x:Name="HideZoomBarBox" Style="{StaticResource SettingsTileStyle}"
+                                  ToolTipService.ToolTip="Hide the zoom bar in the editor">
+                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe8ff;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Hide zoom bar" FontWeight="SemiBold" /></StackPanel>
+                    </ToggleButton>
+                </Grid>
+
+                <!-- ─── Updates ──────────────────────────────────────────────── -->
+                <Border x:Name="UpdatesCard" Style="{StaticResource CardStyle}" Padding="20" Margin="0,6,0,6">
+                    <Grid ColumnSpacing="22">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Grid Width="88" Height="88" VerticalAlignment="Center">
+                            <ProgressRing x:Name="UpdateRing" Width="88" Height="88"
+                                          IsIndeterminate="False" IsActive="True"
+                                          Minimum="0" Maximum="100" Value="0"
+                                          Foreground="{ThemeResource AppAccentBrush}"
+                                          Background="{ThemeResource AppAccentSoftBrush}" />
+                            <TextBlock x:Name="UpdatePercentText" FontSize="18" FontWeight="SemiBold"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                                       Visibility="Collapsed" />
+                            <FontIcon x:Name="UpdateStateIcon" Glyph="&#xe923;" FontSize="30"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"
+                                      Foreground="{ThemeResource AppAccentBrush}" />
+                        </Grid>
+                        <StackPanel Grid.Column="1" Spacing="12" VerticalAlignment="Center">
+                            <Grid ColumnSpacing="12">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="2">
+                                    <TextBlock x:Name="UpdateTitleText" Text="Updates" FontSize="{StaticResource FontSizeSubheading}"
+                                               FontWeight="SemiBold" Foreground="{ThemeResource AppTextPrimaryBrush}" />
+                                    <TextBlock x:Name="UpdateStatusText" Style="{StaticResource MutedStyle}" TextWrapping="Wrap" />
+                                </StackPanel>
+                                <Button x:Name="CheckUpdatesBtn" Grid.Column="1" Content="Check for updates"
+                                        CornerRadius="8" VerticalAlignment="Top" />
+                            </Grid>
+                            <Grid x:Name="UpdateSteps" ColumnSpacing="8">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition /><ColumnDefinition /><ColumnDefinition /><ColumnDefinition />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel Spacing="6">
+                                    <ProgressBar x:Name="StepCheckBar" Style="{StaticResource StepBarStyle}" />
+                                    <TextBlock x:Name="StepCheckLabel" Text="Check" Style="{StaticResource StepLabelStyle}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Spacing="6">
+                                    <ProgressBar x:Name="StepDownloadBar" Style="{StaticResource StepBarStyle}" />
+                                    <TextBlock x:Name="StepDownloadLabel" Text="Download" Style="{StaticResource StepLabelStyle}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="2" Spacing="6">
+                                    <ProgressBar x:Name="StepStageBar" Style="{StaticResource StepBarStyle}" />
+                                    <TextBlock x:Name="StepStageLabel" Text="Prepare" Style="{StaticResource StepLabelStyle}" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="3" Spacing="6">
+                                    <ProgressBar x:Name="StepReadyBar" Style="{StaticResource StepBarStyle}" />
+                                    <TextBlock x:Name="StepReadyLabel" Text="Ready" Style="{StaticResource StepLabelStyle}" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock x:Name="UpdateMetaText" FontFamily="Consolas" FontSize="{StaticResource FontSizeCaption}"
+                                       Foreground="{ThemeResource AppTextSecondaryBrush}" Visibility="Collapsed" />
+                            <TextBlock x:Name="AppVersionText" FontSize="{StaticResource FontSizeCaption}"
+                                       Foreground="{ThemeResource AppTextSecondaryBrush}" />
                         </StackPanel>
-                        <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
-                                      HorizontalScrollMode="Auto" VerticalScrollMode="Disabled">
-                            <StackPanel x:Name="ColorsPanel" Orientation="Horizontal" Spacing="8" Padding="2"/>
-                        </ScrollViewer>
-                    </StackPanel>
+                    </Grid>
                 </Border>
 
-                <!-- ─── Stylus & Pen Input ────────────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
+                <!-- ─── Pen & stylus ─────────────────────────────────────────── -->
+                <Expander x:Name="PenSection" Style="{StaticResource SectionExpanderStyle}"
+                          Tag="pen stylus pressure sensitivity minimum multiplier barrel button eraser tip remap snap shape">
+                    <Expander.Header>
+                        <Grid ColumnSpacing="14" Padding="0,10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xf604;" FontSize="22" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1"><TextBlock Text="Pen &amp; stylus" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Pressure curve, barrel button, test area" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                        </Grid>
+                    </Expander.Header>
                     <StackPanel Spacing="14">
-                        <TextBlock Text="Stylus &amp; Pen Input" Style="{StaticResource H2Style}" />
+                        <Grid ColumnSpacing="12" RowSpacing="10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="200"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="56"/>
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition/><RowDefinition/>
+                            </Grid.RowDefinitions>
+                            <TextBlock Text="Minimum pressure" VerticalAlignment="Center"/>
+                            <Slider x:Name="MinPressureSlider" Grid.Column="1" Minimum="0" Maximum="0.5" StepFrequency="0.01"/>
+                            <TextBlock x:Name="MinPressureLabel" Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                            <TextBlock Grid.Row="1" Text="Pressure multiplier" VerticalAlignment="Center"/>
+                            <Slider x:Name="PressureMultSlider" Grid.Row="1" Grid.Column="1" Minimum="0.25" Maximum="3.0" StepFrequency="0.05"/>
+                            <TextBlock x:Name="PressureMultLabel" Grid.Row="1" Grid.Column="2" VerticalAlignment="Center" HorizontalAlignment="Right"/>
+                        </Grid>
+                        <TextBlock Text="Turn pressure on with the Pressure tile above. If your stylus or Windows doesn't report pressure, these settings have no effect."
+                                   Style="{StaticResource RowHintStyle}"/>
 
-                        <!-- 1) Pressure sensitivity -->
-                        <StackPanel Spacing="8">
-                            <CheckBox x:Name="PressureEnabledBox" Content="Enable pressure sensitivity" />
-                            <Grid ColumnSpacing="12" RowSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="220"/>
-                                    <ColumnDefinition Width="*"/>
-                                    <ColumnDefinition Width="80"/>
-                                </Grid.ColumnDefinitions>
-                                <Grid.RowDefinitions>
-                                    <RowDefinition/><RowDefinition/>
-                                </Grid.RowDefinitions>
-                                <TextBlock Text="Minimum pressure" VerticalAlignment="Center"/>
-                                <Slider x:Name="MinPressureSlider" Grid.Column="1" Minimum="0" Maximum="0.5" StepFrequency="0.01"/>
-                                <TextBlock x:Name="MinPressureLabel" Grid.Column="2" VerticalAlignment="Center"/>
-                                <TextBlock Grid.Row="1" Text="Pressure multiplier" VerticalAlignment="Center"/>
-                                <Slider x:Name="PressureMultSlider" Grid.Row="1" Grid.Column="1" Minimum="0.25" Maximum="3.0" StepFrequency="0.05"/>
-                                <TextBlock x:Name="PressureMultLabel" Grid.Row="1" Grid.Column="2" VerticalAlignment="Center"/>
+                        <StackPanel Spacing="6">
+                            <Grid>
+                                <TextBlock Text="Test area: each sample is a circle sized to its pressure."
+                                           Style="{StaticResource MutedStyle}" VerticalAlignment="Center" />
+                                <Button x:Name="PressureClearBtn" Content="Clear"
+                                        HorizontalAlignment="Right" Padding="10,4" CornerRadius="8"/>
                             </Grid>
-                            <TextBlock Text="If your stylus or OS doesn't expose pressure, these settings have no effect."
-                                       Style="{StaticResource MutedStyle}" TextWrapping="Wrap"/>
-
-                            <!-- Pressure test sandbox -->
-                            <StackPanel Spacing="6">
+                            <Border x:Name="PressureSandbox"
+                                    Background="{ThemeResource AppSurfaceVariantBrush}"
+                                    BorderBrush="{ThemeResource AppBorderBrush}"
+                                    BorderThickness="1"
+                                    CornerRadius="10"
+                                    Height="180"
+                                    IsHitTestVisible="True">
                                 <Grid>
-                                    <TextBlock Text="Test draw — each sample is a circle sized to the pressure value."
-                                               Style="{StaticResource MutedStyle}" />
-                                    <Button x:Name="PressureClearBtn" Content="Clear"
-                                            HorizontalAlignment="Right" Padding="10,4" CornerRadius="8"/>
+                                    <Canvas x:Name="PressureCanvas" IsHitTestVisible="False"/>
+                                    <TextBlock x:Name="PressureHint" Text="Draw here with your pen to preview pressure."
+                                               HorizontalAlignment="Center" VerticalAlignment="Center"
+                                               Foreground="{ThemeResource AppTextSecondaryBrush}"
+                                               IsHitTestVisible="False" />
                                 </Grid>
-                                <Border x:Name="PressureSandbox"
-                                        Background="{ThemeResource AppSurfaceVariantBrush}"
-                                        BorderBrush="{ThemeResource AppBorderBrush}"
-                                        BorderThickness="1"
-                                        CornerRadius="10"
-                                        Height="180"
-                                        IsHitTestVisible="True">
-                                    <Grid>
-                                        <Canvas x:Name="PressureCanvas" IsHitTestVisible="False"/>
-                                        <TextBlock x:Name="PressureHint" Text="Draw here with your pen to preview pressure."
-                                                   HorizontalAlignment="Center" VerticalAlignment="Center"
-                                                   Foreground="{ThemeResource AppTextSecondaryBrush}"
-                                                   IsHitTestVisible="False" />
-                                    </Grid>
-                                </Border>
+                            </Border>
+                        </StackPanel>
+
+                        <Border Background="{ThemeResource AppBorderBrush}" Height="1" />
+
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="Barrel button" Style="{StaticResource SubheadStyle}" />
+                                <TextBlock Text="Switches tool only while held. The eraser tip always erases with the current toolbar settings."
+                                           Style="{StaticResource RowHintStyle}" />
                             </StackPanel>
-                        </StackPanel>
-
-                        <Border Background="{ThemeResource AppBorderBrush}" Height="1" Margin="0,2"/>
-
-                        <!-- 3) Stylus buttons & eraser tip -->
-                        <StackPanel Spacing="8">
-                            <TextBlock Text="Stylus buttons &amp; eraser" FontWeight="SemiBold"/>
-                            <Grid ColumnSpacing="12" RowSpacing="8">
-                                <Grid.ColumnDefinitions>
-                                    <ColumnDefinition Width="220"/>
-                                    <ColumnDefinition Width="240"/>
-                                </Grid.ColumnDefinitions>
-                                <TextBlock Text="Button 1 (barrel)" VerticalAlignment="Center"/>
-                                <ComboBox x:Name="BarrelCombo" Grid.Column="1" Width="220"/>
-                            </Grid>
-
-                            <TextBlock Text="Remappings are momentary: while a button is held the tool switches; the moment it's released, the previous tool returns. The eraser tip always activates the eraser using the current toolbar settings."
-                                       Style="{StaticResource MutedStyle}" TextWrapping="Wrap"/>
-                        </StackPanel>
-
-                        <Border Background="{ThemeResource AppBorderBrush}" Height="1" Margin="0,2"/>
-
-                        <!-- 4) Shape recognition -->
-                        <ToggleSwitch x:Name="HoldToSnapToggle"
-                                      Header="Hold-to-snap shape recognition"
-                                      OnContent="On" OffContent="Off" />
-                        <TextBlock Text="Draw a shape with the pen, then hold still for ~750 ms to snap it to a perfect line, ellipse, or rectangle. After snapping you can drag to adjust the shape before lifting the pen."
-                                   Style="{StaticResource MutedStyle}" TextWrapping="Wrap"/>
+                            <ComboBox x:Name="BarrelCombo" Grid.Column="1" Width="220" VerticalAlignment="Center"/>
+                        </Grid>
                     </StackPanel>
-                </Border>
+                </Expander>
 
                 <!-- ─── Palm rejection ──────────────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Palm rejection" Style="{StaticResource H2Style}" />
-                        <ToggleSwitch x:Name="PalmToggle" Header="Enabled" />
-                        <ToggleSwitch x:Name="IgnoreTouchToggle" Header="Ignore touch while pen is active" />
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <TextBlock Text="Grace period (ms)" VerticalAlignment="Center" Width="200"/>
-                            <NumberBox x:Name="GraceBox" Minimum="0" Maximum="3000" SpinButtonPlacementMode="Inline" Value="500"/>
-                        </StackPanel>
+                <Expander x:Name="PalmSection" Style="{StaticResource SectionExpanderStyle}"
+                          Tag="palm rejection touch grace period hand">
+                    <Expander.Header>
+                        <Grid ColumnSpacing="14" Padding="0,10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xe913;" FontSize="22" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1"><TextBlock Text="Palm rejection" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Touch handling while the pen is in use" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                        </Grid>
+                    </Expander.Header>
+                    <StackPanel Spacing="14">
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="Ignore touch while pen is active" Style="{StaticResource SubheadStyle}" />
+                                <TextBlock Text="Finger input is dropped as long as the pen is near the screen." Style="{StaticResource RowHintStyle}" />
+                            </StackPanel>
+                            <ToggleSwitch x:Name="IgnoreTouchToggle" Grid.Column="1" OnContent="" OffContent="" MinWidth="0" VerticalAlignment="Center" />
+                        </Grid>
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="Grace period (ms)" Style="{StaticResource SubheadStyle}" />
+                                <TextBlock Text="How long touch stays blocked after the pen lifts." Style="{StaticResource RowHintStyle}" />
+                            </StackPanel>
+                            <NumberBox x:Name="GraceBox" Grid.Column="1" Width="140" Minimum="0" Maximum="3000"
+                                       SpinButtonPlacementMode="Inline" Value="500" VerticalAlignment="Center"/>
+                        </Grid>
                     </StackPanel>
-                </Border>
+                </Expander>
 
+                <!-- ─── Colors & widths ─────────────────────────────────────── -->
+                <Expander x:Name="InkSection" Style="{StaticResource SectionExpanderStyle}"
+                          Tag="colors color preset palette pen highlighter eraser width default">
+                    <Expander.Header>
+                        <Grid ColumnSpacing="14" Padding="0,10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xe3b7;" FontSize="22" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1"><TextBlock Text="Colors &amp; widths" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Preset colors and default tool widths" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                        </Grid>
+                    </Expander.Header>
+                    <StackPanel Spacing="14">
+                        <StackPanel Spacing="10">
+                            <Grid>
+                                <StackPanel Spacing="2">
+                                    <TextBlock Text="Preset colors" Style="{StaticResource SubheadStyle}" />
+                                    <TextBlock Text="Shown in the toolbar flyout for each tool." Style="{StaticResource RowHintStyle}" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                                    <RadioButton x:Name="ColorToolPen" Content="Pen" IsChecked="True" GroupName="ColorTool" MinWidth="0"/>
+                                    <RadioButton x:Name="ColorToolHighlighter" Content="Highlighter" GroupName="ColorTool" MinWidth="0"/>
+                                </StackPanel>
+                            </Grid>
+                            <ScrollViewer HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Disabled"
+                                          HorizontalScrollMode="Auto" VerticalScrollMode="Disabled">
+                                <StackPanel x:Name="ColorsPanel" Orientation="Horizontal" Spacing="8" Padding="2"/>
+                            </ScrollViewer>
+                        </StackPanel>
 
-                <!-- ─── Default widths ──────────────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Defaults" Style="{StaticResource H2Style}" />
-                        <Grid ColumnSpacing="10" RowSpacing="10">
+                        <Border Background="{ThemeResource AppBorderBrush}" Height="1" />
+
+                        <Grid ColumnSpacing="12" RowSpacing="10">
                             <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="220"/>
-                                <ColumnDefinition Width="220"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
                             <Grid.RowDefinitions>
                                 <RowDefinition/><RowDefinition/><RowDefinition/>
                             </Grid.RowDefinitions>
-                            <TextBlock Text="Default pen width" VerticalAlignment="Center"/>
-                            <NumberBox x:Name="PenWidthBox" Grid.Column="1" Minimum="1" Maximum="40" Value="2.5"/>
-                            <TextBlock Grid.Row="1" Text="Default highlighter width" VerticalAlignment="Center"/>
-                            <NumberBox x:Name="HighWidthBox" Grid.Row="1" Grid.Column="1" Minimum="2" Maximum="60" Value="18"/>
-                            <TextBlock Grid.Row="2" Text="Default eraser width" VerticalAlignment="Center"/>
-                            <NumberBox x:Name="EraserWidthBox" Grid.Row="2" Grid.Column="1" Minimum="2" Maximum="80" Value="20"/>
+                            <TextBlock Text="Default pen width" Style="{StaticResource SubheadStyle}" VerticalAlignment="Center"/>
+                            <NumberBox x:Name="PenWidthBox" Grid.Column="1" Width="140" Minimum="1" Maximum="40" Value="2.5" SpinButtonPlacementMode="Inline"/>
+                            <TextBlock Grid.Row="1" Text="Default highlighter width" Style="{StaticResource SubheadStyle}" VerticalAlignment="Center"/>
+                            <NumberBox x:Name="HighWidthBox" Grid.Row="1" Grid.Column="1" Width="140" Minimum="2" Maximum="60" Value="18" SpinButtonPlacementMode="Inline"/>
+                            <TextBlock Grid.Row="2" Text="Default eraser width" Style="{StaticResource SubheadStyle}" VerticalAlignment="Center"/>
+                            <NumberBox x:Name="EraserWidthBox" Grid.Row="2" Grid.Column="1" Width="140" Minimum="2" Maximum="80" Value="20" SpinButtonPlacementMode="Inline"/>
                         </Grid>
                     </StackPanel>
-                </Border>
+                </Expander>
 
-                <!-- ─── Appearance ─────────────────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Appearance" Style="{StaticResource H2Style}" />
-                        <Grid ColumnSpacing="10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="200"/>
-                                <ColumnDefinition Width="200"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Theme" VerticalAlignment="Center"/>
-                            <ComboBox x:Name="ThemeCombo" Grid.Column="1" Width="200">
+                <!-- ─── Appearance & toolbar ────────────────────────────────── -->
+                <Expander x:Name="AppearanceSection" Style="{StaticResource SectionExpanderStyle}"
+                          Tag="appearance theme dark light system toolbar position size top bottom left right tools reorder hide export action buttons">
+                    <Expander.Header>
+                        <Grid ColumnSpacing="14" Padding="0,10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xe99b;" FontSize="22" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1"><TextBlock Text="Appearance &amp; toolbar" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Theme, toolbar position and which tools it shows" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                        </Grid>
+                    </Expander.Header>
+                    <StackPanel Spacing="14">
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="Theme" Style="{StaticResource SubheadStyle}" />
+                                <TextBlock Text="Applies across the whole app when you save." Style="{StaticResource RowHintStyle}" />
+                            </StackPanel>
+                            <ComboBox x:Name="ThemeCombo" Grid.Column="1" Width="200" VerticalAlignment="Center">
                                 <ComboBoxItem Content="Use system setting" />
                                 <ComboBoxItem Content="Light" />
                                 <ComboBoxItem Content="Dark" />
                             </ComboBox>
                         </Grid>
-                        <TextBlock Text="Choose a light or dark appearance, or follow your Windows setting. Applies across the whole app when you save."
-                                   Style="{StaticResource MutedStyle}" TextWrapping="Wrap"/>
-                    </StackPanel>
-                </Border>
-
-                <!-- ─── Layout ─────────────────────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Layout" Style="{StaticResource H2Style}" />
-                        <Grid ColumnSpacing="10" RowSpacing="10">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="200"/>
-                                <ColumnDefinition Width="200"/>
-                            </Grid.ColumnDefinitions>
-                            <Grid.RowDefinitions>
-                                <RowDefinition/><RowDefinition/>
-                            </Grid.RowDefinitions>
-                            <TextBlock Text="Toolbar position" VerticalAlignment="Center"/>
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Toolbar position" Style="{StaticResource SubheadStyle}" VerticalAlignment="Center" />
                             <ComboBox x:Name="ToolbarPositionCombo" Grid.Column="1" Width="200">
                                 <ComboBoxItem Content="Top" />
                                 <ComboBoxItem Content="Bottom" />
                                 <ComboBoxItem Content="Left" />
                                 <ComboBoxItem Content="Right" />
                             </ComboBox>
-                            <TextBlock Grid.Row="1" Text="Toolbar size" VerticalAlignment="Center"/>
-                            <ComboBox x:Name="ToolbarSizeCombo" Grid.Row="1" Grid.Column="1" Width="200">
+                        </Grid>
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <TextBlock Text="Toolbar size" Style="{StaticResource SubheadStyle}" VerticalAlignment="Center" />
+                            <ComboBox x:Name="ToolbarSizeCombo" Grid.Column="1" Width="200">
                                 <ComboBoxItem Content="Small" />
                                 <ComboBoxItem Content="Normal" />
                                 <ComboBoxItem Content="Large" />
                             </ComboBox>
                         </Grid>
-                        <CheckBox x:Name="HideZoomBarBox" Content="Hide zoom bar" />
-                        <CheckBox x:Name="SeamlessPagesBox" Content="Seamless pages (no gap between pages)" />
-                        <CheckBox x:Name="LiquidGlassBox" Content="Liquid glass toolbar" />
-                        <TextBlock Text="Renders the floating toolbar as refractive glass that bends the page behind its edges. Runs on the GPU compositor at about the same cost as the standard translucency; turn off to fall back to plain acrylic."
-                                   Style="{StaticResource MutedStyle}" TextWrapping="Wrap"/>
-                    </StackPanel>
-                </Border>
 
-                <!-- ─── Toolbar ────────────────────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="14">
-                        <TextBlock Text="Toolbar" Style="{StaticResource H2Style}" />
-                        <TextBlock Text="Drag rows to reorder tools. Check the box to show a tool; uncheck to hide it. Hidden tools remain reachable via keyboard shortcuts and stylus buttons."
-                                   Style="{StaticResource MutedStyle}" TextWrapping="Wrap" />
+                        <Border Background="{ThemeResource AppBorderBrush}" Height="1" />
 
-                        <TextBlock Text="Drawing tools" FontWeight="SemiBold" />
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="Drawing tools" Style="{StaticResource SubheadStyle}" />
+                            <TextBlock Text="Drag rows to reorder. Unchecked tools are hidden but still work through keyboard shortcuts and stylus buttons."
+                                       Style="{StaticResource RowHintStyle}" />
+                        </StackPanel>
                         <ListView x:Name="DrawingToolsList"
                                   CanReorderItems="True" AllowDrop="True" CanDragItems="True"
                                   SelectionMode="None"
@@ -277,9 +518,10 @@
                             </ListView.ItemContainerStyle>
                         </ListView>
 
-                        <TextBlock Text="Action buttons" FontWeight="SemiBold" Margin="0,4,0,0"/>
-                        <TextBlock Text="These appear in the top title bar. Drag to change their order."
-                                   Style="{StaticResource MutedStyle}" />
+                        <StackPanel Spacing="2">
+                            <TextBlock Text="Action buttons" Style="{StaticResource SubheadStyle}" />
+                            <TextBlock Text="These appear in the top title bar. Drag to change their order." Style="{StaticResource RowHintStyle}" />
+                        </StackPanel>
                         <ListView x:Name="ActionToolsList"
                                   CanReorderItems="True" AllowDrop="True" CanDragItems="True"
                                   SelectionMode="None"
@@ -295,61 +537,54 @@
                                 </Style>
                             </ListView.ItemContainerStyle>
                         </ListView>
-
-                        <CheckBox x:Name="ToolVisExport" Content="Export (shown in title bar, fixed position)" />
+                        <CheckBox x:Name="ToolVisExport" Content="Show Export in the title bar (fixed position)" />
                     </StackPanel>
-                </Border>
+                </Expander>
 
-                <!-- ─── Storage ─────────────────────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Storage" Style="{StaticResource H2Style}" />
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <TextBox x:Name="FolderBox" Width="500" IsReadOnly="True" />
-                            <Button x:Name="PickFolderBtn" Content="Choose..." />
+                <!-- ─── Storage & autosave ──────────────────────────────────── -->
+                <Expander x:Name="StorageSection" Style="{StaticResource SectionExpanderStyle}"
+                          Tag="storage folder documents location autosave save delay seconds">
+                    <Expander.Header>
+                        <Grid ColumnSpacing="14" Padding="0,10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xe2c7;" FontSize="22" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1"><TextBlock Text="Storage &amp; autosave" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Where notes live and when they save" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                        </Grid>
+                    </Expander.Header>
+                    <StackPanel Spacing="14">
+                        <StackPanel Spacing="6">
+                            <TextBlock Text="Notes folder" Style="{StaticResource SubheadStyle}" />
+                            <Grid ColumnSpacing="10">
+                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                <TextBox x:Name="FolderBox" IsReadOnly="True" />
+                                <Button x:Name="PickFolderBtn" Grid.Column="1" Content="Choose…" CornerRadius="8" />
+                            </Grid>
                         </StackPanel>
-                    </StackPanel>
-                </Border>
-
-                <!-- ─── Autosave ──────────────────────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Autosave" Style="{StaticResource H2Style}" />
-                        <ToggleSwitch x:Name="AutosaveToggle" Header="Autosave while editing" />
-                        <TextBlock Text="Saves your work automatically a short while after you stop drawing. For PDFs this is a fast recovery save (your edits reopen in YuNotes); the flattened pages other apps see still refresh on a manual save or on close. Turn off to save only with Ctrl+S or when closing."
-                                   TextWrapping="Wrap" Foreground="{ThemeResource AppTextSecondaryBrush}" FontSize="12" />
-                        <StackPanel Orientation="Horizontal" Spacing="10">
-                            <TextBlock Text="Save after (seconds)" VerticalAlignment="Center" Width="200" />
-                            <NumberBox x:Name="AutosaveDelayBox" Minimum="0.5" Maximum="120"
-                                       SmallChange="0.5" LargeChange="5"
+                        <Grid ColumnSpacing="16">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                            <StackPanel Spacing="2">
+                                <TextBlock Text="Autosave after (seconds)" Style="{StaticResource SubheadStyle}" />
+                                <TextBlock Text="Turn autosave on with the Autosave tile. For PDFs this is a fast recovery save; the flattened pages other apps see refresh on a manual save or on close."
+                                           Style="{StaticResource RowHintStyle}" />
+                            </StackPanel>
+                            <NumberBox x:Name="AutosaveDelayBox" Grid.Column="1" Width="140" Minimum="0.5" Maximum="120"
+                                       SmallChange="0.5" LargeChange="5" VerticalAlignment="Center"
                                        SpinButtonPlacementMode="Inline" Value="2.5" />
-                        </StackPanel>
+                        </Grid>
                     </StackPanel>
-                </Border>
+                </Expander>
 
-                <!-- ─── Updates ──────────────────────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Updates" Style="{StaticResource H2Style}" />
-                        <ToggleSwitch x:Name="AutoUpdateToggle" Header="Install updates automatically" />
-                        <TextBlock Text="YuNotes checks GitHub for a newer version when it starts. Updates download in the background and install when you close the app, so your open notes are never interrupted."
-                                   TextWrapping="Wrap" Foreground="{ThemeResource AppTextSecondaryBrush}" FontSize="12" />
-                        <StackPanel Orientation="Horizontal" Spacing="12">
-                            <Button x:Name="CheckUpdatesBtn" Content="Check for updates" />
-                            <ProgressRing x:Name="UpdateProgress" Width="18" Height="18"
-                                          IsActive="False" VerticalAlignment="Center" />
-                            <TextBlock x:Name="UpdateStatusText" VerticalAlignment="Center"
-                                       TextWrapping="Wrap" FontSize="13" />
-                        </StackPanel>
-                        <TextBlock x:Name="AppVersionText" FontSize="12"
-                                   Foreground="{ThemeResource AppTextSecondaryBrush}" />
-                    </StackPanel>
-                </Border>
-
-                <!-- ─── Input Devices Diagnostics ─────────────────────────────── -->
-                <Border Style="{StaticResource CardStyle}">
-                    <StackPanel Spacing="10">
-                        <TextBlock Text="Input Devices Diagnostics" Style="{StaticResource H2Style}" />
+                <!-- ─── Advanced: input diagnostics ─────────────────────────── -->
+                <Expander x:Name="AdvancedSection" Style="{StaticResource SectionExpanderStyle}"
+                          Tag="advanced diagnostics input devices mouse stylus eraser touch logs debug crash emulate tip">
+                    <Expander.Header>
+                        <Grid ColumnSpacing="14" Padding="0,10">
+                            <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                            <FontIcon Glyph="&#xe868;" FontSize="22" VerticalAlignment="Center" />
+                            <StackPanel Grid.Column="1"><TextBlock Text="Advanced" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Input diagnostics, logs and crash reports" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                        </Grid>
+                    </Expander.Header>
+                    <StackPanel Spacing="12">
                         <TextBlock Text="Try out your devices in the area below. Indicators light up as the app receives events."
                                    Style="{StaticResource MutedStyle}" TextWrapping="Wrap" />
                         <Grid ColumnSpacing="16">
@@ -358,7 +593,6 @@
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <!-- Indicator chips -->
                             <StackPanel Spacing="12">
                                 <StackPanel Spacing="4">
                                     <TextBlock Text="Mouse" FontWeight="SemiBold"/>
@@ -404,7 +638,6 @@
                                 </StackPanel>
                             </StackPanel>
 
-                            <!-- Sandbox -->
                             <Border Grid.Column="1"
                                     x:Name="Sandbox"
                                     Background="{ThemeResource AppSurfaceVariantBrush}"
@@ -419,17 +652,37 @@
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Spacing="8">
-                            <Button x:Name="ShowLogsBtn" Content="Show logs"/>
-                            <Button x:Name="ExportDebugBtn" Content="Export debug info"/>
-                            <Button x:Name="CrashLogBtn" Content="View crash log"/>
+                            <Button x:Name="ShowLogsBtn" Content="Show logs" CornerRadius="8"/>
+                            <Button x:Name="ExportDebugBtn" Content="Export debug info" CornerRadius="8"/>
+                            <Button x:Name="CrashLogBtn" Content="View crash log" CornerRadius="8"/>
                         </StackPanel>
-                        <TextBlock Text="To clear the logs, simply close and reopen the settings page."
-                                   Style="{StaticResource MutedStyle}"/>
+                        <TextBlock Text="The log clears when you close and reopen Settings."
+                                   Style="{StaticResource RowHintStyle}"/>
                         <CheckBox x:Name="EmulateTipBox" Content="Emulate stylus tip contact on button press"/>
                     </StackPanel>
-                </Border>
+                </Expander>
 
+                <TextBlock x:Name="NoResultsText" Text="No settings match your search."
+                           Style="{StaticResource MutedStyle}" HorizontalAlignment="Center"
+                           Margin="0,24" Visibility="Collapsed" />
             </StackPanel>
         </ScrollViewer>
+
+        <!-- ─── Save bar: only shown when something changed ──────────────── -->
+        <Border x:Name="SaveBar" Grid.Row="2" Visibility="Collapsed"
+                Background="{ThemeResource AppSurfaceBrush}"
+                BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="0,1,0,0"
+                Padding="32,12">
+            <Grid MaxWidth="920" ColumnSpacing="12">
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                    <Ellipse Width="8" Height="8" Fill="{ThemeResource AppAccentBrush}" VerticalAlignment="Center" />
+                    <TextBlock Text="You have unsaved changes" VerticalAlignment="Center" />
+                </StackPanel>
+                <Button x:Name="DiscardBtn" Grid.Column="1" Content="Discard" Padding="16,7" CornerRadius="10" />
+                <Button x:Name="SaveBtn" Grid.Column="2" Content="Save" Padding="22,7" CornerRadius="10"
+                        Background="{ThemeResource AppAccentBrush}" Foreground="White" BorderThickness="0" />
+            </Grid>
+        </Border>
     </Grid>
 </Page>

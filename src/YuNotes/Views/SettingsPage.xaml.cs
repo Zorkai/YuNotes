@@ -8,6 +8,7 @@ using System.Text;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
@@ -90,6 +91,17 @@ public sealed partial class SettingsPage : Page
         InitializeComponent();
         BackBtn.Click += async (_, __) => { if (await ConfirmLeaveSettingsAsync()) GoBack(); };
         SaveBtn.Click += (_, __) => Save();
+        DiscardBtn.Click += (_, __) => { RestoreColorSnapshot(); LoadIntoUi(); };
+        SettingsSearch.TextChanged += (_, __) => ApplySearch(SettingsSearch.Text);
+        TileGrid.SizeChanged += (_, e) => LayoutTiles(e.NewSize.Width);
+        var findKey = new KeyboardAccelerator
+        {
+            Key = Windows.System.VirtualKey.F,
+            Modifiers = Windows.System.VirtualKeyModifiers.Control
+        };
+        findKey.Invoked += (_, e) => { SettingsSearch.Focus(FocusState.Keyboard); e.Handled = true; };
+        KeyboardAccelerators.Add(findKey);
+        KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
         PickFolderBtn.Click += async (_, __) => await PickFolder();
         ShowLogsBtn.Click += async (_, __) => await ShowLogs();
         ExportDebugBtn.Click += async (_, __) => await ExportDebug();
@@ -130,6 +142,7 @@ public sealed partial class SettingsPage : Page
         {
             MainWindow.SetDragRegion(HeaderDragRegion);
             HeaderGrid.Padding = new Thickness(12, 0, 12 + MainWindow.CaptionButtonInset, 0);
+            TakeColorSnapshot();
             LoadIntoUi();
         };
         WireDirtyHandlers();
@@ -191,7 +204,103 @@ public sealed partial class SettingsPage : Page
         OnSandbox(sender, e);
     }
 
-    private void Mark(object? s = null, object? e = null) { if (!_settingsLoading) _settingsDirty = true; }
+    private void Mark(object? s = null, object? e = null)
+    {
+        if (_settingsLoading) return;
+        _settingsDirty = true;
+        UpdateSaveBar();
+    }
+
+    private void UpdateSaveBar() =>
+        SaveBar.Visibility = _settingsDirty ? Visibility.Visible : Visibility.Collapsed;
+
+    // Preset-color edits change the settings lists in place, so keep a copy to
+    // put back when the user discards.
+    private List<string> _penColorsSnapshot = new();
+    private List<string> _highlighterColorsSnapshot = new();
+
+    private void TakeColorSnapshot()
+    {
+        var s = App.Services.Settings.Current;
+        _penColorsSnapshot = new List<string>(s.PenPresetColors);
+        _highlighterColorsSnapshot = new List<string>(s.HighlighterPresetColors);
+    }
+
+    private void RestoreColorSnapshot()
+    {
+        var s = App.Services.Settings.Current;
+        s.PenPresetColors.Clear(); s.PenPresetColors.AddRange(_penColorsSnapshot);
+        s.HighlighterPresetColors.Clear(); s.HighlighterPresetColors.AddRange(_highlighterColorsSnapshot);
+    }
+
+    // ─── Quick tiles: 4 per row, 2 when the window is narrow ────────────────
+    private int _tileColumns;
+    private int _tileCount;
+
+    private void LayoutTiles(double width)
+    {
+        int cols = width < 560 ? 2 : 4;
+        var visible = TileGrid.Children.Where(c => c.Visibility == Visibility.Visible).ToList();
+        if (cols == _tileColumns && visible.Count == _tileCount) return;
+        _tileColumns = cols;
+        _tileCount = visible.Count;
+        TileGrid.ColumnDefinitions.Clear();
+        TileGrid.RowDefinitions.Clear();
+        for (int c = 0; c < cols; c++) TileGrid.ColumnDefinitions.Add(new ColumnDefinition());
+        for (int r = 0; r < (visible.Count + cols - 1) / cols; r++)
+            TileGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+        for (int i = 0; i < visible.Count; i++)
+        {
+            Grid.SetColumn((FrameworkElement)visible[i], i % cols);
+            Grid.SetRow((FrameworkElement)visible[i], i / cols);
+        }
+    }
+
+    // ─── Search ─────────────────────────────────────────────────────────────
+    // Filters tiles by their label and tooltip, the Updates card by a few
+    // keywords, and each section by its Tag keywords plus header text.
+    // Matching sections expand so the hit is visible.
+    private void ApplySearch(string? query)
+    {
+        var terms = (query ?? "").Trim().ToLowerInvariant()
+            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        bool Match(string haystack) => terms.All(t => haystack.Contains(t));
+        bool searching = terms.Length > 0;
+        int shown = 0;
+
+        foreach (var tile in TileGrid.Children.OfType<ToggleButton>())
+        {
+            var text = (TileLabel(tile) + " " + ToolTipService.GetToolTip(tile)).ToLowerInvariant();
+            bool ok = !searching || Match(text);
+            tile.Visibility = ok ? Visibility.Visible : Visibility.Collapsed;
+            if (ok) shown++;
+        }
+        TileGrid.Visibility = TileGrid.Children.Any(c => c.Visibility == Visibility.Visible)
+            ? Visibility.Visible : Visibility.Collapsed;
+        LayoutTiles(RootStack.ActualWidth);
+
+        bool updOk = !searching || Match("updates update version download install automatically check");
+        UpdatesCard.Visibility = updOk ? Visibility.Visible : Visibility.Collapsed;
+        if (updOk) shown++;
+
+        foreach (var ex in new[] { PenSection, PalmSection, InkSection, AppearanceSection, StorageSection, AdvancedSection })
+        {
+            var text = ((ex.Tag as string ?? "") + " " + HeaderText(ex)).ToLowerInvariant();
+            bool ok = !searching || Match(text);
+            ex.Visibility = ok ? Visibility.Visible : Visibility.Collapsed;
+            if (searching && ok) ex.IsExpanded = true;
+            if (ok) shown++;
+        }
+        NoResultsText.Visibility = shown == 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private static string TileLabel(ToggleButton tile) =>
+        tile.Content is Panel p ? string.Join(" ", p.Children.OfType<TextBlock>().Select(t => t.Text)) : "";
+
+    private static string HeaderText(Expander ex) =>
+        ex.Header is Panel p
+            ? string.Join(" ", p.Children.OfType<Panel>().SelectMany(c => c.Children.OfType<TextBlock>()).Select(t => t.Text))
+            : "";
 
     private void WireDirtyHandlers()
     {
@@ -213,16 +322,17 @@ public sealed partial class SettingsPage : Page
         SeamlessPagesBox.Checked += Mark; SeamlessPagesBox.Unchecked += Mark;
         LiquidGlassBox.Checked += Mark; LiquidGlassBox.Unchecked += Mark;
 
-        PalmToggle.Toggled += Mark;
+        PalmToggle.Checked += Mark; PalmToggle.Unchecked += Mark;
         IgnoreTouchToggle.Toggled += Mark;
-        HoldToSnapToggle.Toggled += Mark;
+        HoldToSnapToggle.Checked += Mark; HoldToSnapToggle.Unchecked += Mark;
 
-        AutosaveToggle.Toggled += Mark;
-        AutosaveToggle.Toggled += (_, _) => AutosaveDelayBox.IsEnabled = AutosaveToggle.IsOn;
+        AutosaveToggle.Checked += Mark; AutosaveToggle.Unchecked += Mark;
+        AutosaveToggle.Checked   += (_, _) => AutosaveDelayBox.IsEnabled = true;
+        AutosaveToggle.Unchecked += (_, _) => AutosaveDelayBox.IsEnabled = false;
         AutosaveDelayBox.ValueChanged += (_, _) => Mark();
 
         // Updates
-        AutoUpdateToggle.Toggled += Mark;
+        AutoUpdateToggle.Checked += Mark; AutoUpdateToggle.Unchecked += Mark;
         CheckUpdatesBtn.Click += async (_, _) => await Services.UpdateService.CheckAndInstallAsync();
         Loaded += (_, _) =>
         {
@@ -265,6 +375,7 @@ public sealed partial class SettingsPage : Page
         var res = await dlg.ShowAsync();
         if (res == ContentDialogResult.None) return false;
         if (res == ContentDialogResult.Primary) { Save(); return false; }   // Save() also goes back
+        RestoreColorSnapshot();
         return true;                                                        // Discard → proceed
     }
 
@@ -272,7 +383,7 @@ public sealed partial class SettingsPage : Page
     {
         _settingsLoading = true;
         try { LoadIntoUiCore(); }
-        finally { _settingsLoading = false; _settingsDirty = false; }
+        finally { _settingsLoading = false; _settingsDirty = false; UpdateSaveBar(); }
     }
 
     private void LoadIntoUiCore()
@@ -294,12 +405,12 @@ public sealed partial class SettingsPage : Page
         EmulateTipBox.IsChecked = s.EmulateTipOnButtonPress;
 
         // Palm rejection
-        PalmToggle.IsOn = s.PalmRejectionEnabled;
+        PalmToggle.IsChecked = s.PalmRejectionEnabled;
         IgnoreTouchToggle.IsOn = s.IgnoreTouchWhilePenActive;
         GraceBox.Value = s.PalmRejectionGraceMs;
 
         // Shape recognition
-        HoldToSnapToggle.IsOn = s.HoldToSnapEnabled;
+        HoldToSnapToggle.IsChecked = s.HoldToSnapEnabled;
 
         // Appearance
         ThemeCombo.SelectedIndex = (int)s.Theme;
@@ -326,27 +437,117 @@ public sealed partial class SettingsPage : Page
         FolderBox.Text  = s.DocumentsFolder;
 
         // Autosave
-        AutosaveToggle.IsOn = s.AutosaveEnabled;
+        AutosaveToggle.IsChecked = s.AutosaveEnabled;
         AutosaveDelayBox.Value = s.AutosaveDelaySeconds;
         AutosaveDelayBox.IsEnabled = s.AutosaveEnabled;
 
         // Updates
-        AutoUpdateToggle.IsOn = s.AutoUpdateEnabled;
+        AutoUpdateToggle.IsChecked = s.AutoUpdateEnabled;
     }
 
+    // ─── Updates card ────────────────────────────────────────────────────────
+    // Ring shows the current step's progress; the four-step track shows where
+    // in Check → Download → Prepare → Ready the update is.
     private void ShowUpdateStatus()
     {
         var state = Services.UpdateService.Current;
-        UpdateStatusText.Text  = Services.UpdateService.StatusText;
-        UpdateProgress.IsActive = state is Services.UpdateService.State.Checking
-                                        or Services.UpdateService.State.Downloading;
-        CheckUpdatesBtn.IsEnabled = Services.UpdateService.IsSupported && !UpdateProgress.IsActive
+        var avail = Services.UpdateService.AvailableVersion;
+        var installed = Services.UpdateService.InstalledVersion;
+        double p = Services.UpdateService.Progress;
+        var res = Application.Current.Resources;
+        var accent = (Brush)res["AppAccentBrush"];
+        var ok = (Brush)res["AppSuccessBrush"];
+        var muted = (Brush)res["AppTextSecondaryBrush"];
+        var primary = (Brush)res["AppTextPrimaryBrush"];
+
+        bool busy = state is Services.UpdateService.State.Checking
+                          or Services.UpdateService.State.Downloading
+                          or Services.UpdateService.State.Staging;
+
+        UpdateStatusText.Text = state == Services.UpdateService.State.Idle
+            ? "YuNotes checks GitHub for a newer version when it starts."
+            : Services.UpdateService.StatusText;
+        UpdateTitleText.Text = state switch
+        {
+            Services.UpdateService.State.Downloading or Services.UpdateService.State.Staging
+                when avail is not null => $"Updating to YuNotes {Short(avail)}",
+            Services.UpdateService.State.Ready when avail is not null => $"YuNotes {Short(avail)} is ready",
+            Services.UpdateService.State.UpToDate => "You're up to date",
+            Services.UpdateService.State.Failed => "Update check failed",
+            _ => "Updates",
+        };
+
+        // Ring
+        bool determinate = state is Services.UpdateService.State.Downloading or Services.UpdateService.State.Staging;
+        UpdateRing.IsIndeterminate = state == Services.UpdateService.State.Checking;
+        UpdateRing.Value = determinate ? p
+            : state is Services.UpdateService.State.Ready or Services.UpdateService.State.UpToDate ? 100 : 0;
+        UpdateRing.Foreground = state is Services.UpdateService.State.Ready or Services.UpdateService.State.UpToDate ? ok : accent;
+        UpdatePercentText.Text = $"{Math.Round(p)}%";
+        UpdatePercentText.Visibility = determinate ? Visibility.Visible : Visibility.Collapsed;
+        UpdateStateIcon.Visibility = determinate || state == Services.UpdateService.State.Checking
+            ? Visibility.Collapsed : Visibility.Visible;
+        UpdateStateIcon.Glyph = state switch
+        {
+            Services.UpdateService.State.Ready or Services.UpdateService.State.UpToDate => "\uE5CA",   // check
+            Services.UpdateService.State.Failed => "\uE000",                                           // error
+            _ => "\uE923",                                                                              // update
+        };
+        UpdateStateIcon.Foreground = state switch
+        {
+            Services.UpdateService.State.Ready or Services.UpdateService.State.UpToDate => ok,
+            Services.UpdateService.State.Failed => muted,
+            _ => accent,
+        };
+
+        // Step track: only meaningful once a newer version was found (or while checking).
+        int step = state switch
+        {
+            Services.UpdateService.State.Checking => 0,
+            Services.UpdateService.State.Downloading => 1,
+            Services.UpdateService.State.Staging => 2,
+            Services.UpdateService.State.Ready => 4,
+            _ => -1,
+        };
+        UpdateSteps.Visibility = step >= 0 ? Visibility.Visible : Visibility.Collapsed;
+        var bars = new[] { StepCheckBar, StepDownloadBar, StepStageBar, StepReadyBar };
+        var labels = new[] { StepCheckLabel, StepDownloadLabel, StepStageLabel, StepReadyLabel };
+        for (int i = 0; i < bars.Length; i++)
+        {
+            bool done = i < step || step == 4;
+            bool cur = i == step;
+            bars[i].IsIndeterminate = cur && state == Services.UpdateService.State.Checking;
+            bars[i].Value = done ? 100 : cur ? p : 0;
+            bars[i].Foreground = step == 4 ? ok : accent;
+            labels[i].Foreground = done || cur ? primary : muted;
+            labels[i].FontWeight = cur ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal;
+        }
+
+        // Download readout
+        if (state == Services.UpdateService.State.Downloading)
+        {
+            const double MB = 1024 * 1024;
+            double got = Services.UpdateService.BytesReceived / MB;
+            double rate = Services.UpdateService.BytesPerSecond / MB;
+            var parts = new List<string>();
+            parts.Add(Services.UpdateService.BytesTotal is { } total
+                ? $"{got:0.0} / {total / MB:0.0} MB" : $"{got:0.0} MB");
+            if (rate > 0.01) parts.Add($"{rate:0.0} MB/s");
+            if (rate > 0.01 && Services.UpdateService.BytesTotal is { } t2)
+                parts.Add($"{Math.Max(0, Math.Ceiling((t2 / MB - got) / rate))} s left");
+            UpdateMetaText.Text = string.Join("  ·  ", parts);
+            UpdateMetaText.Visibility = Visibility.Visible;
+        }
+        else UpdateMetaText.Visibility = Visibility.Collapsed;
+
+        CheckUpdatesBtn.IsEnabled = Services.UpdateService.IsSupported && !busy
                                     && state != Services.UpdateService.State.Ready;
-        var v = Services.UpdateService.InstalledVersion;
-        AppVersionText.Text = v is null ? "Development build"
-            : Services.UpdateService.IsSupported ? $"Version {v.Major}.{v.Minor}.{v.Build}"
-            : $"Version {v.Major}.{v.Minor}.{v.Build} · updates come from the Microsoft Store";
+        AppVersionText.Text = installed is null ? "Development build"
+            : Services.UpdateService.IsSupported ? $"Installed version {Short(installed)}"
+            : $"Installed version {Short(installed)} · updates come from the Microsoft Store";
     }
+
+    private static string Short(Version v) => $"{v.Major}.{v.Minor}.{v.Build}";
 
     private static void PopulateToolList(
         ObservableCollection<ToolEntry> collection,
@@ -428,7 +629,7 @@ public sealed partial class SettingsPage : Page
                 if (await dlg.ShowAsync() == ContentDialogResult.Primary)
                 {
                     list[idx] = Controls.ColorPickerControl.ToHex(picker.Color);
-                    _settingsDirty = true;
+                    Mark();
                     RebuildColorSwatches();
                 }
             };
@@ -448,7 +649,7 @@ public sealed partial class SettingsPage : Page
             del.Click += (_, __) =>
             {
                 list.RemoveAt(idx);
-                _settingsDirty = true;
+                Mark();
                 RebuildColorSwatches();
             };
 
@@ -489,7 +690,7 @@ public sealed partial class SettingsPage : Page
             if (await dlg.ShowAsync() == ContentDialogResult.Primary)
             {
                 list.Add(Controls.ColorPickerControl.ToHex(picker.Color));
-                _settingsDirty = true;
+                Mark();
                 RebuildColorSwatches();
             }
         };
@@ -513,10 +714,10 @@ public sealed partial class SettingsPage : Page
         s.PressureMultiplier = PressureMultSlider.Value;
         s.BarrelButtonAction = ReadCombo(BarrelCombo);
         s.EmulateTipOnButtonPress = EmulateTipBox.IsChecked == true;
-        s.PalmRejectionEnabled = PalmToggle.IsOn;
+        s.PalmRejectionEnabled = PalmToggle.IsChecked == true;
         s.IgnoreTouchWhilePenActive = IgnoreTouchToggle.IsOn;
         s.PalmRejectionGraceMs = (int)GraceBox.Value;
-        s.HoldToSnapEnabled = HoldToSnapToggle.IsOn;
+        s.HoldToSnapEnabled = HoldToSnapToggle.IsChecked == true;
         s.Theme = (AppThemeMode)Math.Max(0, ThemeCombo.SelectedIndex);
         s.DefaultPenWidth = (float)PenWidthBox.Value;
         s.DefaultHighlighterWidth = (float)HighWidthBox.Value;
@@ -532,12 +733,12 @@ public sealed partial class SettingsPage : Page
         s.SeamlessPages = SeamlessPagesBox.IsChecked == true;
         s.LiquidGlassEnabled = LiquidGlassBox.IsChecked == true;
 
-        s.AutosaveEnabled = AutosaveToggle.IsOn;
+        s.AutosaveEnabled = AutosaveToggle.IsChecked == true;
         // NumberBox yields NaN if the field is cleared — fall back to the default.
         s.AutosaveDelaySeconds = double.IsNaN(AutosaveDelayBox.Value)
             ? 2.5 : Math.Clamp(AutosaveDelayBox.Value, 0.5, 120);
 
-        s.AutoUpdateEnabled = AutoUpdateToggle.IsOn;
+        s.AutoUpdateEnabled = AutoUpdateToggle.IsChecked == true;
 
         s.HiddenToolbarTools.Clear();
         s.ToolbarDrawingOrder.Clear();
