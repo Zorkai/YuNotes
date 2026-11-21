@@ -146,6 +146,7 @@ internal sealed class DocSnapshot
                 BackgroundLeft = p.BackgroundLeft,
                 BackgroundContentWidth = p.BackgroundContentWidth,
                 TemplateOverride = CloneTemplate(p.TemplateOverride),
+                Bookmark = p.Bookmark,
             };
             foreach (var st in p.Strokes)
             {
@@ -235,6 +236,7 @@ internal sealed class DocSnapshot
             p.BackgroundLeft = ps.BackgroundLeft;
             p.BackgroundContentWidth = ps.BackgroundContentWidth;
             p.TemplateOverride = CloneTemplate(ps.TemplateOverride);
+            p.Bookmark = ps.Bookmark;
 
             p.Strokes.Clear();
             foreach (var st in ps.Strokes)
@@ -296,6 +298,7 @@ internal sealed class PageSnapshot
     public double BackgroundLeft;
     public double BackgroundContentWidth;
     public TemplateSettings? TemplateOverride;
+    public string? Bookmark;
     public List<Stroke> Strokes = new();
     public List<ShapeElement> Shapes = new();
     public List<TextElement> Texts = new();

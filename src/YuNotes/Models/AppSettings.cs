@@ -15,6 +15,13 @@ public enum ToolbarSize { Small = 0, Normal = 1, Large = 2 }
 // force the theme regardless of the OS. Maps to ElementTheme on the window root.
 public enum AppThemeMode { System = 0, Light = 1, Dark = 2 }
 
+public sealed class PenFavorite
+{
+    public string ColorHex { get; set; } = "#FF1B1F2A";
+    public float Width { get; set; } = 2.5f;
+    public bool Pressure { get; set; }
+}
+
 public sealed class AppSettings
 {
     public List<string> PenPresetColors { get; set; } = new()
@@ -37,6 +44,15 @@ public sealed class AppSettings
     // picker (newest first, "#AARRGGBB"), shown after the presets. Colors that
     // match a preset are never stored.
     public List<string> RecentCustomColors { get; set; } = new();
+
+    // Saved pen setups (color, width, pressure), picked from the pen menu or
+    // with Ctrl+1–5. At most five.
+    public List<PenFavorite> PenFavorites { get; set; } = new()
+    {
+        new() { ColorHex = "#FF1B1F2A", Width = 2f },
+        new() { ColorHex = "#FFE53935", Width = 1f },
+        new() { ColorHex = "#FF1E88E5", Width = 2f, Pressure = true },
+    };
 
     // Pen buttons
     public PenButtonAction BarrelButtonAction { get; set; } = PenButtonAction.Eraser;

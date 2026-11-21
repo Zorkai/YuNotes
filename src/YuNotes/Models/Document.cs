@@ -78,6 +78,8 @@ public sealed class NotePage
     // If this page corresponds to a page in Document.SourcePdfBytes, this is its index there.
     // Lets save copy the original vector content instead of flattening to raster.
     public int? SourcePageIndex { get; set; }
+    // Bookmark label ("Theorem", "Exam", …) shown in the page panel; null = none.
+    public string? Bookmark { get; set; }
     public List<Stroke> Strokes { get; } = new();
     public List<ShapeElement> Shapes { get; } = new();
     public List<TextElement> Texts { get; } = new();

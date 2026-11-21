@@ -22,6 +22,10 @@ using YuNotes.Tools;
 
 namespace YuNotes.Views;
 
+// Opens a note at a search match: the editor runs the same search and lands on
+// the first match at or after PageIndex.
+public sealed record EditorOpenRequest(string Path, int PageIndex, string Query);
+
 public sealed partial class EditorPage : Page
 {
     private Document? _doc;
@@ -108,13 +112,16 @@ public sealed partial class EditorPage : Page
         ShapeEllipseItem.Click  += (_, __) => { _shapeKind = ShapeKind.Ellipse;   _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); ShapeFlyout.Hide(); };
         ShapeLineItem.Click     += (_, __) => { _shapeKind = ShapeKind.Line;      _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); ShapeFlyout.Hide(); };
         ShapeTriangleItem.Click += (_, __) => { _shapeKind = ShapeKind.Triangle;  _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); ShapeFlyout.Hide(); };
+        ShapeArrowItem.Click    += (_, __) => { _shapeKind = ShapeKind.Arrow;     _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); ShapeFlyout.Hide(); };
+        ShapeAxesItem.Click     += (_, __) => { _shapeKind = ShapeKind.Axes;      _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); ShapeFlyout.Hide(); };
+        ShapeGridItem.Click     += (_, __) => { _shapeKind = ShapeKind.Grid;      _shape.ShapeKind = _shapeKind; SyncShapeMenu(); SelectTool(ToolKind.Shape); ShapeFlyout.Hide(); };
         ToolRuler.Click += (_, __) => Canvas.SetRulerVisible(ToolRuler.IsChecked == true);
         EraserStrokeItem.Click += (_, __) => { _eraserPixelMode = false; SyncEraserMenu(); Canvas.Context.EraserPixelMode = false; SaveToolModes(); SelectTool(ToolKind.Eraser); EraserFlyout.Hide(); };
         EraserPixelItem.Click += (_, __) => { _eraserPixelMode = true; SyncEraserMenu(); Canvas.Context.EraserPixelMode = true; SaveToolModes(); SelectTool(ToolKind.Eraser); EraserFlyout.Hide(); };
         // The pen flyout stays open on selection so the preview shows the new mode.
         PenSolidItem.Click += (_, __) => { _penPressureMode = false; _pen.UsePressure = false; SyncPenMenu(); SaveToolModes(); SelectTool(ToolKind.Pen); PenPreview.Invalidate(); };
         PenPressureItem.Click += (_, __) => { _penPressureMode = true; _pen.UsePressure = true; SyncPenMenu(); SaveToolModes(); SelectTool(ToolKind.Pen); PenPreview.Invalidate(); };
-        PenFlyout.Opened += (_, __) => PenPreview.Invalidate();
+        PenFlyout.Opened += (_, __) => { PenPreview.Invalidate(); RebuildPenFavorites(); };
         SelectLassoItem.Click += (_, __) => { _selectMode = ToolKind.Lasso; SyncSelectMenu(); SaveToolModes(); SelectTool(_selectMode); SelectFlyout.Hide(); };
         SelectRectItem.Click += (_, __) => { _selectMode = ToolKind.RectSelect; SyncSelectMenu(); SaveToolModes(); SelectTool(_selectMode); SelectFlyout.Hide(); };
 
@@ -170,6 +177,7 @@ public sealed partial class EditorPage : Page
         SelWidthPicker.WidthChanged += (_, w) => { Canvas.SetSelectionWidth((float)w); PositionSelectionActions(); };
 
         PagePanelBtn.Click += (_, __) => TogglePagePanel();
+        BookmarksFlyout.Opening += (_, __) => RebuildBookmarksFlyout();
         PageEditModeBtn.Click += (_, __) => { _pagePanelEditMode = !_pagePanelEditMode; ClearPageSelection(); if (_pagePanelOpen) _ = RefreshPagePanelAsync(); };
         PageSelDeleteBtn.Click += async (_, __) => await DeleteSelectedPagesAsync();
         PageSelClearBtn.Click  += (_, __) => ClearPageSelection();
@@ -178,8 +186,16 @@ public sealed partial class EditorPage : Page
 
         SearchBtn.Click += (_, __) => OpenSearch();
         SearchCloseBtn.Click += (_, __) => CloseSearch();
-        SearchBox.TextChanged += (_, __) => RunSearch();
-        SearchBox.KeyDown += (_, args) => { if (args.Key == Windows.System.VirtualKey.Escape) CloseSearch(); };
+        _searchDebounce = DispatcherQueue.CreateTimer();
+        _searchDebounce.Interval = TimeSpan.FromMilliseconds(220);
+        _searchDebounce.IsRepeating = false;
+        _searchDebounce.Tick += (_, __) => RunSearch();
+        SearchBox.TextChanged += (_, __) => { _searchDebounce.Stop(); _searchDebounce.Start(); };
+        SearchBox.KeyDown += (_, args) =>
+        {
+            if (args.Key == Windows.System.VirtualKey.Escape) CloseSearch();
+            else if (args.Key == Windows.System.VirtualKey.Enter) { StepSearch(IsShiftDown() ? -1 : +1); args.Handled = true; }
+        };
         SearchPrevBtn.Click += (_, __) => StepSearch(-1);
         SearchNextBtn.Click += (_, __) => StepSearch(+1);
 
@@ -193,6 +209,8 @@ public sealed partial class EditorPage : Page
         KeyboardAccelerators.Add(new KeyboardAccelerator { Key = VirtualKey.C, Modifiers = VirtualKeyModifiers.Control });
         KeyboardAccelerators.Add(new KeyboardAccelerator { Key = VirtualKey.V, Modifiers = VirtualKeyModifiers.Control });
         KeyboardAccelerators.Add(new KeyboardAccelerator { Key = VirtualKey.F, Modifiers = VirtualKeyModifiers.Control });
+        for (var k = VirtualKey.Number1; k <= VirtualKey.Number5; k++)
+            KeyboardAccelerators.Add(new KeyboardAccelerator { Key = k, Modifiers = VirtualKeyModifiers.Control });
         foreach (var a in KeyboardAccelerators) a.Invoked += OnAccelerator;
 
         ColorPicker.ColorChanged += (_, c) =>
@@ -589,6 +607,11 @@ public sealed partial class EditorPage : Page
         base.OnNavigatedTo(e);
         if (e.Parameter is Document d) Load(d);
         else if (e.Parameter is string path) _ = LoadFromPathAsync(path);
+        else if (e.Parameter is EditorOpenRequest req)
+        {
+            _pendingSearch = (req.Query, req.PageIndex);
+            _ = LoadFromPathAsync(req.Path);
+        }
         var s = App.Services.Settings.Current;
         _pen.HoldToSnapEnabled = s.HoldToSnapEnabled;
         ApplyToolbarPosition(s.ToolbarPosition);
@@ -654,6 +677,16 @@ public sealed partial class EditorPage : Page
                     ? App.Services.Documents.OpenPdfContainer(path, App.Services.PdfContainer, App.Services.PdfImport)
                     : App.Services.Documents.Open(path));
             Load(doc);
+            // Opened from a search result on Home: show the same search here.
+            if (_pendingSearch is { } ps)
+            {
+                OpenSearch();
+                SearchBox.Text = ps.Query;
+                // TextChanged doesn't reliably fire for a box that was hidden
+                // a moment ago, so start the search directly.
+                _searchDebounce.Stop();
+                RunSearch();
+            }
         }
         catch (Exception ex)
         {
@@ -880,6 +913,9 @@ public sealed partial class EditorPage : Page
                                 foreach (var r in p.TextRuns) r.X += p.BackgroundLeft;
                         }
                     }
+                    // PDF text arrived after the note opened: refresh an open search.
+                    if (SearchPanel.Visibility == Visibility.Visible && SearchBox.Text.Trim().Length > 0)
+                        RunSearch();
                 });
             });
         }
@@ -1054,12 +1090,18 @@ public sealed partial class EditorPage : Page
         ShapeEllipseItem.IsChecked  = _shapeKind == ShapeKind.Ellipse;
         ShapeLineItem.IsChecked     = _shapeKind == ShapeKind.Line;
         ShapeTriangleItem.IsChecked = _shapeKind == ShapeKind.Triangle;
+        ShapeArrowItem.IsChecked    = _shapeKind == ShapeKind.Arrow;
+        ShapeAxesItem.IsChecked     = _shapeKind == ShapeKind.Axes;
+        ShapeGridItem.IsChecked     = _shapeKind == ShapeKind.Grid;
         ShapeIcon.Glyph = _shapeKind switch
         {
             ShapeKind.Rectangle => GlyphRectangle,
             ShapeKind.Ellipse   => GlyphCircle,
             ShapeKind.Line      => GlyphDiagonalLine,
             ShapeKind.Triangle  => GlyphSignalCellularNull,
+            ShapeKind.Arrow     => "",
+            ShapeKind.Axes      => "",
+            ShapeKind.Grid      => "",
             _                   => GlyphRectangle,
         };
     }
@@ -1073,13 +1115,31 @@ public sealed partial class EditorPage : Page
         App.Services.Settings.Save();
     }
 
-    // ─── Text search ─────────────────────────────────────────────────────────────
+    // ─── Find in note ────────────────────────────────────────────────────────────
+    // Searches handwriting (recognized on demand, cached per page until its
+    // strokes change), the PDF's own text and typed text boxes. Every match is
+    // highlighted; Enter / Shift+Enter step through them.
 
-    private List<(int PageIndex, string TextId)> _searchMatches = new();
+    private List<(int Page, Services.TextBox Box)> _searchMatches = new();
     private int _searchMatchIndex = -1;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer _searchDebounce = null!;
+    private int _searchVersion;
+    private bool _searchReading;
+    private readonly Dictionary<string, (string Sig, List<Services.TextBox> Words)> _inkWords = new();
+    // Set when Home opens this note from a search result: query + page to land on.
+    private (string Query, int Page)? _pendingSearch;
+
+    private static bool IsShiftDown() =>
+        Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(VirtualKey.Shift)
+            .HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down);
 
     private void OpenSearch()
     {
+        // Keep the find bar clear of the floating toolbar when it's docked
+        // along the top or right edge.
+        var pos = App.Services.Settings.Current.ToolbarPosition;
+        SearchPanel.Margin = new Thickness(0, pos == ToolbarPosition.Top ? 84 : 14,
+                                           pos == ToolbarPosition.Right ? 84 : 14, 0);
         SearchPanel.Visibility = Visibility.Visible;
         SearchBox.Focus(FocusState.Programmatic);
         SearchBox.SelectAll();
@@ -1088,36 +1148,107 @@ public sealed partial class EditorPage : Page
     private void CloseSearch()
     {
         SearchPanel.Visibility = Visibility.Collapsed;
+        _searchVersion++;
         _searchMatches.Clear();
         _searchMatchIndex = -1;
+        Canvas.SetSearchHighlights(null);
         UpdateSearchUi();
+        // Give keys back to the note (Ctrl+Z etc.), not the hidden search box.
+        Canvas.Focus(FocusState.Programmatic);
     }
 
-    private void RunSearch()
+    private static string InkSignature(NotePage p)
     {
-        _searchMatches.Clear();
-        _searchMatchIndex = -1;
-        var q = SearchBox.Text?.Trim() ?? "";
-        if (string.IsNullOrEmpty(q) || _doc is null) { UpdateSearchUi(); return; }
+        int pts = 0;
+        foreach (var s in p.Strokes) pts += s.Points.Count;
+        return $"{p.Strokes.Count}:{pts}:{(p.Strokes.Count > 0 ? p.Strokes[^1].Id : "")}";
+    }
 
-        for (int pi = 0; pi < _doc.Pages.Count; pi++)
+    private async void RunSearch()
+    {
+        int version = ++_searchVersion;
+        var q = SearchBox.Text?.Trim() ?? "";
+        if (string.IsNullOrEmpty(q) || _doc is null)
         {
-            foreach (var t in _doc.Pages[pi].Texts)
-            {
-                if (!string.IsNullOrEmpty(t.Text) &&
-                    t.Text.Contains(q, StringComparison.OrdinalIgnoreCase))
-                    _searchMatches.Add((pi, t.Id));
-            }
+            _searchMatches.Clear();
+            _searchMatchIndex = -1;
+            Canvas.SetSearchHighlights(null);
+            UpdateSearchUi();
+            return;
         }
 
-        if (_searchMatches.Count > 0) _searchMatchIndex = 0;
+        // Instant pass with what is already known, then read any handwriting
+        // that hasn't been recognized yet (or changed) and update.
+        ComputeMatches(q, keepPosition: false);
+        var doc = _doc;
+        var stale = !Services.HandwritingRecognizer.IsAvailable ? new List<NotePage>()
+            : doc.Pages.Where(p => p.Strokes.Any(s => s.Kind == StrokeKind.Pen) &&
+                                   !(_inkWords.TryGetValue(p.Id, out var c) && c.Sig == InkSignature(p)))
+                       .ToList();
+        if (stale.Count == 0) { _pendingSearch = null; return; }
+        _searchReading = true;
         UpdateSearchUi();
-        NavigateToCurrentMatch();
+        try
+        {
+            foreach (var p in stale)
+            {
+                var sig = InkSignature(p);
+                var words = await Services.HandwritingRecognizer.RecognizeAsync(p.Strokes.ToList());
+                if (version != _searchVersion || !ReferenceEquals(doc, _doc)) return;
+                _inkWords[p.Id] = (sig, words);
+                ComputeMatches(q, keepPosition: true);
+            }
+        }
+        finally
+        {
+            if (version == _searchVersion) { _searchReading = false; _pendingSearch = null; UpdateSearchUi(); }
+        }
+    }
+
+    private void ComputeMatches(string q, bool keepPosition)
+    {
+        if (_doc is null) return;
+        var terms = Services.TextMatcher.Terms(q);
+        var previous = _searchMatchIndex >= 0 && _searchMatchIndex < _searchMatches.Count
+            ? _searchMatches[_searchMatchIndex] : default;
+
+        var matches = new List<(int, Services.TextBox)>();
+        for (int i = 0; i < _doc.Pages.Count; i++)
+        {
+            var p = _doc.Pages[i];
+            var page = new Services.PageText { Index = i };
+            if (_inkWords.TryGetValue(p.Id, out var ink)) page.Boxes.AddRange(ink.Words);
+            page.Boxes.AddRange(Services.SearchIndex.PdfBoxes(p.TextRuns, 0));
+            page.Boxes.AddRange(Services.SearchIndex.TypedBoxes(p.Texts));
+            if (Services.SearchIndex.BookmarkBox(p) is { } bm) page.Boxes.Add(bm);
+            if (Services.TextMatcher.Match(page, terms) is { } m)
+                foreach (var b in m.Boxes) matches.Add((i, b));
+        }
+        _searchMatches = matches;
+
+        int index = -1;
+        if (_pendingSearch is { } want)
+            index = _searchMatches.FindIndex(m => m.Page >= want.Page);
+        else if (keepPosition && previous.Box is not null)
+            index = _searchMatches.FindIndex(m => m.Page == previous.Page && m.Box.Rect == previous.Box.Rect);
+        if (index < 0 && !(keepPosition && previous.Box is not null) && _pendingSearch is null)
+        {
+            // Start from the page in view rather than jumping back to page 1.
+            int here = Canvas.ActivePage is { } ap ? _doc.Pages.IndexOf(ap) : 0;
+            index = _searchMatches.FindIndex(m => m.Page >= here);
+        }
+        if (index < 0 && _searchMatches.Count > 0) index = 0;
+
+        bool moved = index != _searchMatchIndex || !keepPosition;
+        _searchMatchIndex = index;
+        UpdateSearchUi();
+        if (moved) NavigateToCurrentMatch(); else ShowSearchHighlights();
     }
 
     private void StepSearch(int delta)
     {
         if (_searchMatches.Count == 0) return;
+        _pendingSearch = null;
         _searchMatchIndex = (_searchMatchIndex + delta + _searchMatches.Count) % _searchMatches.Count;
         UpdateSearchUi();
         NavigateToCurrentMatch();
@@ -1127,18 +1258,32 @@ public sealed partial class EditorPage : Page
     {
         var q = SearchBox.Text?.Trim() ?? "";
         if (_searchMatches.Count == 0)
-            SearchCountLabel.Text = string.IsNullOrEmpty(q) ? "" : "No matches";
+            SearchCountLabel.Text = string.IsNullOrEmpty(q) ? "" : _searchReading ? "Reading ink…" : "No matches";
         else
             SearchCountLabel.Text = $"{_searchMatchIndex + 1} / {_searchMatches.Count}";
+        ToolTipService.SetToolTip(SearchCountLabel, _searchReading ? "Reading your handwriting so it can be searched" : null);
         SearchPrevBtn.IsEnabled = _searchMatches.Count > 1;
         SearchNextBtn.IsEnabled = _searchMatches.Count > 1;
     }
 
+    private void ShowSearchHighlights()
+    {
+        var byPage = _searchMatches.GroupBy(m => m.Page)
+            .ToDictionary(g => g.Key, g => g.Select(m => m.Box.Rect).ToList());
+        if (_searchMatchIndex >= 0 && _searchMatchIndex < _searchMatches.Count)
+        {
+            var (page, box) = _searchMatches[_searchMatchIndex];
+            Canvas.SetSearchHighlights(byPage, page, box.Rect);
+        }
+        else Canvas.SetSearchHighlights(byPage);
+    }
+
     private void NavigateToCurrentMatch()
     {
+        ShowSearchHighlights();
         if (_searchMatchIndex < 0 || _searchMatchIndex >= _searchMatches.Count) return;
-        var (pageIdx, _) = _searchMatches[_searchMatchIndex];
-        Canvas.ScrollToPage(pageIdx);
+        var (pageIdx, box) = _searchMatches[_searchMatchIndex];
+        Canvas.ScrollToRect(pageIdx, box.Rect);
     }
 
     private void DoUndo()
@@ -1171,7 +1316,14 @@ public sealed partial class EditorPage : Page
         Canvas.ResizeAllCanvases();  // page.Width may have changed (extension undo)
         Canvas.RefreshTemplates();   // template may have changed (template undo)
         Canvas.InvalidateAll();
+        // Bookmark labels live on the page thumbnails; redraw them if an
+        // undo/redo changed a bookmark.
+        if (_pagePanelOpen && BookmarkSignature() != _panelBookmarkSig) _ = RefreshPagePanelAsync();
     }
+
+    private string _panelBookmarkSig = "";
+    private string BookmarkSignature() =>
+        _doc is null ? "" : string.Join("|", _doc.Pages.Select(p => p.Bookmark ?? ""));
 
     // An undo/redo edits the document like any other mutation: it must dirty
     // the doc (save prompt + autosave) and mark the touched pages' flattened
@@ -1593,51 +1745,168 @@ public sealed partial class EditorPage : Page
         catch (Exception ex) { ExitScreenshotMode(); await Notify("Save failed", ex.Message); }
     }
 
+    // Export dialog: PDF or PNG, for all pages, the current page, a range such
+    // as "1-3, 5", or (PNG only) just the current selection.
     private async Task ExportAsync()
     {
         if (_doc is null) return;
+        int pageCount = _doc.Pages.Count;
+        int current = Canvas.ActivePage is { } ap ? Math.Max(0, _doc.Pages.IndexOf(ap)) : 0;
+        bool hasSelection = Canvas.HasSelection;
+
+        var format = new RadioButtons { Header = "Format", MaxColumns = 2 };
+        format.Items.Add("PDF");
+        format.Items.Add("PNG images");
+        format.SelectedIndex = 0;
+
+        var which = new RadioButtons { Header = "Pages" };
+        which.Items.Add("All pages");
+        which.Items.Add($"Current page ({current + 1})");
+        which.Items.Add("Page range");
+        if (hasSelection) which.Items.Add("Selection only (PNG)");
+        which.SelectedIndex = hasSelection ? 3 : 0;
+
+        var range = new TextBox { PlaceholderText = $"1-3, 5  (1 to {pageCount})", IsEnabled = false };
+        var error = new TextBlock
+        {
+            Foreground = new SolidColorBrush(Color.FromArgb(255, 224, 58, 58)),
+            FontSize = 12, Visibility = Visibility.Collapsed, TextWrapping = TextWrapping.Wrap,
+        };
+        void Sync()
+        {
+            range.IsEnabled = which.SelectedIndex == 2;
+            bool selection = hasSelection && which.SelectedIndex == 3;
+            if (selection) format.SelectedIndex = 1;
+            format.IsEnabled = !selection;
+        }
+        which.SelectionChanged += (_, __) => { Sync(); error.Visibility = Visibility.Collapsed; };
+        range.TextChanged += (_, __) => error.Visibility = Visibility.Collapsed;
+        Sync();
+
+        var content = new StackPanel { Spacing = 14, MinWidth = 320 };
+        content.Children.Add(format);
+        content.Children.Add(which);
+        content.Children.Add(range);
+        content.Children.Add(error);
+
         var dlg = new ContentDialog
         {
             Title = "Export",
-            XamlRoot = this.XamlRoot,
-            PrimaryButtonText = "PDF (all pages)",
-            SecondaryButtonText = "PNG (all pages)",
-            CloseButtonText = "Cancel"
+            Content = content,
+            XamlRoot = XamlRoot,
+            PrimaryButtonText = "Export",
+            CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary,
         };
-        var res = await dlg.ShowAsync();
+        List<int>? indices = null;
+        dlg.PrimaryButtonClick += (_, args) =>
+        {
+            indices = which.SelectedIndex switch
+            {
+                0 => Enumerable.Range(0, pageCount).ToList(),
+                1 => new List<int> { current },
+                2 => ParsePageRange(range.Text, pageCount),
+                _ => new List<int>(),
+            };
+            if (which.SelectedIndex == 2 && (indices is null || indices.Count == 0))
+            {
+                error.Text = $"Enter pages between 1 and {pageCount}, for example 1-3, 5.";
+                error.Visibility = Visibility.Visible;
+                args.Cancel = true;
+            }
+        };
+        if (await dlg.ShowAsync() != ContentDialogResult.Primary || indices is null) return;
+
         try
         {
-            if (res == ContentDialogResult.Primary)
+            if (hasSelection && which.SelectedIndex == 3)
+            {
+                var png = Canvas.RenderSelectionRegionToPng();
+                if (png is null) { await Notify("Export failed", "The selection is empty."); return; }
+                var save = new FileSavePicker();
+                save.FileTypeChoices.Add("PNG image", new List<string> { ".png" });
+                save.SuggestedFileName = $"{_doc.Info.Title} selection";
+                InitPicker(save);
+                var file = await save.PickSaveFileAsync();
+                if (file is null) return;
+                await File.WriteAllBytesAsync(file.Path, png);
+                ShowToast("Selection exported");
+            }
+            else if (format.SelectedIndex == 0)
             {
                 var save = new FileSavePicker();
                 save.FileTypeChoices.Add("PDF", new List<string> { ".pdf" });
-                save.SuggestedFileName = _doc.Info.Title;
+                save.SuggestedFileName = indices.Count == pageCount ? _doc.Info.Title
+                    : $"{_doc.Info.Title} (pages {DescribePages(indices)})";
                 InitPicker(save);
                 var file = await save.PickSaveFileAsync();
                 if (file is null) return;
                 // Same vector writer as the .pdf save. Imported PDFs keep their
                 // original pages (selectable text) with the notes drawn on top.
                 bool useOverlay = _doc.SourcePdfBytes is { Length: > 0 };
-                var pages = new Rendering.PageVectorExport?[Canvas.PageCount];
-                for (int i = 0; i < pages.Length; i++) pages[i] = Canvas.BuildVectorExport(i, useOverlay);
-                var docRef = _doc;
+                var pages = indices.Select(i => Canvas.BuildVectorExport(i, useOverlay)).ToArray();
+                // A document with only the chosen pages, sharing their data.
+                var subset = new Document { Info = _doc.Info, SourcePdfBytes = _doc.SourcePdfBytes, Template = _doc.Template };
+                foreach (var i in indices) subset.Pages.Add(_doc.Pages[i]);
                 var outPath = file.Path;
-                await Task.Run(() => App.Services.Documents.ExportPdf(docRef, pages, outPath, App.Services.PdfContainer));
-                await Notify("Exported", "PDF saved.");
+                await Task.Run(() => App.Services.Documents.ExportPdf(subset, pages, outPath, App.Services.PdfContainer));
+                ShowToast(indices.Count == 1 ? "Page exported as PDF" : $"{indices.Count} pages exported as PDF");
             }
-            else if (res == ContentDialogResult.Secondary)
+            else
             {
                 var folder = new FolderPicker();
                 folder.FileTypeFilter.Add("*");
                 InitPicker(folder);
                 var f = await folder.PickSingleFolderAsync();
                 if (f is null) return;
-                var pngs = Canvas.RenderAllForExport();
-                App.Services.PngExport.ExportAll(pngs, f.Path, _doc.Info.Title);
-                await Notify("Exported", "PNGs saved.");
+                foreach (var i in indices)
+                {
+                    var png = Canvas.RenderPageForExport(i, overlayOnly: false);
+                    if (png is not null)
+                        await File.WriteAllBytesAsync(System.IO.Path.Combine(f.Path, $"{_doc.Info.Title}-{i + 1:D3}.png"), png);
+                }
+                ShowToast(indices.Count == 1 ? "Page exported as PNG" : $"{indices.Count} pages exported as PNG");
             }
         }
         catch (Exception ex) { await Notify("Export failed", ex.Message); }
+    }
+
+    // "1-3, 5, 8-6" → [0,1,2,4,5,6,7] (sorted, unique, 0-based). Null if any
+    // part is malformed or out of 1..count.
+    private static List<int>? ParsePageRange(string text, int count)
+    {
+        var result = new SortedSet<int>();
+        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s*[-–]\s*", "-");   // "1 - 3" → "1-3"
+        foreach (var raw in text.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var part = raw.Trim();
+            var bits = part.Split(new[] { '-', '–' }, StringSplitOptions.RemoveEmptyEntries);
+            if (bits.Length == 1 && int.TryParse(bits[0], out int one))
+            {
+                if (one < 1 || one > count) return null;
+                result.Add(one - 1);
+            }
+            else if (bits.Length == 2 && int.TryParse(bits[0], out int a) && int.TryParse(bits[1], out int b))
+            {
+                if (a < 1 || b < 1 || a > count || b > count) return null;
+                for (int i = Math.Min(a, b); i <= Math.Max(a, b); i++) result.Add(i - 1);
+            }
+            else return null;
+        }
+        return result.ToList();
+    }
+
+    // [0,1,2,4] → "1-3, 5"
+    private static string DescribePages(List<int> indices)
+    {
+        var parts = new List<string>();
+        for (int i = 0; i < indices.Count; i++)
+        {
+            int start = indices[i];
+            while (i + 1 < indices.Count && indices[i + 1] == indices[i] + 1) i++;
+            parts.Add(start == indices[i] ? $"{start + 1}" : $"{start + 1}-{indices[i] + 1}");
+        }
+        return string.Join(", ", parts);
     }
 
     // A page whose background is imported PDF content (as opposed to a YuNotes
@@ -2241,7 +2510,98 @@ public sealed partial class EditorPage : Page
                 DoRedo(); args.Handled = true; break;
             case VirtualKey.F when sender.Modifiers == VirtualKeyModifiers.Control:
                 OpenSearch(); args.Handled = true; break;
+            case >= VirtualKey.Number1 and <= VirtualKey.Number5 when sender.Modifiers == VirtualKeyModifiers.Control:
+                ApplyPenFavorite(sender.Key - VirtualKey.Number1); args.Handled = true; break;
         }
+    }
+
+    // ─── Pen favorites ───────────────────────────────────────────────────────────
+
+    private void RebuildPenFavorites()
+    {
+        var s = App.Services.Settings.Current;
+        PenFavoritesPanel.Children.Clear();
+        var res = Application.Current.Resources;
+        for (int i = 0; i < s.PenFavorites.Count; i++)
+        {
+            int idx = i;
+            var f = s.PenFavorites[i];
+            var color = Controls.ColorPickerControl.ParseHex(f.ColorHex);
+            float dot = Math.Clamp(f.Width * 2.2f + 4, 6, 22);
+            var face = new Grid { Width = 26, Height = 26 };
+            face.Children.Add(new Ellipse
+            {
+                Width = dot, Height = dot, Fill = new SolidColorBrush(color),
+                HorizontalAlignment = HorizontalAlignment.Center, VerticalAlignment = VerticalAlignment.Center,
+            });
+            if (f.Pressure)
+                face.Children.Add(new FontIcon
+                {
+                    Glyph = "", FontSize = 10, HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Bottom, Foreground = (Brush)res["AppTextSecondaryBrush"],
+                    FontFamily = (FontFamily)res["MaterialIconsFamily"],
+                });
+            var b = new Button
+            {
+                Content = face, Width = 36, Height = 36, Padding = new Thickness(0),
+                CornerRadius = new CornerRadius(8),
+            };
+            string label = $"{NearestPreset(PenWidths, f.Width):0.#} px{(f.Pressure ? ", pressure" : "")}" + (idx < 5 ? $" · Ctrl+{idx + 1}" : "");
+            ToolTipService.SetToolTip(b, label);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(b, $"Pen favorite {idx + 1}, {label}");
+            b.Click += (_, __) => ApplyPenFavorite(idx);
+            b.RightTapped += (_, e) =>
+            {
+                s.PenFavorites.RemoveAt(idx);
+                App.Services.Settings.Save();
+                RebuildPenFavorites();
+                e.Handled = true;
+            };
+            PenFavoritesPanel.Children.Add(b);
+        }
+
+        if (s.PenFavorites.Count < 5)
+        {
+            var add = new Button
+            {
+                Content = new FontIcon { Glyph = "", FontSize = 16, FontFamily = (FontFamily)res["MaterialIconsFamily"] },
+                Width = 36, Height = 36, Padding = new Thickness(0), CornerRadius = new CornerRadius(8),
+            };
+            ToolTipService.SetToolTip(add, "Save the current pen as a favorite");
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(add, "Save the current pen as a favorite");
+            add.Click += (_, __) =>
+            {
+                var hex = Controls.ColorPickerControl.ToHex(Canvas.Context.CurrentColor);
+                bool exists = s.PenFavorites.Any(p => p.ColorHex == hex && Math.Abs(p.Width - _penWidth) < 0.01f && p.Pressure == _penPressureMode);
+                if (!exists)
+                {
+                    s.PenFavorites.Add(new PenFavorite { ColorHex = hex, Width = _penWidth, Pressure = _penPressureMode });
+                    App.Services.Settings.Save();
+                }
+                RebuildPenFavorites();
+            };
+            PenFavoritesPanel.Children.Add(add);
+        }
+    }
+
+    private void ApplyPenFavorite(int index)
+    {
+        var favs = App.Services.Settings.Current.PenFavorites;
+        if (index < 0 || index >= favs.Count || _doc is null) return;
+        var f = favs[index];
+        SelectTool(ToolKind.Pen);
+        var color = Controls.ColorPickerControl.ParseHex(f.ColorHex);
+        Canvas.Context.CurrentColor = color;
+        ColorPicker.SetPresets(App.Services.Settings.Current.PenPresetColors, color);
+        // Snap to the toolbar's widths so the width picker shows it as selected.
+        _penWidth = (float)NearestPreset(PenWidths, f.Width);
+        Canvas.Context.CurrentWidth = _penWidth;
+        WidthPicker.SetPresets(PenWidths, _penWidth);
+        _penPressureMode = f.Pressure;
+        _pen.UsePressure = f.Pressure;
+        SyncPenMenu();
+        SaveToolModes();
+        PenPreview.Invalidate();
     }
 
     private void UpdateSelectionUi()
@@ -2360,6 +2720,7 @@ public sealed partial class EditorPage : Page
     private async Task RefreshPagePanelAsync()
     {
         if (_doc is null) return;
+        _panelBookmarkSig = BookmarkSignature();
         PageListPanel.Children.Clear();
         UpdatePageIndicator();
 
@@ -2512,6 +2873,26 @@ public sealed partial class EditorPage : Page
             }
         };
         cardGrid.Children.Add(selBadge);
+
+        // Bookmark label (bottom-left).
+        if (_doc.Pages[index].Bookmark is { } bookmark)
+        {
+            cardGrid.Children.Add(new Border
+            {
+                HorizontalAlignment = HorizontalAlignment.Left,
+                VerticalAlignment = VerticalAlignment.Bottom,
+                Margin = new Thickness(4, 0, 30, 4),
+                Padding = new Thickness(6, 2, 6, 2),
+                CornerRadius = new CornerRadius(6),
+                Background = (Brush)Application.Current.Resources["AppAccentBrush"],
+                IsHitTestVisible = false,
+                Child = new TextBlock
+                {
+                    Text = bookmark, FontSize = 10, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    Foreground = new SolidColorBrush(Colors.White), TextTrimming = TextTrimming.CharacterEllipsis,
+                },
+            });
+        }
 
         cardBorder.Child = cardGrid;
 
@@ -2668,6 +3049,8 @@ public sealed partial class EditorPage : Page
                 await ShowExtendPageDialogAsync(_doc.Pages[pageIndex]);
         };
 
+        flyout.Items.Add(BuildBookmarkSubmenu(pageIndex));
+        flyout.Items.Add(new MenuFlyoutSeparator());
         flyout.Items.Add(addAbove);
         flyout.Items.Add(addBelow);
         flyout.Items.Add(duplicate);
@@ -2679,6 +3062,83 @@ public sealed partial class EditorPage : Page
         flyout.Items.Add(new MenuFlyoutSeparator());
         flyout.Items.Add(delete);
         return flyout;
+    }
+
+    // ─── Page bookmarks ──────────────────────────────────────────────────────────
+    // A page can carry one short label. Bookmarked pages show it on their
+    // thumbnail, are listed under the bookmark button in the page panel, and
+    // the label is searchable like any text on the page.
+
+    private static readonly string[] BookmarkLabels = { "Definition", "Theorem", "Example", "Exercise", "Exam", "Important" };
+
+    private MenuFlyoutSubItem BuildBookmarkSubmenu(int pageIndex)
+    {
+        var current = _doc is not null && pageIndex < _doc.Pages.Count ? _doc.Pages[pageIndex].Bookmark : null;
+        var sub = new MenuFlyoutSubItem { Text = current is null ? "Bookmark" : $"Bookmark: {current}" };
+        foreach (var label in BookmarkLabels)
+        {
+            var item = new ToggleMenuFlyoutItem { Text = label, IsChecked = label == current };
+            item.Click += (_, __) => SetBookmark(pageIndex, label);
+            sub.Items.Add(item);
+        }
+        var custom = new MenuFlyoutItem { Text = "Custom label…" };
+        custom.Click += async (_, __) =>
+        {
+            var box = new TextBox { PlaceholderText = "Lagrange multipliers", Text = current ?? "", MaxLength = 40 };
+            var dlg = new ContentDialog
+            {
+                Title = $"Bookmark page {pageIndex + 1}", Content = box,
+                PrimaryButtonText = "Save", CloseButtonText = "Cancel",
+                DefaultButton = ContentDialogButton.Primary, XamlRoot = XamlRoot,
+            };
+            box.Loaded += (_, __) => { box.Focus(FocusState.Programmatic); box.SelectAll(); };
+            if (await dlg.ShowAsync() == ContentDialogResult.Primary && box.Text.Trim().Length > 0)
+                SetBookmark(pageIndex, box.Text.Trim());
+        };
+        sub.Items.Add(new MenuFlyoutSeparator());
+        sub.Items.Add(custom);
+        if (current is not null)
+        {
+            var remove = new MenuFlyoutItem { Text = "Remove bookmark" };
+            remove.Click += (_, __) => SetBookmark(pageIndex, null);
+            sub.Items.Add(remove);
+        }
+        return sub;
+    }
+
+    private void SetBookmark(int pageIndex, string? label)
+    {
+        if (_doc is null || pageIndex < 0 || pageIndex >= _doc.Pages.Count) return;
+        var page = _doc.Pages[pageIndex];
+        if (page.Bookmark == label) return;
+        page.Bookmark = label;
+        _doc.IsDirty = true;
+        App.Services.History.RecordMutation(page);
+        UpdateHistoryUi();
+        UpdateSaveStateUi();
+        ScheduleAutosave();
+        if (_pagePanelOpen) _ = RefreshPagePanelAsync();
+    }
+
+    private void RebuildBookmarksFlyout()
+    {
+        BookmarksFlyout.Items.Clear();
+        if (_doc is null) return;
+        bool any = false;
+        for (int i = 0; i < _doc.Pages.Count; i++)
+        {
+            if (_doc.Pages[i].Bookmark is not { } label) continue;
+            int idx = i;
+            var item = new MenuFlyoutItem { Text = $"Page {i + 1} · {label}" };
+            item.Click += (_, __) => Canvas.ScrollToPage(idx);
+            BookmarksFlyout.Items.Add(item);
+            any = true;
+        }
+        if (!any)
+            BookmarksFlyout.Items.Add(new MenuFlyoutItem
+            {
+                Text = "No bookmarks yet. Use a page's ⋯ menu.", IsEnabled = false,
+            });
     }
 
     private void UpdatePageIndicator()

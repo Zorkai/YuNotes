@@ -1245,6 +1245,41 @@ public sealed partial class InkCanvasControl : UserControl
         catch { }
     }
 
+    // Search: marks every match, page by page (rects in page coordinates), and
+    // emphasizes the current one. Pass null to clear.
+    public void SetSearchHighlights(IReadOnlyDictionary<int, List<Windows.Foundation.Rect>>? byPage,
+                                    int currentPage = -1, Windows.Foundation.Rect? current = null)
+    {
+        for (int i = 0; i < _pageCanvases.Count; i++)
+        {
+            List<Windows.Foundation.Rect>? rects = null;
+            byPage?.TryGetValue(i, out rects);
+            _pageCanvases[i].SetSearchHighlights(rects, i == currentPage ? current : null);
+        }
+    }
+
+    // Scrolls so a rect on a page (page coordinates) sits in the upper third
+    // of the viewport, horizontally centered when the page is wider than it.
+    public void ScrollToRect(int pageIndex, Windows.Foundation.Rect rect, int attempt = 0)
+    {
+        if (pageIndex < 0 || pageIndex >= _pageCanvases.Count) return;
+        var pc = _pageCanvases[pageIndex];
+        // Right after a note opens the pages aren't laid out yet; try again shortly.
+        if ((pc.ActualHeight <= 1 || Scroller.ViewportHeight <= 1) && attempt < 40)
+        {
+            DispatcherQueue.TryEnqueue(() => ScrollToRect(pageIndex, rect, attempt + 1));
+            return;
+        }
+        try
+        {
+            var pt = pc.TransformToVisual(Scroller).TransformPoint(new Windows.Foundation.Point(rect.X + rect.Width / 2, rect.Y));
+            double y = Scroller.VerticalOffset + pt.Y - Scroller.ViewportHeight / 3;
+            double x = Scroller.HorizontalOffset + pt.X - Scroller.ViewportWidth / 2;
+            Scroller.ChangeView(Math.Max(0, x), Math.Max(0, y), null);
+        }
+        catch { ScrollToPage(pageIndex); }
+    }
+
     // PDF text selection (Hand tool). Lives on the active page; copying delegates there.
     public string? GetSelectedText() => ActivePageCanvas?.GetSelectedText();
     public void ClearTextSelection()

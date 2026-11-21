@@ -528,6 +528,16 @@ public sealed class PageCanvas : ContentControl
                 StrokeDashArray = dash,
                 IsHitTestVisible = false
             },
+            // Arrow / axes / grid: their segments as one path, rebuilt on each move.
+            ShapeKind.Arrow or ShapeKind.Axes or ShapeKind.Grid => new XamlPath
+            {
+                Stroke = brush,
+                StrokeThickness = s.StrokeWidth,
+                StrokeDashArray = dash,
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+                IsHitTestVisible = false
+            },
             // Triangle uses a Polyline so the preview can show all three vertices.
             ShapeKind.Triangle => new Polyline
             {
@@ -611,6 +621,14 @@ public sealed class PageCanvas : ContentControl
                 line.X1 = s.X1; line.Y1 = s.Y1;
                 line.X2 = s.X2; line.Y2 = s.Y2;
                 break;
+            case XamlPath path:
+            {
+                var g = new GeometryGroup();
+                foreach (var (a, b) in ShapeGeometry.Segments(s))
+                    g.Children.Add(new LineGeometry { StartPoint = new(a.X, a.Y), EndPoint = new(b.X, b.Y) });
+                path.Data = g;
+                break;
+            }
         }
     }
 
@@ -2706,6 +2724,50 @@ public sealed class PageCanvas : ContentControl
             _overlay.Children.Add(_textSelHighlight);
         }
         _textSelHighlight.Data = group;
+    }
+
+    // ─── Search highlights ───────────────────────────────────────────────────────
+    // Soft yellow marks on every match on this page; the current match gets a
+    // stronger fill and an outline. Rects are in page coordinates.
+    private XamlPath? _searchMarks, _searchCurrent;
+
+    public void SetSearchHighlights(IReadOnlyList<Windows.Foundation.Rect>? rects, Windows.Foundation.Rect? current)
+    {
+        static GeometryGroup Group(IEnumerable<Windows.Foundation.Rect> rs)
+        {
+            var g = new GeometryGroup { FillRule = FillRule.Nonzero };
+            foreach (var r in rs)
+                g.Children.Add(new RectangleGeometry { Rect = new Windows.Foundation.Rect(r.X - 4, r.Y - 3, r.Width + 8, r.Height + 6) });
+            return g;
+        }
+
+        if (rects is null || rects.Count == 0)
+        {
+            if (_searchMarks is not null) { _overlay.Children.Remove(_searchMarks); _searchMarks = null; }
+        }
+        else
+        {
+            _searchMarks ??= AddOverlayPath(Color.FromArgb(80, 255, 213, 59), null);
+            _searchMarks.Data = Group(rects);
+        }
+
+        if (current is not { } c)
+        {
+            if (_searchCurrent is not null) { _overlay.Children.Remove(_searchCurrent); _searchCurrent = null; }
+        }
+        else
+        {
+            _searchCurrent ??= AddOverlayPath(Color.FromArgb(120, 255, 193, 7), Color.FromArgb(255, 230, 150, 0));
+            _searchCurrent.Data = Group(new[] { c });
+        }
+    }
+
+    private XamlPath AddOverlayPath(Color fill, Color? stroke)
+    {
+        var p = new XamlPath { Fill = new SolidColorBrush(fill), IsHitTestVisible = false };
+        if (stroke is { } s) { p.Stroke = new SolidColorBrush(s); p.StrokeThickness = 2; }
+        _overlay.Children.Add(p);
+        return p;
     }
 
     public string? GetSelectedText()

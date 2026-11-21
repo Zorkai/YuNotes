@@ -356,6 +356,13 @@ public static class PdfVectorWriter
             case ShapeKind.Line:
                 if (s.StrokeWidth > 0) gfx.DrawLine(pen, s.X1, s.Y1, s.X2, s.Y2);
                 break;
+            case ShapeKind.Arrow:
+            case ShapeKind.Axes:
+            case ShapeKind.Grid:
+                if (s.StrokeWidth > 0)
+                    foreach (var (a, b) in ShapeGeometry.Segments(s))
+                        gfx.DrawLine(pen, a.X, a.Y, b.X, b.Y);
+                break;
             case ShapeKind.Triangle:
             {
                 var tri = new[] { new XPoint(s.X1, s.Y1), new XPoint(s.X2, s.Y2), new XPoint(s.X3, s.Y3) };
@@ -427,7 +434,7 @@ public static class PdfVectorWriter
             minX = Math.Min(minX, s.X3); minY = Math.Min(minY, s.Y3);
             maxX = Math.Max(maxX, s.X3); maxY = Math.Max(maxY, s.Y3);
         }
-        double pad = s.StrokeWidth * 0.5 + 2;
+        double pad = s.StrokeWidth * 0.5 + 2 + ShapeGeometry.Overhang(s);
         if (s.Rotation != 0f)
             return RotatedBoxIntersects(r, minX - pad, minY - pad, maxX - minX + pad * 2, maxY - minY + pad * 2, s.Rotation);
         return Intersects(r, minX - pad, minY - pad, maxX + pad, maxY + pad);

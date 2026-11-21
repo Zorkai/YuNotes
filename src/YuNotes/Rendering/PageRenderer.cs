@@ -421,7 +421,7 @@ public sealed class PageRenderer
             Bbox rb = Bbox.RotatedAabb(minX, minY, maxX, maxY, s.Rotation);
             minX = rb.X; minY = rb.Y; maxX = rb.Right; maxY = rb.Bottom;
         }
-        float pad = s.StrokeWidth * 0.5f + 2f;
+        float pad = s.StrokeWidth * 0.5f + 2f + ShapeGeometry.Overhang(s);
         return RectIntersects(clip, minX - pad, minY - pad, maxX + pad, maxY + pad);
     }
 
@@ -472,6 +472,13 @@ public sealed class PageRenderer
 
             case ShapeKind.Line:
                 ds.DrawLine(s.X1, s.Y1, s.X2, s.Y2, s.Color, s.StrokeWidth, style);
+                break;
+
+            case ShapeKind.Arrow:
+            case ShapeKind.Axes:
+            case ShapeKind.Grid:
+                foreach (var (a, b) in ShapeGeometry.Segments(s))
+                    ds.DrawLine(a, b, s.Color, s.StrokeWidth, style);
                 break;
 
             case ShapeKind.Triangle:

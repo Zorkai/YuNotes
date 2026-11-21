@@ -85,6 +85,37 @@ public sealed class DocumentService
         };
     }
 
+    // Reads a note's strokes, text boxes and source-PDF bytes for the search
+    // index, without page images. Works for .yunote files and .pdf containers
+    // (including plain PDFs with no YuNotes data, which have no strokes).
+    public (Document? Doc, byte[]? SourcePdf) OpenForIndex(string path, PdfContainerService container)
+    {
+        if (!string.Equals(Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase))
+        {
+            var d = Open(path, forIndex: true);
+            byte[]? src = null;
+            if (d.Info.SourcePdfPath is { Length: > 0 } sp && File.Exists(sp))
+                try { src = File.ReadAllBytes(sp); } catch { }
+            return (d, src);
+        }
+
+        var blob = container.ExtractData(path);
+        if (blob is null || blob.Length == 0) return (null, File.ReadAllBytes(path));
+        var temp = Path.Combine(Path.GetTempPath(), $"yunotes-idx-{Guid.NewGuid():N}.sqlite");
+        File.WriteAllBytes(temp, blob);
+        try
+        {
+            var d = Open(temp, forIndex: true);
+            d.Info.FilePath = path;
+            return (d, container.ExtractSourcePdf(path));
+        }
+        finally
+        {
+            Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+            try { File.Delete(temp); } catch { }
+        }
+    }
+
     public void Delete(string path)
     {
         if (File.Exists(path)) File.Delete(path);
@@ -204,7 +235,8 @@ public sealed class DocumentService
                 BackgroundContentWidth = p.BackgroundContentWidth,
                 BackgroundPng = p.BackgroundPng,
                 SourcePageIndex = p.SourcePageIndex,
-                TemplateOverride = CloneTemplate(p.TemplateOverride)
+                TemplateOverride = CloneTemplate(p.TemplateOverride),
+                Bookmark = p.Bookmark
             };
             foreach (var st in p.Strokes)
             {
@@ -443,7 +475,9 @@ public sealed class DocumentService
         return doc;
     }
 
-    public Document Open(string path)
+    // forIndex: skip page backgrounds and images (the heavy blobs) — the search
+    // index only needs strokes, text boxes and page geometry.
+    public Document Open(string path, bool forIndex = false)
     {
         using var conn = OpenConn(path);
         EnsureSchema(conn);
@@ -485,7 +519,9 @@ public sealed class DocumentService
 
         using (var cmd = conn.CreateCommand())
         {
-            cmd.CommandText = "SELECT id,idx,width,height,background_png,template_json,source_page_index,background_left,background_width FROM page ORDER BY idx";
+            cmd.CommandText = forIndex
+                ? "SELECT id,idx,width,height,NULL AS background_png,template_json,source_page_index,background_left,background_width,bookmark FROM page ORDER BY idx"
+                : "SELECT id,idx,width,height,background_png,template_json,source_page_index,background_left,background_width,bookmark FROM page ORDER BY idx";
             using var r = cmd.ExecuteReader();
             while (r.Read())
             {
@@ -505,6 +541,7 @@ public sealed class DocumentService
                 if (!r.IsDBNull(6)) p.SourcePageIndex = r.GetInt32(6);
                 if (!r.IsDBNull(7)) p.BackgroundLeft = r.GetDouble(7);
                 if (!r.IsDBNull(8)) p.BackgroundContentWidth = r.GetDouble(8);
+                if (!r.IsDBNull(9)) p.Bookmark = r.GetString(9);
                 doc.Pages.Add(p);
             }
         }
@@ -555,6 +592,7 @@ public sealed class DocumentService
                     catch { }
                 }
             }
+            if (forIndex) continue;
             using (var cmd = conn.CreateCommand())
             {
                 cmd.CommandText = "SELECT id,x,y,w,h,png FROM image_element WHERE page_id=$p";
@@ -624,8 +662,8 @@ public sealed class DocumentService
             p.Index = i;
             using (var cmd = conn.CreateCommand())
             {
-                cmd.CommandText = @"INSERT INTO page(id,idx,width,height,background_png,template_json,source_page_index,background_left,background_width)
-                                    VALUES($id,$i,$w,$h,$bg,$tpl,$src,$bl,$bw)";
+                cmd.CommandText = @"INSERT INTO page(id,idx,width,height,background_png,template_json,source_page_index,background_left,background_width,bookmark)
+                                    VALUES($id,$i,$w,$h,$bg,$tpl,$src,$bl,$bw,$bm)";
                 cmd.Parameters.AddWithValue("$id", p.Id);
                 cmd.Parameters.AddWithValue("$i", p.Index);
                 cmd.Parameters.AddWithValue("$w", p.Width);
@@ -636,6 +674,7 @@ public sealed class DocumentService
                 cmd.Parameters.AddWithValue("$src", (object?)p.SourcePageIndex ?? DBNull.Value);
                 cmd.Parameters.AddWithValue("$bl", p.BackgroundLeft);
                 cmd.Parameters.AddWithValue("$bw", p.BackgroundContentWidth);
+                cmd.Parameters.AddWithValue("$bm", (object?)p.Bookmark ?? DBNull.Value);
                 cmd.ExecuteNonQuery();
             }
             foreach (var s in p.Strokes)
@@ -712,6 +751,7 @@ public sealed class DocumentService
         try { Exec(c, "ALTER TABLE page ADD COLUMN source_page_index INTEGER"); } catch { }
         try { Exec(c, "ALTER TABLE page ADD COLUMN background_left REAL DEFAULT 0"); } catch { }
         try { Exec(c, "ALTER TABLE page ADD COLUMN background_width REAL DEFAULT 0"); } catch { }
+        try { Exec(c, "ALTER TABLE page ADD COLUMN bookmark TEXT"); } catch { }
         Exec(c, @"CREATE TABLE IF NOT EXISTS stroke(
             id TEXT PRIMARY KEY, page_id TEXT, data BLOB)");
         Exec(c, @"CREATE INDEX IF NOT EXISTS idx_stroke_page ON stroke(page_id)");
