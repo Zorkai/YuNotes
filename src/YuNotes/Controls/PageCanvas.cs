@@ -100,6 +100,12 @@ public sealed class PageCanvas : ContentControl
     // once per sample, but a single PointerMoved can carry several coalesced
     // samples — rebuilding the ribbon/polyline tail for each is wasted work.
     private bool _suppressLiveSync;
+    // One live-ink surface update per composed frame: pens often report
+    // faster than the display refreshes (240 Hz pen, 60/120 Hz panel), and
+    // every surface update costs GPU + DWM work even though only the last one
+    // before the frame is ever seen. Samples still land in the model on each
+    // event; the surface catches up once, right before the frame renders.
+    private bool _liveInkSyncPending;
 
     // ── Cross-page bleed ────────────────────────────────────────────────────
     // Adjacent page canvases (set by InkCanvasControl after Rebuild). When an
@@ -429,10 +435,47 @@ public sealed class PageCanvas : ContentControl
             return;
         }
 
-        SyncLiveInkSurface(s);
+        ScheduleLiveInkSync();
     }
 
-    private void TearDownLiveInk() => _liveInk?.Clear();
+    private void ScheduleLiveInkSync()
+    {
+        if (_liveInkSyncPending) return;
+        _liveInkSyncPending = true;
+        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering += OnRenderingLiveInk;
+    }
+
+    private void CancelLiveInkSync()
+    {
+        if (!_liveInkSyncPending) return;
+        _liveInkSyncPending = false;
+        Microsoft.UI.Xaml.Media.CompositionTarget.Rendering -= OnRenderingLiveInk;
+    }
+
+    // Raised on the UI thread before each frame is composed, after the input
+    // queued for that frame has been handled — so drawing here adds no latency.
+    // Unsubscribes immediately: a standing Rendering handler would keep XAML
+    // rendering every frame even while the pen is idle.
+    private void OnRenderingLiveInk(object? sender, object e)
+    {
+        CancelLiveInkSync();
+        try
+        {
+            // Re-check: the stroke may have been committed, cancelled or moved
+            // to another page since the sync was scheduled.
+            var s = Context.ActiveStroke;
+            if (s is null || Context.ActiveShape is not null || !ReferenceEquals(Context.CurrentPage, Page))
+                return;
+            SyncLiveInkSurface(s);
+        }
+        catch (Exception ex) { App.LogError(ex, "OnRenderingLiveInk"); }
+    }
+
+    private void TearDownLiveInk()
+    {
+        CancelLiveInkSync();
+        _liveInk?.Clear();
+    }
 
     private void SyncLiveInkSurface(Stroke s)
     {
