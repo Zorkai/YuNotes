@@ -94,6 +94,13 @@ public sealed partial class SettingsPage : Page
         DiscardBtn.Click += (_, __) => { RestoreColorSnapshot(); LoadIntoUi(); };
         SettingsSearch.TextChanged += (_, __) => ApplySearch(SettingsSearch.Text);
         TileGrid.SizeChanged += (_, e) => LayoutTiles(e.NewSize.Width);
+        RootScroller.SizeChanged += (_, e) => FitContentWidth(e.NewSize.Width);
+        foreach (var (key, ex) in Sections())
+        {
+            ex.IsExpanded = s_openSections.Contains(key);
+            ex.Expanding += (_, _) => s_openSections.Add(key);
+            ex.Collapsed += (_, _) => s_openSections.Remove(key);
+        }
         var findKey = new KeyboardAccelerator
         {
             Key = Windows.System.VirtualKey.F,
@@ -209,10 +216,82 @@ public sealed partial class SettingsPage : Page
         if (_settingsLoading) return;
         _settingsDirty = true;
         UpdateSaveBar();
+        RefreshSummaries();
     }
 
     private void UpdateSaveBar() =>
         SaveBar.Visibility = _settingsDirty ? Visibility.Visible : Visibility.Collapsed;
+
+    // ─── Layout helpers ─────────────────────────────────────────────────────
+    private const double ContentMaxWidth = 920;
+
+    // Centered column up to 920 px wide. Set explicitly because a Stretch panel
+    // with MaxWidth inside the ScrollViewer doesn't center, and a Center panel
+    // would shrink to its content (squashing the star-sized tile columns).
+    private void FitContentWidth(double viewport)
+    {
+        double w = Math.Max(0, viewport - RootScroller.Padding.Left - RootScroller.Padding.Right);
+        RootStack.Width = Math.Min(ContentMaxWidth, w);
+        SaveBarContent.Width = Math.Min(ContentMaxWidth, Math.Max(0, viewport - 64));
+    }
+
+    // Sections that were open stay open the next time Settings is shown.
+    private static readonly HashSet<string> s_openSections = new();
+
+    private IEnumerable<(string Key, Expander Section)> Sections() => new[]
+    {
+        ("pen", PenSection), ("palm", PalmSection), ("ink", InkSection),
+        ("appearance", AppearanceSection), ("storage", StorageSection), ("advanced", AdvancedSection),
+    };
+
+    // ─── Live summaries ─────────────────────────────────────────────────────
+    // Section subtitles and tile captions describe the current values, so most
+    // settings can be read without expanding anything. Dependent controls are
+    // disabled while the switch they depend on is off.
+    private void RefreshSummaries()
+    {
+        bool pressure = PressureEnabledBox.IsChecked == true;
+        bool palm = PalmToggle.IsChecked == true;
+        bool autosave = AutosaveToggle.IsChecked == true;
+
+        MinPressureSlider.IsEnabled = pressure;
+        PressureMultSlider.IsEnabled = pressure;
+        IgnoreTouchToggle.IsEnabled = palm;
+        GraceBox.IsEnabled = palm;
+        AutosaveDelayBox.IsEnabled = autosave;
+
+        string grace = double.IsNaN(GraceBox.Value) ? "500" : $"{GraceBox.Value:0}";
+        string delay = double.IsNaN(AutosaveDelayBox.Value) ? "2.5" : $"{AutosaveDelayBox.Value:0.#}";
+
+        PressureEnabledBox.Caption = pressure ? $"On · ×{PressureMultSlider.Value:0.##}" : "Off";
+        PalmToggle.Caption         = palm ? $"On · {grace} ms" : "Off";
+        HoldToSnapToggle.Caption   = HoldToSnapToggle.IsChecked == true ? "On · 750 ms hold" : "Off";
+        AutosaveToggle.Caption     = autosave ? $"On · after {delay} s" : "Off";
+        AutoUpdateToggle.Caption   = AutoUpdateToggle.IsChecked == true ? "On · installs on close" : "Off";
+        LiquidGlassBox.Caption     = LiquidGlassBox.IsChecked == true ? "On" : "Off · plain acrylic";
+        SeamlessPagesBox.Caption   = SeamlessPagesBox.IsChecked == true ? "On · no page gaps" : "Off";
+        HideZoomBarBox.Caption     = HideZoomBarBox.IsChecked == true ? "Hidden" : "Off · zoom bar shown";
+
+        var barrel = (BarrelCombo.SelectedItem as ComboBoxItem)?.Content as string ?? "";
+        PenSummary.Text = pressure
+            ? $"Pressure from {MinPressureSlider.Value:0.00}, ×{PressureMultSlider.Value:0.##} · Barrel button: {barrel}"
+            : $"Pressure off · Barrel button: {barrel}";
+
+        PalmSummary.Text = !palm ? "Off · touch always draws"
+            : $"{(IgnoreTouchToggle.IsOn ? "Touch ignored near the pen" : "Touch allowed near the pen")} · {grace} ms grace";
+
+        var st = App.Services.Settings.Current;
+        InkSummary.Text = $"{st.PenPresetColors.Count} pen and {st.HighlighterPresetColors.Count} highlighter colors · " +
+                          $"pen {PenWidthBox.Value:0.#} px, highlighter {HighWidthBox.Value:0.#} px, eraser {EraserWidthBox.Value:0.#} px";
+
+        string ComboText(ComboBox c) => ((c.SelectedItem as ComboBoxItem)?.Content as string ?? "").ToLowerInvariant();
+        string theme = ThemeCombo.SelectedIndex switch { 1 => "Light", 2 => "Dark", _ => "System" };
+        int hidden = _drawingTools.Count(t => !t.IsVisible) + _actionTools.Count(t => !t.IsVisible);
+        AppearanceSummary.Text = $"{theme} theme · toolbar {ComboText(ToolbarPositionCombo)}, {ComboText(ToolbarSizeCombo)}" +
+                                 (hidden > 0 ? $" · {hidden} tool{(hidden == 1 ? "" : "s")} hidden" : "");
+
+        StorageSummary.Text = $"{(autosave ? $"Autosave after {delay} s" : "Autosave off")} · {FolderBox.Text}";
+    }
 
     // Preset-color edits change the settings lists in place, so keep a copy to
     // put back when the user discards.
@@ -294,8 +373,7 @@ public sealed partial class SettingsPage : Page
         NoResultsText.Visibility = shown == 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
-    private static string TileLabel(ToggleButton tile) =>
-        tile.Content is Panel p ? string.Join(" ", p.Children.OfType<TextBlock>().Select(t => t.Text)) : "";
+    private static string TileLabel(ToggleButton tile) => tile.Content as string ?? "";
 
     private static string HeaderText(Expander ex) =>
         ex.Header is Panel p
@@ -383,7 +461,7 @@ public sealed partial class SettingsPage : Page
     {
         _settingsLoading = true;
         try { LoadIntoUiCore(); }
-        finally { _settingsLoading = false; _settingsDirty = false; UpdateSaveBar(); }
+        finally { _settingsLoading = false; _settingsDirty = false; UpdateSaveBar(); RefreshSummaries(); }
     }
 
     private void LoadIntoUiCore()
@@ -542,12 +620,24 @@ public sealed partial class SettingsPage : Page
 
         CheckUpdatesBtn.IsEnabled = Services.UpdateService.IsSupported && !busy
                                     && state != Services.UpdateService.State.Ready;
+        string checkedText = Services.UpdateService.LastChecked is { } at ? $" · checked {Ago(at)}" : "";
         AppVersionText.Text = installed is null ? "Development build"
-            : Services.UpdateService.IsSupported ? $"Installed version {Short(installed)}"
+            : Services.UpdateService.IsSupported ? $"Installed version {Short(installed)}{checkedText}"
             : $"Installed version {Short(installed)} · updates come from the Microsoft Store";
+        CheckUpdatesBtn.Visibility = state == Services.UpdateService.State.Ready ? Visibility.Collapsed : Visibility.Visible;
+        CheckUpdatesBtn.Content = state == Services.UpdateService.State.Failed ? "Try again" : "Check for updates";
     }
 
     private static string Short(Version v) => $"{v.Major}.{v.Minor}.{v.Build}";
+
+    private static string Ago(DateTime at)
+    {
+        var d = DateTime.Now - at;
+        if (d.TotalMinutes < 1) return "just now";
+        if (d.TotalHours < 1) return $"{(int)d.TotalMinutes} min ago";
+        if (d.TotalDays < 1) return $"{(int)d.TotalHours} h ago";
+        return at.ToString("d MMM");
+    }
 
     private static void PopulateToolList(
         ObservableCollection<ToolEntry> collection,
@@ -703,7 +793,7 @@ public sealed partial class SettingsPage : Page
         p.FileTypeFilter.Add("*");
         WinRT.Interop.InitializeWithWindow.Initialize(p, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
         var f = await p.PickSingleFolderAsync();
-        if (f is not null) FolderBox.Text = f.Path;
+        if (f is not null && f.Path != FolderBox.Text) { FolderBox.Text = f.Path; Mark(); }
     }
 
     private void Save()

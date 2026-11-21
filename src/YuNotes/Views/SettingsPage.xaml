@@ -3,6 +3,7 @@
     x:Class="YuNotes.Views.SettingsPage"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:YuNotes.Controls"
     Background="{ThemeResource AppBackgroundBrush}">
 
     <!-- Control Center layout: quick tiles for the switches people flip often,
@@ -41,15 +42,15 @@
             <Setter Property="Padding" Value="20,16,20,20" />
         </Style>
 
-        <!-- Quick-settings tile: an outlined card that fills with the accent when on.
-             Content is the icon + label; the template adds the On/Off line. -->
-        <Style x:Key="SettingsTileStyle" TargetType="ToggleButton">
+        <!-- Quick-settings tile. Off: plain card, muted icon bubble, empty switch.
+             On: soft accent fill and outline, solid accent bubble, filled switch.
+             Text stays the primary color either way so it reads in both themes. -->
+        <Style x:Key="SettingsTileStyle" TargetType="controls:SettingsTile">
             <Setter Property="HorizontalAlignment" Value="Stretch" />
             <Setter Property="VerticalAlignment" Value="Stretch" />
             <Setter Property="HorizontalContentAlignment" Value="Left" />
-            <Setter Property="VerticalContentAlignment" Value="Top" />
-            <Setter Property="MinHeight" Value="100" />
-            <Setter Property="Padding" Value="14,12" />
+            <Setter Property="MinHeight" Value="112" />
+            <Setter Property="Padding" Value="14" />
             <Setter Property="CornerRadius" Value="14" />
             <Setter Property="Background" Value="{ThemeResource AppSurfaceBrush}" />
             <Setter Property="BorderBrush" Value="{ThemeResource AppBorderBrush}" />
@@ -57,13 +58,14 @@
             <Setter Property="Foreground" Value="{ThemeResource AppTextPrimaryBrush}" />
             <Setter Property="Template">
                 <Setter.Value>
-                    <ControlTemplate TargetType="ToggleButton">
+                    <ControlTemplate TargetType="controls:SettingsTile">
                         <Grid x:Name="RootGrid">
                             <Border Background="{TemplateBinding Background}"
                                     BorderBrush="{TemplateBinding BorderBrush}"
                                     BorderThickness="{TemplateBinding BorderThickness}"
                                     CornerRadius="{TemplateBinding CornerRadius}" />
-                            <Border x:Name="OnLayer" Background="{ThemeResource AppAccentBrush}"
+                            <Border x:Name="OnLayer" Background="{ThemeResource AppAccentSoftBrush}"
+                                    BorderBrush="{ThemeResource AppAccentBrush}" BorderThickness="1"
                                     CornerRadius="{TemplateBinding CornerRadius}" Opacity="0">
                                 <Border.OpacityTransition><ScalarTransition Duration="0:0:0.15" /></Border.OpacityTransition>
                             </Border>
@@ -71,19 +73,35 @@
                                     CornerRadius="{TemplateBinding CornerRadius}" Opacity="0">
                                 <Border.OpacityTransition><ScalarTransition Duration="0:0:0.1" /></Border.OpacityTransition>
                             </Border>
-                            <Grid Padding="{TemplateBinding Padding}" RowSpacing="2">
+                            <Grid Padding="{TemplateBinding Padding}" RowSpacing="10">
                                 <Grid.RowDefinitions>
-                                    <RowDefinition Height="*" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
                                 </Grid.RowDefinitions>
-                                <ContentPresenter x:Name="ContentPresenter"
-                                                  Content="{TemplateBinding Content}"
-                                                  ContentTemplate="{TemplateBinding ContentTemplate}"
-                                                  HorizontalAlignment="Stretch"
-                                                  VerticalAlignment="Stretch"
-                                                  Foreground="{TemplateBinding Foreground}" />
-                                <TextBlock x:Name="StateText" Grid.Row="1" Text="Off" FontSize="12"
-                                           Opacity="0.7" Foreground="{TemplateBinding Foreground}" />
+                                <Border x:Name="IconBubble" Width="36" Height="36" CornerRadius="18"
+                                        HorizontalAlignment="Left"
+                                        Background="{ThemeResource AppSurfaceVariantBrush}">
+                                    <FontIcon x:Name="Icon" Glyph="{TemplateBinding Glyph}" FontSize="19"
+                                              Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                </Border>
+                                <!-- Little switch so the on/off state reads without color. -->
+                                <Border x:Name="Pill" Width="30" Height="17" CornerRadius="8.5"
+                                        HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,2,0,0"
+                                        BorderThickness="1" BorderBrush="{ThemeResource AppTextSecondaryBrush}"
+                                        Background="Transparent">
+                                    <Ellipse x:Name="Knob" Width="9" Height="9" Margin="3,0"
+                                             HorizontalAlignment="Left" VerticalAlignment="Center"
+                                             Fill="{ThemeResource AppTextSecondaryBrush}" />
+                                </Border>
+                                <StackPanel Grid.Row="1" VerticalAlignment="Bottom" Spacing="1">
+                                    <ContentPresenter Content="{TemplateBinding Content}"
+                                                      FontWeight="SemiBold"
+                                                      Foreground="{TemplateBinding Foreground}" />
+                                    <TextBlock x:Name="CaptionText" Text="{TemplateBinding Caption}"
+                                               FontSize="{StaticResource FontSizeCaption}"
+                                               TextTrimming="CharacterEllipsis"
+                                               Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                </StackPanel>
                             </Grid>
                             <VisualStateManager.VisualStateGroups>
                                 <VisualStateGroup x:Name="CommonStates">
@@ -106,34 +124,50 @@
                                     <VisualState x:Name="Checked">
                                         <VisualState.Setters>
                                             <Setter Target="OnLayer.Opacity" Value="1" />
-                                            <Setter Target="ContentPresenter.Foreground" Value="White" />
-                                            <Setter Target="StateText.Foreground" Value="White" />
-                                            <Setter Target="StateText.Text" Value="On" />
+                                            <Setter Target="IconBubble.Background" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Icon.Foreground" Value="White" />
+                                            <Setter Target="Pill.Background" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Pill.BorderBrush" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Knob.HorizontalAlignment" Value="Right" />
+                                            <Setter Target="Knob.Fill" Value="White" />
+                                            <Setter Target="CaptionText.Foreground" Value="{ThemeResource AppAccentBrush}" />
                                         </VisualState.Setters>
                                     </VisualState>
                                     <VisualState x:Name="CheckedPointerOver">
                                         <VisualState.Setters>
-                                            <Setter Target="OnLayer.Opacity" Value="0.88" />
-                                            <Setter Target="ContentPresenter.Foreground" Value="White" />
-                                            <Setter Target="StateText.Foreground" Value="White" />
-                                            <Setter Target="StateText.Text" Value="On" />
+                                            <Setter Target="OnLayer.Opacity" Value="1" />
+                                            <Setter Target="HoverLayer.Opacity" Value="0.35" />
+                                            <Setter Target="IconBubble.Background" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Icon.Foreground" Value="White" />
+                                            <Setter Target="Pill.Background" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Pill.BorderBrush" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Knob.HorizontalAlignment" Value="Right" />
+                                            <Setter Target="Knob.Fill" Value="White" />
+                                            <Setter Target="CaptionText.Foreground" Value="{ThemeResource AppAccentBrush}" />
                                         </VisualState.Setters>
                                     </VisualState>
                                     <VisualState x:Name="CheckedPressed">
                                         <VisualState.Setters>
-                                            <Setter Target="OnLayer.Opacity" Value="0.75" />
-                                            <Setter Target="ContentPresenter.Foreground" Value="White" />
-                                            <Setter Target="StateText.Foreground" Value="White" />
-                                            <Setter Target="StateText.Text" Value="On" />
+                                            <Setter Target="OnLayer.Opacity" Value="1" />
+                                            <Setter Target="HoverLayer.Opacity" Value="0.6" />
+                                            <Setter Target="IconBubble.Background" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Icon.Foreground" Value="White" />
+                                            <Setter Target="Pill.Background" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Pill.BorderBrush" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Knob.HorizontalAlignment" Value="Right" />
+                                            <Setter Target="Knob.Fill" Value="White" />
+                                            <Setter Target="CaptionText.Foreground" Value="{ThemeResource AppAccentBrush}" />
                                         </VisualState.Setters>
                                     </VisualState>
                                     <VisualState x:Name="CheckedDisabled">
                                         <VisualState.Setters>
                                             <Setter Target="OnLayer.Opacity" Value="1" />
                                             <Setter Target="RootGrid.Opacity" Value="0.45" />
-                                            <Setter Target="ContentPresenter.Foreground" Value="White" />
-                                            <Setter Target="StateText.Foreground" Value="White" />
-                                            <Setter Target="StateText.Text" Value="On" />
+                                            <Setter Target="IconBubble.Background" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Icon.Foreground" Value="White" />
+                                            <Setter Target="Pill.Background" Value="{ThemeResource AppAccentBrush}" />
+                                            <Setter Target="Knob.HorizontalAlignment" Value="Right" />
+                                            <Setter Target="Knob.Fill" Value="White" />
                                         </VisualState.Setters>
                                     </VisualState>
                                 </VisualStateGroup>
@@ -199,7 +233,7 @@
         </Border>
 
         <ScrollViewer x:Name="RootScroller" Grid.Row="1" Padding="32,24,32,40">
-            <StackPanel x:Name="RootStack" Spacing="14" MaxWidth="920" HorizontalAlignment="Stretch">
+            <StackPanel x:Name="RootStack" Spacing="14" HorizontalAlignment="Center">
                 <StackPanel.ChildrenTransitions>
                     <TransitionCollection>
                         <EntranceThemeTransition IsStaggeringEnabled="True" />
@@ -208,38 +242,22 @@
 
                 <!-- ─── Quick tiles ───────────────────────────────────────────── -->
                 <Grid x:Name="TileGrid" ColumnSpacing="10" RowSpacing="10">
-                    <ToggleButton x:Name="PressureEnabledBox" Style="{StaticResource SettingsTileStyle}"
-                                  ToolTipService.ToolTip="Vary stroke width with pen pressure">
-                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe746;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Pressure" FontWeight="SemiBold" /></StackPanel>
-                    </ToggleButton>
-                    <ToggleButton x:Name="PalmToggle" Style="{StaticResource SettingsTileStyle}"
-                                  ToolTipService.ToolTip="Ignore your hand resting on the screen while writing">
-                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe764;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Palm rejection" FontWeight="SemiBold" /></StackPanel>
-                    </ToggleButton>
-                    <ToggleButton x:Name="HoldToSnapToggle" Style="{StaticResource SettingsTileStyle}"
-                                  ToolTipService.ToolTip="Draw a shape, then hold still for about 750 ms to snap it to a perfect line, ellipse or rectangle">
-                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe7c8;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Hold to snap" FontWeight="SemiBold" /></StackPanel>
-                    </ToggleButton>
-                    <ToggleButton x:Name="AutosaveToggle" Style="{StaticResource SettingsTileStyle}"
-                                  ToolTipService.ToolTip="Save automatically a short while after you stop drawing">
-                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe161;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Autosave" FontWeight="SemiBold" /></StackPanel>
-                    </ToggleButton>
-                    <ToggleButton x:Name="AutoUpdateToggle" Style="{StaticResource SettingsTileStyle}"
-                                  ToolTipService.ToolTip="Download updates in the background and install them when you close YuNotes">
-                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe8d7;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Auto-update" FontWeight="SemiBold" /></StackPanel>
-                    </ToggleButton>
-                    <ToggleButton x:Name="LiquidGlassBox" Style="{StaticResource SettingsTileStyle}"
-                                  ToolTipService.ToolTip="Render the floating toolbar as refractive glass. Turn off to fall back to plain acrylic">
-                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe798;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Liquid glass" FontWeight="SemiBold" /></StackPanel>
-                    </ToggleButton>
-                    <ToggleButton x:Name="SeamlessPagesBox" Style="{StaticResource SettingsTileStyle}"
-                                  ToolTipService.ToolTip="No gap between pages">
-                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe8ed;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Seamless pages" FontWeight="SemiBold" /></StackPanel>
-                    </ToggleButton>
-                    <ToggleButton x:Name="HideZoomBarBox" Style="{StaticResource SettingsTileStyle}"
-                                  ToolTipService.ToolTip="Hide the zoom bar in the editor">
-                        <StackPanel Spacing="14"><FontIcon Glyph="&#xe8ff;" FontSize="22" HorizontalAlignment="Left" /><TextBlock Text="Hide zoom bar" FontWeight="SemiBold" /></StackPanel>
-                    </ToggleButton>
+                    <controls:SettingsTile x:Name="PressureEnabledBox" Style="{StaticResource SettingsTileStyle}" Glyph="&#xe746;" Content="Pressure"
+                                          ToolTipService.ToolTip="Vary stroke width with pen pressure" />
+                    <controls:SettingsTile x:Name="PalmToggle" Style="{StaticResource SettingsTileStyle}" Glyph="&#xe764;" Content="Palm rejection"
+                                          ToolTipService.ToolTip="Ignore your hand resting on the screen while writing" />
+                    <controls:SettingsTile x:Name="HoldToSnapToggle" Style="{StaticResource SettingsTileStyle}" Glyph="&#xe7c8;" Content="Hold to snap"
+                                          ToolTipService.ToolTip="Draw a shape, then hold still for about 750 ms to snap it to a perfect line, ellipse or rectangle" />
+                    <controls:SettingsTile x:Name="AutosaveToggle" Style="{StaticResource SettingsTileStyle}" Glyph="&#xe161;" Content="Autosave"
+                                          ToolTipService.ToolTip="Save automatically a short while after you stop drawing" />
+                    <controls:SettingsTile x:Name="AutoUpdateToggle" Style="{StaticResource SettingsTileStyle}" Glyph="&#xe8d7;" Content="Auto-update"
+                                          ToolTipService.ToolTip="Download updates in the background and install them when you close YuNotes" />
+                    <controls:SettingsTile x:Name="LiquidGlassBox" Style="{StaticResource SettingsTileStyle}" Glyph="&#xe798;" Content="Liquid glass"
+                                          ToolTipService.ToolTip="Render the floating toolbar as refractive glass. Turn off to fall back to plain acrylic" />
+                    <controls:SettingsTile x:Name="SeamlessPagesBox" Style="{StaticResource SettingsTileStyle}" Glyph="&#xe8ed;" Content="Seamless pages"
+                                          ToolTipService.ToolTip="No gap between pages" />
+                    <controls:SettingsTile x:Name="HideZoomBarBox" Style="{StaticResource SettingsTileStyle}" Glyph="&#xe8ff;" Content="Hide zoom bar"
+                                          ToolTipService.ToolTip="Hide the zoom bar in the editor" />
                 </Grid>
 
                 <!-- ─── Updates ──────────────────────────────────────────────── -->
@@ -312,7 +330,7 @@
                         <Grid ColumnSpacing="14" Padding="0,10">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <FontIcon Glyph="&#xf604;" FontSize="22" VerticalAlignment="Center" />
-                            <StackPanel Grid.Column="1"><TextBlock Text="Pen &amp; stylus" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Pressure curve, barrel button, test area" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                            <StackPanel Grid.Column="1"><TextBlock Text="Pen &amp; stylus" Style="{StaticResource SubheadStyle}" /><TextBlock x:Name="PenSummary" Text="Pressure curve, barrel button, test area" Style="{StaticResource RowHintStyle}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" /></StackPanel>
                         </Grid>
                     </Expander.Header>
                     <StackPanel Spacing="14">
@@ -380,7 +398,7 @@
                         <Grid ColumnSpacing="14" Padding="0,10">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <FontIcon Glyph="&#xe913;" FontSize="22" VerticalAlignment="Center" />
-                            <StackPanel Grid.Column="1"><TextBlock Text="Palm rejection" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Touch handling while the pen is in use" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                            <StackPanel Grid.Column="1"><TextBlock Text="Palm rejection" Style="{StaticResource SubheadStyle}" /><TextBlock x:Name="PalmSummary" Text="Touch handling while the pen is in use" Style="{StaticResource RowHintStyle}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" /></StackPanel>
                         </Grid>
                     </Expander.Header>
                     <StackPanel Spacing="14">
@@ -411,7 +429,7 @@
                         <Grid ColumnSpacing="14" Padding="0,10">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <FontIcon Glyph="&#xe3b7;" FontSize="22" VerticalAlignment="Center" />
-                            <StackPanel Grid.Column="1"><TextBlock Text="Colors &amp; widths" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Preset colors and default tool widths" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                            <StackPanel Grid.Column="1"><TextBlock Text="Colors &amp; widths" Style="{StaticResource SubheadStyle}" /><TextBlock x:Name="InkSummary" Text="Preset colors and default tool widths" Style="{StaticResource RowHintStyle}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" /></StackPanel>
                         </Grid>
                     </Expander.Header>
                     <StackPanel Spacing="14">
@@ -459,7 +477,7 @@
                         <Grid ColumnSpacing="14" Padding="0,10">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <FontIcon Glyph="&#xe99b;" FontSize="22" VerticalAlignment="Center" />
-                            <StackPanel Grid.Column="1"><TextBlock Text="Appearance &amp; toolbar" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Theme, toolbar position and which tools it shows" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                            <StackPanel Grid.Column="1"><TextBlock Text="Appearance &amp; toolbar" Style="{StaticResource SubheadStyle}" /><TextBlock x:Name="AppearanceSummary" Text="Theme, toolbar position and which tools it shows" Style="{StaticResource RowHintStyle}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" /></StackPanel>
                         </Grid>
                     </Expander.Header>
                     <StackPanel Spacing="14">
@@ -548,7 +566,7 @@
                         <Grid ColumnSpacing="14" Padding="0,10">
                             <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <FontIcon Glyph="&#xe2c7;" FontSize="22" VerticalAlignment="Center" />
-                            <StackPanel Grid.Column="1"><TextBlock Text="Storage &amp; autosave" Style="{StaticResource SubheadStyle}" /><TextBlock Text="Where notes live and when they save" Style="{StaticResource RowHintStyle}" /></StackPanel>
+                            <StackPanel Grid.Column="1"><TextBlock Text="Storage &amp; autosave" Style="{StaticResource SubheadStyle}" /><TextBlock x:Name="StorageSummary" Text="Where notes live and when they save" Style="{StaticResource RowHintStyle}" TextWrapping="NoWrap" TextTrimming="CharacterEllipsis" /></StackPanel>
                         </Grid>
                     </Expander.Header>
                     <StackPanel Spacing="14">
@@ -673,7 +691,7 @@
                 Background="{ThemeResource AppSurfaceBrush}"
                 BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="0,1,0,0"
                 Padding="32,12">
-            <Grid MaxWidth="920" ColumnSpacing="12">
+            <Grid x:Name="SaveBarContent" HorizontalAlignment="Center" ColumnSpacing="12">
                 <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
                 <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
                     <Ellipse Width="8" Height="8" Fill="{ThemeResource AppAccentBrush}" VerticalAlignment="Center" />

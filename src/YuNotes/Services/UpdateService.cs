@@ -32,6 +32,7 @@ public static class UpdateService
     public static State Current { get; private set; } = State.Idle;
     public static string StatusText { get; private set; } = "";
     public static Version? AvailableVersion { get; private set; }
+    public static DateTime? LastChecked { get; private set; }   // when GitHub last answered
 
     // Progress of the current Downloading / Staging step, 0–100.
     public static double Progress { get; private set; }
@@ -93,6 +94,7 @@ public static class UpdateService
         {
             Set(State.Checking, "Checking for updates…");
             var release = await GetLatestReleaseAsync();
+            LastChecked = DateTime.Now;
             if (release is null)
             {
                 Set(State.UpToDate, $"You're on the latest version ({Short(installed)}).");
