@@ -655,6 +655,114 @@ public sealed class PageRenderer
     }
 
     /// <summary>
+    /// Lays a text element out exactly as <see cref="DrawText"/> does and
+    /// captures the result as PDF text segments (font face, size, baseline
+    /// position per word). Null when it can't be reproduced faithfully as PDF
+    /// text — emoji, right-to-left or sideways runs, or a face PDFsharp can't
+    /// embed — and the caller rasterizes it instead.
+    /// </summary>
+    public static VectorText? TryBuildVectorText(ICanvasResourceCreator dev, TextElement t, float offsetY)
+    {
+        if (!IsDrawableText(t) || string.IsNullOrEmpty(t.Text)) return null;
+        var vt = new VectorText
+        {
+            Color = t.Color, X = t.X, Y = t.Y, Width = t.Width, Height = t.Height,
+            Rotation = IsFinite(t.Rotation) ? t.Rotation : 0, OffsetY = offsetY
+        };
+        try
+        {
+            using var fmt = CreateTextFormat(t);
+            using var layout = new CanvasTextLayout(dev, t.Text, fmt, (float)t.Width, (float)t.Height);
+            var capture = new GlyphRunCapture(vt.Segments);
+            layout.DrawToTextRenderer(capture, Vector2.Zero);
+            if (capture.Unsupported) return null;
+            // Probe every face now (loads + parses the font): a font PDFsharp
+            // rejects falls back to raster here instead of failing the save.
+            foreach (var seg in vt.Segments) PdfFontResolver.GetFont(seg.FontKey, seg.FontSize);
+            return vt;
+        }
+        catch (Exception ex)
+        {
+            App.LogError(ex, "TryBuildVectorText");
+            return null;
+        }
+    }
+
+    // Receives DirectWrite's laid-out glyph runs (already split per line and
+    // per font, including fallback fonts) and turns them into word segments.
+    private sealed class GlyphRunCapture : ICanvasTextRenderer
+    {
+        private readonly System.Collections.Generic.List<TextSegment> _segments;
+        public bool Unsupported { get; private set; }
+        public GlyphRunCapture(System.Collections.Generic.List<TextSegment> segments) => _segments = segments;
+
+        public float Dpi => 96f;
+        public bool PixelSnappingDisabled => true;
+        public Matrix3x2 Transform => Matrix3x2.Identity;
+
+        public void DrawGlyphRun(Vector2 point, CanvasFontFace fontFace, float fontSize, CanvasGlyph[] glyphs,
+                                 bool isSideways, uint bidiLevel, object brush, CanvasTextMeasuringMode measuringMode,
+                                 string localeName, string textString, int[] clusterMapIndices, uint characterIndex,
+                                 CanvasGlyphOrientation glyphOrientation)
+        {
+            if (Unsupported || glyphs is null || glyphs.Length == 0 || string.IsNullOrEmpty(textString)) return;
+            if (isSideways || (bidiLevel & 1) != 0) { Unsupported = true; return; }
+
+            var names = new System.Collections.Generic.List<string>();
+            foreach (var info in new[] { CanvasFontInformation.PostscriptName, CanvasFontInformation.FullName })
+                foreach (var v in fontFace.GetInformationalStrings(info).Values) names.Add(v);
+            // Color emoji would come out as plain outlines in PDF.
+            foreach (var n in names)
+                if (n.Contains("Emoji", StringComparison.OrdinalIgnoreCase)) { Unsupported = true; return; }
+
+            var sims = fontFace.Simulations;
+            var key = PdfFontResolver.KeyFor(names,
+                (sims & CanvasFontSimulations.Bold) != 0, (sims & CanvasFontSimulations.Oblique) != 0);
+            if (key is null) { Unsupported = true; return; }
+
+            // x of each glyph's origin within the run.
+            var glyphX = new float[glyphs.Length + 1];
+            for (int g = 0; g < glyphs.Length; g++) glyphX[g + 1] = glyphX[g] + glyphs[g].Advance;
+
+            // One segment per word (with its trailing spaces, so copied text
+            // keeps them), each anchored at DirectWrite's x for its first char.
+            int len = textString.Length, start = 0;
+            for (int c = 1; c <= len; c++)
+            {
+                bool boundary = c == len || (char.IsWhiteSpace(textString[c - 1]) && !char.IsWhiteSpace(textString[c]));
+                if (!boundary) continue;
+                AddSegment(textString, start, c, clusterMapIndices, glyphX, point, key, fontSize);
+                start = c;
+            }
+        }
+
+        private void AddSegment(string text, int start, int end, int[] clusterMap, float[] glyphX,
+                                Vector2 origin, string key, float fontSize)
+        {
+            var sb = new System.Text.StringBuilder(end - start);
+            for (int i = start; i < end; i++)
+                if (!char.IsControl(text[i])) sb.Append(text[i]);   // line breaks, tabs
+            if (sb.Length == 0 || string.IsNullOrWhiteSpace(sb.ToString())) return;
+            int glyph = clusterMap is { Length: > 0 } && start < clusterMap.Length ? clusterMap[start] : 0;
+            glyph = Math.Clamp(glyph, 0, glyphX.Length - 1);
+            _segments.Add(new TextSegment(sb.ToString(), key, fontSize, origin.X + glyphX[glyph], origin.Y));
+        }
+
+        public void DrawStrikethrough(Vector2 point, float strikethroughWidth, float strikethroughThickness,
+                                      float strikethroughOffset, CanvasTextDirection textDirection, object brush,
+                                      CanvasTextMeasuringMode textMeasuringMode, string localeName,
+                                      CanvasGlyphOrientation glyphOrientation) { }
+
+        public void DrawUnderline(Vector2 point, float underlineWidth, float underlineThickness,
+                                  float underlineOffset, float runHeight, CanvasTextDirection textDirection,
+                                  object brush, CanvasTextMeasuringMode textMeasuringMode, string localeName,
+                                  CanvasGlyphOrientation glyphOrientation) { }
+
+        public void DrawInlineObject(Vector2 baselineOrigin, ICanvasTextInlineObject inlineObject, bool isSideways,
+                                     bool isRightToLeft, object brush, CanvasGlyphOrientation glyphOrientation) { }
+    }
+
+    /// <summary>
     /// Page-space bounds of everything a text element paints — its box plus any
     /// glyphs overflowing it (long text, descenders, italics) — after rotation.
     /// Null when it draws nothing.

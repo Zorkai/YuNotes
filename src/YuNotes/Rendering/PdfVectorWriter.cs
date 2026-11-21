@@ -22,13 +22,35 @@ public sealed class PageVectorExport
     public bool OverlayOnly { get; init; }
     public List<BleedSource> Bleed { get; } = new();
 
-    // Text isn't vectorized yet: it's rasterized by PageCanvas into a PNG
-    // cropped to the text's bounds, placed at this rect (page coords).
+    // Text elements written as real PDF text (own page and bleed).
+    public List<VectorText> Texts { get; } = new();
+
+    // Text that can't be written faithfully as PDF text (emoji, right-to-left,
+    // fonts PDFsharp can't embed) is rasterized by PageCanvas into a PNG
+    // cropped to its bounds, placed at this rect (page coords).
     public byte[]? TextPng { get; set; }
     public double TextX { get; set; }
     public double TextY { get; set; }
     public double TextWidth { get; set; }
     public double TextHeight { get; set; }
+}
+
+// A piece of text in one font, placed at its baseline origin — relative to the
+// owning element's top-left — exactly where DirectWrite laid it out.
+public sealed record TextSegment(string Text, string FontKey, float FontSize, float X, float Y);
+
+// One text element as PDF text: DirectWrite's line breaks, positions and
+// fallback fonts, captured on the UI thread (see PageCanvas).
+public sealed class VectorText
+{
+    public Color Color { get; init; }
+    public double X { get; init; }
+    public double Y { get; init; }
+    public double Width { get; init; }
+    public double Height { get; init; }
+    public double Rotation { get; init; }
+    public float OffsetY { get; init; }   // bleed: neighbour → this page
+    public List<TextSegment> Segments { get; } = new();
 }
 
 // Writes a page's content into a PDF as vector paths — the same geometry
@@ -67,6 +89,8 @@ public static class PdfVectorWriter
                 DrawElements(gfx, b.Page, cull: new XRect(0, -b.OffsetY, w, h));
                 gfx.Restore(s);
             }
+
+            foreach (var vt in e.Texts) DrawText(gfx, vt);
 
             if (e.TextPng is { Length: > 0 } textPng && e.TextWidth > 0 && e.TextHeight > 0)
                 DrawPng(gfx, textPng, e.TextX, e.TextY, e.TextWidth, e.TextHeight);
@@ -339,6 +363,25 @@ public static class PdfVectorWriter
                 if (s.StrokeWidth > 0) gfx.DrawPolygon(pen, tri);
                 break;
             }
+        }
+        gfx.Restore(state);
+    }
+
+    // Real PDF text: selectable, searchable, sharp at any zoom. Each segment
+    // starts at DirectWrite's own position, so line breaks match the app and
+    // any advance-width difference can't drift past one word.
+    private static void DrawText(XGraphics gfx, VectorText vt)
+    {
+        var brush = new XSolidBrush(ToXColor(vt.Color));
+        var state = gfx.Save();
+        gfx.TranslateTransform(0, vt.OffsetY);
+        if (vt.Rotation != 0 && IsFinite(vt.Rotation))
+            gfx.RotateAtTransform(vt.Rotation, new XPoint(vt.X + vt.Width * 0.5, vt.Y + vt.Height * 0.5));
+        gfx.TranslateTransform(vt.X, vt.Y);
+        foreach (var seg in vt.Segments)
+        {
+            var font = PdfFontResolver.GetFont(seg.FontKey, seg.FontSize);
+            gfx.DrawString(seg.Text, font, brush, seg.X, seg.Y, XStringFormats.BaseLineLeft);
         }
         gfx.Restore(state);
     }

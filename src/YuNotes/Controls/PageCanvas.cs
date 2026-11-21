@@ -3029,7 +3029,12 @@ public sealed class PageCanvas : ContentControl
                 b.Y += oy;
                 if (b.Right < pageRect.X || b.X > pageRect.Right || b.Bottom < pageRect.Y || b.Y > pageRect.Bottom)
                     continue;   // e.g. a neighbour's text that doesn't cross the seam
-                items.Add((t, oy));
+                if (PageRenderer.TryBuildVectorText(device, t, oy) is { } vt)
+                {
+                    e.Texts.Add(vt);   // real PDF text
+                    continue;
+                }
+                items.Add((t, oy));   // raster fallback
                 minX = Math.Min(minX, b.X); minY = Math.Min(minY, b.Y);
                 maxX = Math.Max(maxX, b.Right); maxY = Math.Max(maxY, b.Bottom);
             }

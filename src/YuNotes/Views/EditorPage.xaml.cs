@@ -67,6 +67,9 @@ public sealed partial class EditorPage : Page
     public EditorPage()
     {
         InitializeComponent();
+        // Index installed fonts off-thread so the first PDF save doesn't pay
+        // for it (text is written as real PDF text with embedded fonts).
+        _ = Task.Run(Rendering.PdfFontResolver.EnsureIndexed);
         // GoBack reverses the drill-in animation the note was opened with.
         BackBtn.Click += async (_, __) => { if (await ConfirmLeaveAsync()) MainWindow.GoBack(); };
         SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>(
