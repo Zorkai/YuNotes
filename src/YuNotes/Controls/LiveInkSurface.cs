@@ -25,10 +25,13 @@ namespace YuNotes.Controls;
 ///
 /// The surface is created on stroke start and dropped on stroke end, so tile
 /// memory only ever covers one in-flight stroke. Chunking semantics carry over
-/// from the retained-XAML predecessor: opaque strokes freeze ChunkPoints-sample
+/// from the retained-XAML predecessor: strokes freeze ChunkPoints-sample
 /// chunks (kept as geometries for dirty-region overlap redraws — their pixels
-/// are already on the surface); translucent strokes stay one geometry rebuilt
-/// per sync (chunk-boundary caps would double-blend). Either way the redraw
+/// are already on the surface), so only the active tail re-tessellates per
+/// sync. Translucent strokes are drawn OPAQUE and the Image carries their
+/// opacity — the surface only ever holds this one stroke, so that is the same
+/// flattened single-shape composite the committed renderer gets from its
+/// opacity layer, and overlapping chunk caps can't double-blend. The redraw
 /// region is limited to the samples that actually changed.
 ///
 /// Known live-only compromise: ink is clipped to the page surface while the
@@ -58,7 +61,6 @@ internal sealed class LiveInkSurface
     // ── Active stroke state ────────────────────────────────────────────────
     private string? _strokeId;
     private bool _pressure;
-    private bool _chunkable;            // opaque → frozen chunks; translucent → one geometry
     private Color _color;
     private float _uniformWidth;
     private float _baseHalfWidth;
@@ -75,8 +77,8 @@ internal sealed class LiveInkSurface
     private int _synced;
     private bool _dotRendered;
 
-    // Scratch arrays for ribbon outline math (grown on demand for long
-    // translucent strokes, which tessellate the full ribbon each sync).
+    // Scratch arrays for ribbon outline math (grown on demand; a tail is at
+    // most ChunkPoints samples plus prediction, frozen chunks the same).
     private Vector2[] _pos = new Vector2[128];
     private float[] _half = new float[128];
     private Vector2[] _norm = new Vector2[128];
@@ -162,11 +164,13 @@ internal sealed class LiveInkSurface
         _image.Width = pageW;
         _image.Height = pageH;
         _image.Source = _vsis.Source;
+        // Translucency lives on the visual (a per-visual multiply when DWM
+        // composites it — no extra offscreen pass), ink is drawn opaque.
+        _image.Opacity = color.A / 255.0;
 
         _strokeId = s.Id;
         _pressure = s.PressureMode;
-        _color = color;
-        _chunkable = color.A == 255;
+        _color = Color.FromArgb(255, color.R, color.G, color.B);
         _uniformWidth = s.Width;
         _baseHalfWidth = s.Width * 0.5f;
         _roundStroke ??= new CanvasStrokeStyle
@@ -219,47 +223,30 @@ internal sealed class LiveInkSurface
         }
         if (count < 2) return;
 
-        if (_chunkable)
+        while (count - _chunkStart >= ChunkPoints)
         {
-            while (count - _chunkStart >= ChunkPoints)
-            {
-                int end = _chunkStart + ChunkPoints - 1;
-                // Pixels for the frozen range are already on the surface from
-                // earlier tail draws; the geometry is kept only so dirty-region
-                // redraws can repaint it.
-                var g = BuildRibbon(pts, _chunkStart, end, predict: false);
-                AddFrozen(g, Inflate(g.ComputeBounds(), 3));
-                _chunkStart = end;
-            }
+            int end = _chunkStart + ChunkPoints - 1;
+            // Pixels for the frozen range are already on the surface from
+            // earlier tail draws; the geometry is kept only so dirty-region
+            // redraws can repaint it.
+            var g = BuildRibbon(pts, _chunkStart, end, predict: false);
+            AddFrozen(g, Inflate(g.ComputeBounds(), 3));
+            _chunkStart = end;
+        }
 
-            // Redraw only what changed (see ChangedPointBounds), not the whole
-            // tail: the tail can span a word, and repainting its box at up to
-            // 8 px/unit on every sample was most of the live GPU/DWM cost. A
-            // freeze always lands at or after the last previously-synced
-            // sample, so its seam is inside the changed region too.
-            var tail = BuildRibbon(pts, _chunkStart, count - 1, predict: true);
-            _tail?.Dispose();
-            _tail = tail;
-            var changed = ChangedPointBounds(s, prevSynced, pressureRadii: true);
-            var region = _hasTailBounds ? Union(_tailBounds, changed) : changed;
-            _tailBounds = changed;
-            _hasTailBounds = true;
-            Redraw(region);
-        }
-        else
-        {
-            // Translucent: one ribbon over the whole stroke (chunk-boundary
-            // caps would double-blend), but the redraw region only covers the
-            // samples whose outline actually changed plus the old prediction.
-            var changed = ChangedPointBounds(s, prevSynced, pressureRadii: true);
-            var tail = BuildRibbon(pts, 0, count - 1, predict: true);
-            _tail?.Dispose();
-            _tail = tail;
-            var region = _hasTailBounds ? Union(_tailBounds, changed) : changed;
-            _tailBounds = changed;
-            _hasTailBounds = true;
-            Redraw(region);
-        }
+        // Redraw only what changed (see ChangedPointBounds), not the whole
+        // tail: the tail can span a word, and repainting its box at up to
+        // 8 px/unit on every sample was most of the live GPU/DWM cost. A
+        // freeze always lands at or after the last previously-synced
+        // sample, so its seam is inside the changed region too.
+        var tail = BuildRibbon(pts, _chunkStart, count - 1, predict: true);
+        _tail?.Dispose();
+        _tail = tail;
+        var changed = ChangedPointBounds(s, prevSynced, pressureRadii: true);
+        var region = _hasTailBounds ? Union(_tailBounds, changed) : changed;
+        _tailBounds = changed;
+        _hasTailBounds = true;
+        Redraw(region);
     }
 
     // ── Uniform-width curve (pen without pressure, highlighter) ────────────
@@ -272,39 +259,25 @@ internal sealed class LiveInkSurface
         _synced = count;
         if (count < 2) return;   // single sample renders nothing, same as the XAML Polyline
 
-        if (_chunkable)
+        // Strictly greater: the chunk's last curve segment needs the real
+        // sample after it as its Catmull-Rom neighbour, or the frozen
+        // geometry would disagree with the pixels the tail already drew.
+        while (count - _chunkStart > ChunkPoints)
         {
-            // Strictly greater: the chunk's last curve segment needs the real
-            // sample after it as its Catmull-Rom neighbour, or the frozen
-            // geometry would disagree with the pixels the tail already drew.
-            while (count - _chunkStart > ChunkPoints)
-            {
-                int end = _chunkStart + ChunkPoints - 1;
-                var g = BuildPolyline(pts, _chunkStart, end, predict: false);
-                AddFrozen(g, Inflate(g.ComputeStrokeBounds(_uniformWidth, _roundStroke), 2));
-                _chunkStart = end;
-            }
+            int end = _chunkStart + ChunkPoints - 1;
+            var g = BuildPolyline(pts, _chunkStart, end, predict: false);
+            AddFrozen(g, Inflate(g.ComputeStrokeBounds(_uniformWidth, _roundStroke), 2));
+            _chunkStart = end;
+        }
 
-            var tail = BuildPolyline(pts, _chunkStart, count - 1, predict: true);
-            _tail?.Dispose();
-            _tail = tail;
-            var changed = ChangedPointBounds(s, prevSynced, pressureRadii: false);
-            var region = _hasTailBounds ? Union(_tailBounds, changed) : changed;
-            _tailBounds = changed;
-            _hasTailBounds = true;
-            Redraw(region);
-        }
-        else
-        {
-            var changed = ChangedPointBounds(s, prevSynced, pressureRadii: false);
-            var tail = BuildPolyline(pts, 0, count - 1, predict: true);
-            _tail?.Dispose();
-            _tail = tail;
-            var region = _hasTailBounds ? Union(_tailBounds, changed) : changed;
-            _tailBounds = changed;
-            _hasTailBounds = true;
-            Redraw(region);
-        }
+        var tail = BuildPolyline(pts, _chunkStart, count - 1, predict: true);
+        _tail?.Dispose();
+        _tail = tail;
+        var changed = ChangedPointBounds(s, prevSynced, pressureRadii: false);
+        var region = _hasTailBounds ? Union(_tailBounds, changed) : changed;
+        _tailBounds = changed;
+        _hasTailBounds = true;
+        Redraw(region);
     }
 
     /// <summary>
