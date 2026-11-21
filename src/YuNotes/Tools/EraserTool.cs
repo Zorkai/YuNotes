@@ -69,6 +69,90 @@ public sealed class EraserTool : ITool
         return false;
     }
 
+    // True when the eraser circle (center p, radius r) touches what the shape
+    // actually draws: its outline, or its interior when Filled. A bbox test
+    // alone erased a whole circle/rectangle when erasing writing inside it.
+    // Geometry mirrors PageRenderer.DrawShape (rect/ellipse rotate about the
+    // X1Y1-X2Y2 bbox center; line/triangle use raw vertices).
+    private static bool ShapeHit(ShapeElement s, Vector2 p, float r)
+    {
+        float reach = r + MathF.Max(0f, s.StrokeWidth) * 0.5f;
+        float reach2 = reach * reach;
+
+        switch (s.Kind)
+        {
+            case ShapeKind.Line:
+                return DistSqToSegment(p, new(s.X1, s.Y1), new(s.X2, s.Y2)) <= reach2;
+
+            case ShapeKind.Triangle:
+            {
+                Vector2 a = new(s.X1, s.Y1), b = new(s.X2, s.Y2), c = new(s.X3, s.Y3);
+                if (DistSqToSegment(p, a, b) <= reach2 ||
+                    DistSqToSegment(p, b, c) <= reach2 ||
+                    DistSqToSegment(p, c, a) <= reach2) return true;
+                return s.Filled && InTriangle(p, a, b, c);
+            }
+
+            case ShapeKind.Rectangle:
+            case ShapeKind.Ellipse:
+            {
+                float x = MathF.Min(s.X1, s.X2), y = MathF.Min(s.Y1, s.Y2);
+                float hw = MathF.Abs(s.X2 - s.X1) * 0.5f, hh = MathF.Abs(s.Y2 - s.Y1) * 0.5f;
+                var center = new Vector2(x + hw, y + hh);
+
+                // Undo the shape's rotation so we can test in its local frame.
+                var q = p - center;
+                if (s.Rotation != 0f && float.IsFinite(s.Rotation))
+                {
+                    float ang = -s.Rotation * MathF.PI / 180f;
+                    float cos = MathF.Cos(ang), sin = MathF.Sin(ang);
+                    q = new Vector2(q.X * cos - q.Y * sin, q.X * sin + q.Y * cos);
+                }
+
+                if (s.Kind == ShapeKind.Rectangle)
+                {
+                    float ax = MathF.Abs(q.X), ay = MathF.Abs(q.Y);
+                    bool inside = ax <= hw && ay <= hh;
+                    if (inside)
+                        return s.Filled || MathF.Min(hw - ax, hh - ay) <= reach;
+                    float dx = MathF.Max(ax - hw, 0f), dy = MathF.Max(ay - hh, 0f);
+                    return dx * dx + dy * dy <= reach2;
+                }
+
+                // Ellipse: distance to a fine polyline approximation of the outline.
+                if (s.Filled && hw > 0 && hh > 0 &&
+                    (q.X * q.X) / (hw * hw) + (q.Y * q.Y) / (hh * hh) <= 1f) return true;
+                const int N = 72;
+                var prev = new Vector2(hw, 0f);
+                for (int i = 1; i <= N; i++)
+                {
+                    float t = i * (MathF.PI * 2f / N);
+                    var cur = new Vector2(hw * MathF.Cos(t), hh * MathF.Sin(t));
+                    if (DistSqToSegment(q, prev, cur) <= reach2) return true;
+                    prev = cur;
+                }
+                return false;
+            }
+        }
+        return false;
+    }
+
+    private static float DistSqToSegment(Vector2 p, Vector2 a, Vector2 b)
+    {
+        var ab = b - a;
+        float len2 = ab.LengthSquared();
+        float t = len2 > 0f ? Math.Clamp(Vector2.Dot(p - a, ab) / len2, 0f, 1f) : 0f;
+        return Vector2.DistanceSquared(p, a + ab * t);
+    }
+
+    private static bool InTriangle(Vector2 p, Vector2 a, Vector2 b, Vector2 c)
+    {
+        static float Cross(Vector2 o, Vector2 u, Vector2 v) => (u.X - o.X) * (v.Y - o.Y) - (u.Y - o.Y) * (v.X - o.X);
+        float d1 = Cross(p, a, b), d2 = Cross(p, b, c), d3 = Cross(p, c, a);
+        bool neg = d1 < 0 || d2 < 0 || d3 < 0, pos = d1 > 0 || d2 > 0 || d3 > 0;
+        return !(neg && pos);
+    }
+
     private void EraseAt(EditorContext ctx, Vector2 p)
     {
         var r = ctx.EraserWidth * 0.5f;
@@ -98,9 +182,9 @@ public sealed class EraserTool : ITool
                     changed = true;
                 }
 
-            // Shapes: remove any shape whose bbox overlaps the eraser circle's bounding square.
+            // Shapes: remove any shape whose drawn outline (or fill) the eraser touches.
             var shapesToRemove = ctx.CurrentPage.Shapes
-                .Where(sh => eraserBox.Overlaps(Bbox.Of(sh))).ToList();
+                .Where(sh => eraserBox.Overlaps(Bbox.Of(sh)) && ShapeHit(sh, p, r)).ToList();
             foreach (var sh in shapesToRemove)
             {
                 ctx.CurrentPage.Shapes.Remove(sh);
@@ -148,12 +232,15 @@ public sealed class EraserTool : ITool
                 }
                 changed = true;
             }
-            // Pixel eraser also removes shapes whose bbox the eraser circle hits.
+            // Pixel eraser also removes shapes whose drawn outline (or fill) it touches.
             var shapesToRemovePx = ctx.CurrentPage.Shapes
-                .Where(sh => eraserBox.Overlaps(Bbox.Of(sh))).ToList();
+                .Where(sh => eraserBox.Overlaps(Bbox.Of(sh)) && ShapeHit(sh, p, r)).ToList();
+            Bbox? shapeDirty = null;
             foreach (var sh in shapesToRemovePx)
             {
                 ctx.CurrentPage.Shapes.Remove(sh);
+                var b = Bbox.Of(sh);
+                shapeDirty = shapeDirty is null ? b : Bbox.Union(shapeDirty.Value, b);
                 changed = true;
             }
 
@@ -161,6 +248,8 @@ public sealed class EraserTool : ITool
             {
                 float pad = maxAffectedWidth + 4f;
                 dirty = new Bbox(p.X - r - pad, p.Y - r - pad, (r + pad) * 2, (r + pad) * 2);
+                // A removed shape vanishes entirely, not just under the eraser.
+                if (shapeDirty is { } sd) dirty = Bbox.Union(dirty.Value, sd);
             }
         }
 
