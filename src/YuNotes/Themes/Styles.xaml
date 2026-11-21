@@ -326,7 +326,7 @@
                 <ControlTemplate TargetType="GridViewItem">
                     <Grid x:Name="CardGrid"
                           CornerRadius="14"
-                          CenterPoint="83,108,0"
+                          CenterPoint="88,131,0"
                           Translation="0,0,6">
                         <Grid.Shadow>
                             <ThemeShadow />

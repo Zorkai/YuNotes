@@ -18,13 +18,29 @@ using YuNotes.Models;
 namespace YuNotes.Views;
 
 // Data object for a folder node in the TreeView.
-public sealed class FolderTreeItem
+public sealed class FolderTreeItem : System.ComponentModel.INotifyPropertyChanged
 {
     public string Id { get; set; } = "";
     public string Name { get; set; } = "";
     public string Path { get; set; } = "";
     public bool IsSelected { get; set; }
     public string Glyph => IsSelected ? "" : "";
+    public Brush ColorBrush { get; set; } = new SolidColorBrush(Microsoft.UI.Colors.Gray);
+    // Notes in this folder and its subfolders; updated in place after moves so
+    // the sidebar count stays right without rebuilding the tree.
+    private int _noteCount;
+    public int NoteCount
+    {
+        get => _noteCount;
+        set
+        {
+            if (_noteCount == value) return;
+            _noteCount = value;
+            PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(nameof(CountText)));
+        }
+    }
+    public string CountText => _noteCount > 0 ? _noteCount.ToString() : "";
+    public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 }
 
 public sealed partial class HomePage : Page
@@ -57,12 +73,38 @@ public sealed partial class HomePage : Page
             IsNewCard ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
         public Microsoft.UI.Xaml.Visibility FolderLabelVisibility =>
             string.IsNullOrEmpty(FolderName) ? Microsoft.UI.Xaml.Visibility.Collapsed : Microsoft.UI.Xaml.Visibility.Visible;
+
+        // ── Card presentation ────────────────────────────────────────────────
+        public int Pages { get; set; }
+        public string PageCount => Pages.ToString();
+        public Microsoft.UI.Xaml.Visibility PageBadgeVisibility =>
+            Pages > 1 ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+        public bool IsPdf { get; set; }
+        public Microsoft.UI.Xaml.Visibility PdfIconVisibility =>
+            IsPdf ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+        // " · 17 Nov" when another visible note has the same title, so two
+        // "Untitled" notes can be told apart; empty otherwise.
+        public string TitleHint { get; set; } = "";
+        public string? FolderColor { get; set; }
+        public string FolderDisplay => string.IsNullOrEmpty(FolderName) ? "No folder" : FolderName;
+        public string FolderGlyph => string.IsNullOrEmpty(FolderName) ? "" : "";
+        public Brush FolderChipBrush => string.IsNullOrEmpty(FolderName)
+            ? new SolidColorBrush(Microsoft.UI.Colors.Transparent)
+            : new SolidColorBrush(FolderColors.Parse(FolderColor, 0x38));
+        public Brush FolderTextBrush => string.IsNullOrEmpty(FolderName)
+            ? (Brush)Application.Current.Resources["AppTextSecondaryBrush"]
+            : new SolidColorBrush(FolderColors.Parse(FolderColor));
     }
 
     private enum NavSection { AllNotes, Trash, Archive, Folders }
 
-    private enum SortOrder { Date, Name, Type }
+    private enum SortOrder { Date, Name, Folder }
     private SortOrder _sortOrder = SortOrder.Date;
+    // Date defaults to newest first; Name and Folder to A→Z.
+    private bool _sortDescending = true;
+
+    // Last list built by Refresh (sorted, unfiltered); the search box filters it.
+    private List<RecentItem> _allItems = new();
 
     private NavSection _activeSection = NavSection.AllNotes;
     private bool _selectMode;
@@ -135,9 +177,33 @@ public sealed partial class HomePage : Page
         MoveToFolderBtn.Click += async (_, __) => await MoveToFolderAsync();
 
         // Sort bar
-        SortByDateBtn.Click += (_, __) => { _sortOrder = SortOrder.Date; ApplySortSelection(); Refresh(); };
-        SortByNameBtn.Click += (_, __) => { _sortOrder = SortOrder.Name; ApplySortSelection(); Refresh(); };
-        SortByTypeBtn.Click += (_, __) => { _sortOrder = SortOrder.Type; ApplySortSelection(); Refresh(); };
+        SortByDateBtn.Click   += (_, __) => SetSort(SortOrder.Date);
+        SortByNameBtn.Click   += (_, __) => SetSort(SortOrder.Name);
+        SortByFolderBtn.Click += (_, __) => SetSort(SortOrder.Folder);
+
+        // Search: filter as you type; Ctrl+F focuses the box, Escape clears it.
+        SearchBox.TextChanged += (_, __) => ApplyFilter();
+        SearchBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Windows.System.VirtualKey.Escape && SearchBox.Text.Length > 0)
+            {
+                SearchBox.Text = "";
+                e.Handled = true;
+            }
+        };
+        var findKey = new KeyboardAccelerator
+        {
+            Key = Windows.System.VirtualKey.F,
+            Modifiers = Windows.System.VirtualKeyModifiers.Control
+        };
+        findKey.Invoked += (_, e) =>
+        {
+            SearchBox.Focus(FocusState.Keyboard);
+            SearchBox.SelectAll();
+            e.Handled = true;
+        };
+        KeyboardAccelerators.Add(findKey);
+        KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
 
         Loaded += (_, __) =>
         {
@@ -219,32 +285,159 @@ public sealed partial class HomePage : Page
             : new Windows.UI.Text.FontWeight { Weight = 400 };
     }
 
+    // Clicking the active sort option flips its direction; picking another
+    // option starts it in its natural direction (newest first / A→Z).
+    private void SetSort(SortOrder order)
+    {
+        if (_sortOrder == order) _sortDescending = !_sortDescending;
+        else
+        {
+            _sortOrder = order;
+            _sortDescending = order == SortOrder.Date;
+        }
+        ApplySortSelection();
+        Refresh();
+    }
+
     private void ApplySortSelection()
     {
         var active   = (Brush)Application.Current.Resources["AppSurfaceBrush"];
         var inactive = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
-        SortByDateBtn.Background = _sortOrder == SortOrder.Date ? active : inactive;
-        SortByNameBtn.Background = _sortOrder == SortOrder.Name ? active : inactive;
-        SortByTypeBtn.Background = _sortOrder == SortOrder.Type ? active : inactive;
+        SortByDateBtn.Background   = _sortOrder == SortOrder.Date   ? active : inactive;
+        SortByNameBtn.Background   = _sortOrder == SortOrder.Name   ? active : inactive;
+        SortByFolderBtn.Background = _sortOrder == SortOrder.Folder ? active : inactive;
+
+        // Arrow only on the active option: down = newest first / Z→A.
+        var arrow = _sortDescending ? "" : "";
+        SortDateArrow.Glyph   = _sortOrder == SortOrder.Date   ? arrow : "";
+        SortNameArrow.Glyph   = _sortOrder == SortOrder.Name   ? arrow : "";
+        SortFolderArrow.Glyph = _sortOrder == SortOrder.Folder ? arrow : "";
+        string dir = _sortOrder == SortOrder.Date
+            ? (_sortDescending ? "newest first" : "oldest first")
+            : (_sortDescending ? "Z to A" : "A to Z");
+        ToolTipService.SetToolTip(_sortOrder switch
+        {
+            SortOrder.Name   => SortByNameBtn,
+            SortOrder.Folder => SortByFolderBtn,
+            _                => SortByDateBtn
+        }, $"Sorted {dir} (click to reverse)");
     }
 
     private void ApplySort(List<RecentItem> items)
     {
+        Comparison<RecentItem> byDate = (a, b) => b.ModifiedAt.CompareTo(a.ModifiedAt);
+        Comparison<RecentItem> byName = (a, b) => string.Compare(a.Title, b.Title, StringComparison.CurrentCultureIgnoreCase);
+        int sign = _sortOrder == SortOrder.Date
+            ? (_sortDescending ? 1 : -1)
+            : (_sortDescending ? -1 : 1);
         switch (_sortOrder)
         {
             case SortOrder.Name:
-                items.Sort((a, b) => string.Compare(a.Title, b.Title, StringComparison.OrdinalIgnoreCase));
+                items.Sort((a, b) => sign * byName(a, b));
                 break;
-            case SortOrder.Type:
-                items.Sort((a, b) => string.Compare(
-                    Path.GetExtension(a.Path),
-                    Path.GetExtension(b.Path),
-                    StringComparison.OrdinalIgnoreCase));
+            case SortOrder.Folder:
+                // Grouped by folder; notes without a folder always go last.
+                // Inside a folder, newest first.
+                items.Sort((a, b) =>
+                {
+                    bool na = string.IsNullOrEmpty(a.FolderName), nb = string.IsNullOrEmpty(b.FolderName);
+                    if (na != nb) return na ? 1 : -1;
+                    int c = sign * string.Compare(a.FolderName, b.FolderName, StringComparison.CurrentCultureIgnoreCase);
+                    return c != 0 ? c : byDate(a, b);
+                });
                 break;
             default:
-                items.Sort((a, b) => b.ModifiedAt.CompareTo(a.ModifiedAt));
+                items.Sort((a, b) => sign * byDate(a, b));
                 break;
         }
+    }
+
+    // Shows _allItems filtered by the search text (title or folder name). The
+    // "New note" card stays first and visible while not searching.
+    private void ApplyFilter()
+    {
+        var q = SearchBox.Text.Trim();
+        bool hasNewCard = _activeSection == NavSection.AllNotes ||
+                          (_activeSection == NavSection.Folders && _selectedFolderPath is not null);
+        List<RecentItem> shown;
+        if (q.Length == 0)
+        {
+            shown = new List<RecentItem>(_allItems);
+            if (hasNewCard) shown.Insert(0, new RecentItem { IsNewCard = true });
+        }
+        else
+        {
+            shown = _allItems.Where(i =>
+                i.Title.Contains(q, StringComparison.CurrentCultureIgnoreCase) ||
+                i.FolderName.Contains(q, StringComparison.CurrentCultureIgnoreCase)).ToList();
+        }
+        RecentList.ItemsSource = shown;
+
+        if (q.Length > 0)
+        {
+            EmptyHintTitle.Text    = "No matching notes";
+            EmptyHintSubtitle.Text = $"Nothing matches \"{q}\".";
+            EmptyHint.Visibility   = shown.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+        else
+        {
+            EmptyHintTitle.Text    = _emptyTitle;
+            EmptyHintSubtitle.Text = _emptySubtitle;
+            EmptyHint.Visibility   = _allItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        }
+    }
+
+    private string _emptyTitle = "", _emptySubtitle = "";
+
+    // Hands a freshly built list to the grid: sorts, marks duplicate titles,
+    // remembers the empty-state text, then applies the search filter.
+    private void ShowItems(List<RecentItem> items, string emptyTitle, string emptySubtitle)
+    {
+        ApplySort(items);
+        foreach (var group in items.GroupBy(i => i.Title, StringComparer.CurrentCultureIgnoreCase))
+        {
+            bool dup = group.Count() > 1;
+            foreach (var i in group)
+                i.TitleHint = dup ? $" · {i.ModifiedAt.ToLocalTime():d MMM}" : "";
+        }
+        _allItems      = items;
+        _emptyTitle    = emptyTitle;
+        _emptySubtitle = emptySubtitle;
+        ApplyFilter();
+    }
+
+    // Card item for a document. folderRoot is what folder names are relative
+    // to (the documents root, or the archive root for archived notes).
+    private RecentItem MakeItem(DocumentInfo info, string folderRoot)
+    {
+        var dir = Path.GetDirectoryName(info.FilePath);
+        var folder = App.Services.Settings.Current.Folders.FirstOrDefault(f =>
+            string.Equals(f.Path, dir, StringComparison.OrdinalIgnoreCase));
+        var item = new RecentItem
+        {
+            Title       = info.Title,
+            Subtitle    = FriendlyDate(info.ModifiedAt.ToLocalTime()),
+            Path        = info.FilePath,
+            FolderName  = GetFolderLabelRelativeTo(info.FilePath, folderRoot),
+            FolderColor = folder?.Color,
+            ModifiedAt  = info.ModifiedAt,
+            Pages       = info.PageCount,
+            IsPdf       = !string.IsNullOrEmpty(info.SourcePdfPath)
+        };
+        _ = LoadThumbnailAsync(item, info.FilePath);
+        return item;
+    }
+
+    // "Today 17:18", "Yesterday 17:18", "4 days ago", "Last week", "3 Nov", "3 Nov 2025".
+    private static string FriendlyDate(DateTime local)
+    {
+        var today = DateTime.Today;
+        var days  = (today - local.Date).Days;
+        if (days <= 0)  return $"Today {local:HH:mm}";
+        if (days == 1)  return $"Yesterday {local:HH:mm}";
+        if (days < 7)   return $"{days} days ago";
+        if (days < 14)  return "Last week";
+        return local.Year == today.Year ? local.ToString("d MMM") : local.ToString("d MMM yyyy");
     }
 
     // ── Select mode ───────────────────────────────────────────────────────────
@@ -628,8 +821,10 @@ public sealed partial class HomePage : Page
         catch { }
     }
 
-    private async void Refresh()
+    private void Refresh()
     {
+        UpdateFolderCounts();
+
         // ── Trash ─────────────────────────────────────────────────────────────
         if (_activeSection == NavSection.Trash)
         {
@@ -637,32 +832,14 @@ public sealed partial class HomePage : Page
             if (Directory.Exists(TrashFolder))
             {
                 var paths = Directory.GetFiles(TrashFolder, "*.pdf")
-                    .Concat(Directory.GetFiles(TrashFolder, "*.yunote"))
-                    .OrderByDescending(File.GetLastWriteTimeUtc);
+                    .Concat(Directory.GetFiles(TrashFolder, "*.yunote"));
                 foreach (var p in paths)
                 {
-                    try
-                    {
-                        var info = App.Services.Documents.ReadInfo(p);
-                        var item = new RecentItem
-                        {
-                            Title      = info.Title,
-                            Subtitle   = $"{info.PageCount} page{(info.PageCount == 1 ? "" : "s")} · {info.ModifiedAt.ToLocalTime():g}",
-                            Path       = info.FilePath,
-                            FolderName = GetFolderLabel(info.FilePath),
-                            ModifiedAt = info.ModifiedAt
-                        };
-                        _ = LoadThumbnailAsync(item, p);
-                        trashItems.Add(item);
-                    }
+                    try { trashItems.Add(MakeItem(App.Services.Documents.ReadInfo(p), App.Services.Settings.Current.DocumentsFolder)); }
                     catch { }
                 }
             }
-            ApplySort(trashItems);
-            RecentList.ItemsSource   = trashItems;
-            EmptyHintTitle.Text      = "Trash is empty";
-            EmptyHintSubtitle.Text   = "Deleted notes will appear here.";
-            EmptyHint.Visibility     = trashItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            ShowItems(trashItems, "Trash is empty", "Deleted notes will appear here.");
             return;
         }
 
@@ -672,39 +849,17 @@ public sealed partial class HomePage : Page
             var archiveItems = new List<RecentItem>();
             foreach (var p in GetAllNotePaths(ArchiveFolder))
             {
-                try
-                {
-                    var info = App.Services.Documents.ReadInfo(p);
-                    var label = info.Title;
-                    if (!string.IsNullOrEmpty(info.SourcePdfPath)) label += "  ·  PDF";
-                    var item = new RecentItem
-                    {
-                        Title      = label,
-                        Subtitle   = $"{info.PageCount} page{(info.PageCount == 1 ? "" : "s")} · {info.ModifiedAt.ToLocalTime():g}",
-                        Path       = info.FilePath,
-                        FolderName = GetFolderLabelRelativeTo(info.FilePath, ArchiveFolder),
-                        ModifiedAt = info.ModifiedAt
-                    };
-                    _ = LoadThumbnailAsync(item, p);
-                    archiveItems.Add(item);
-                }
+                try { archiveItems.Add(MakeItem(App.Services.Documents.ReadInfo(p), ArchiveFolder)); }
                 catch { }
             }
-            ApplySort(archiveItems);
-            RecentList.ItemsSource   = archiveItems;
-            EmptyHintTitle.Text      = "Archive is empty";
-            EmptyHintSubtitle.Text   = "Archived notes and folders will appear here.";
-            EmptyHint.Visibility     = archiveItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            ShowItems(archiveItems, "Archive is empty", "Archived notes and folders will appear here.");
             return;
         }
 
         // ── Folders — no folder chosen yet ────────────────────────────────────
         if (_activeSection == NavSection.Folders && _selectedFolderPath is null)
         {
-            RecentList.ItemsSource   = new List<RecentItem>();
-            EmptyHintTitle.Text      = "No folder selected";
-            EmptyHintSubtitle.Text   = "Choose a folder from the sidebar, or create one.";
-            EmptyHint.Visibility     = Visibility.Visible;
+            ShowItems(new List<RecentItem>(), "No folder selected", "Choose a folder from the sidebar, or create one.");
             return;
         }
 
@@ -714,30 +869,10 @@ public sealed partial class HomePage : Page
             var folderItems = new List<RecentItem>();
             foreach (var p in GetDirectNotePaths(_selectedFolderPath))
             {
-                try
-                {
-                    var info  = App.Services.Documents.ReadInfo(p);
-                    var label = info.Title;
-                    if (!string.IsNullOrEmpty(info.SourcePdfPath)) label += "  ·  PDF";
-                    var item = new RecentItem
-                    {
-                        Title      = label,
-                        Subtitle   = $"{info.PageCount} page{(info.PageCount == 1 ? "" : "s")} · {info.ModifiedAt.ToLocalTime():g}",
-                        Path       = info.FilePath,
-                        FolderName = GetFolderLabel(info.FilePath),
-                        ModifiedAt = info.ModifiedAt
-                    };
-                    _ = LoadThumbnailAsync(item, info.FilePath);
-                    folderItems.Add(item);
-                }
+                try { folderItems.Add(MakeItem(App.Services.Documents.ReadInfo(p), App.Services.Settings.Current.DocumentsFolder)); }
                 catch { }
             }
-            ApplySort(folderItems);
-            EmptyHint.Visibility     = folderItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            EmptyHintTitle.Text      = "This folder is empty";
-            EmptyHintSubtitle.Text   = "Tap Create note to add one, or move notes here.";
-            folderItems.Insert(0, new RecentItem { IsNewCard = true });
-            RecentList.ItemsSource   = folderItems;
+            ShowItems(folderItems, "This folder is empty", "Tap New note to add one, or move notes here.");
             return;
         }
 
@@ -768,28 +903,8 @@ public sealed partial class HomePage : Page
             App.Services.Settings.Save();
         }
 
-        var items = new List<RecentItem>();
-        foreach (var d in infos)
-        {
-            var label = d.Title;
-            if (!string.IsNullOrEmpty(d.SourcePdfPath)) label += "  ·  PDF";
-            var item = new RecentItem
-            {
-                Title      = label,
-                Subtitle   = $"{d.PageCount} page{(d.PageCount == 1 ? "" : "s")} · {d.ModifiedAt.ToLocalTime():g}",
-                Path       = d.FilePath,
-                FolderName = GetFolderLabel(d.FilePath),
-                ModifiedAt = d.ModifiedAt
-            };
-            _ = LoadThumbnailAsync(item, d.FilePath);
-            items.Add(item);
-        }
-        ApplySort(items);
-        EmptyHint.Visibility     = items.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        EmptyHintTitle.Text      = "No notes";
-        EmptyHintSubtitle.Text   = "Tap Create note to add one.";
-        items.Insert(0, new RecentItem { IsNewCard = true });
-        RecentList.ItemsSource   = items;
+        var items = infos.Select(d => MakeItem(d, folder)).ToList();
+        ShowItems(items, "No notes", "Tap New note to add one.");
     }
 
     // Returns the folder path relative to DocumentsFolder (e.g. "Work / Project A"),
@@ -1026,7 +1141,9 @@ public sealed partial class HomePage : Page
             Id         = info?.Id ?? Guid.NewGuid().ToString("N"),
             Name       = name,
             Path       = dirPath,
-            IsSelected = string.Equals(dirPath, _selectedFolderPath, StringComparison.OrdinalIgnoreCase)
+            IsSelected = string.Equals(dirPath, _selectedFolderPath, StringComparison.OrdinalIgnoreCase),
+            ColorBrush = new SolidColorBrush(FolderColors.Parse(info?.Color)),
+            NoteCount  = CountNotes(dirPath)
         };
         var node = new TreeViewNode { Content = item, IsExpanded = true };
 
@@ -1053,10 +1170,13 @@ public sealed partial class HomePage : Page
                 {
                     Name     = Path.GetFileName(dir)!,
                     Path     = dir,
-                    ParentId = parentId
+                    ParentId = parentId,
+                    Color    = FolderColors.NextFor(settings.Folders)
                 };
                 settings.Folders.Add(existing);
             }
+            // Folders saved before colors existed get one now.
+            existing.Color ??= FolderColors.NextFor(settings.Folders);
             SyncFolderRegistry(dir, existing.Id);
         }
         // Prune entries whose directories no longer exist under this parent.
@@ -1119,13 +1239,78 @@ public sealed partial class HomePage : Page
         var deleteFi = new MenuFlyoutItem { Text = "Delete folder" };
         deleteFi.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 224, 58, 58));
         deleteFi.Click += async (_, __) => await DeleteFolderAsync(item.Path);
+        var colorMenu = new MenuFlyoutSubItem { Text = "Color" };
+        var current = App.Services.Settings.Current.Folders.FirstOrDefault(f =>
+            string.Equals(f.Path, item.Path, StringComparison.OrdinalIgnoreCase));
+        foreach (var (cname, hex) in FolderColors.Palette)
+        {
+            var ci = new MenuFlyoutItem
+            {
+                Text = string.Equals(current?.Color, hex, StringComparison.OrdinalIgnoreCase) ? $"{cname}  ✓" : cname,
+                Icon = new FontIcon
+                {
+                    Glyph = "●",
+                    FontFamily = new FontFamily("Segoe UI"),
+                    Foreground = new SolidColorBrush(FolderColors.Parse(hex))
+                }
+            };
+            ci.Click += (_, __) => SetFolderColor(item.Path, hex);
+            colorMenu.Items.Add(ci);
+        }
         flyout.Items.Add(newSub);
         flyout.Items.Add(new MenuFlyoutSeparator());
         flyout.Items.Add(rename);
+        flyout.Items.Add(colorMenu);
         flyout.Items.Add(archive);
         flyout.Items.Add(new MenuFlyoutSeparator());
         flyout.Items.Add(deleteFi);
         return flyout;
+    }
+
+    private void SetFolderColor(string folderPath, string hex)
+    {
+        var settings = App.Services.Settings.Current;
+        var info = settings.Folders.FirstOrDefault(f =>
+            string.Equals(f.Path, folderPath, StringComparison.OrdinalIgnoreCase));
+        if (info is null) return;
+        info.Color = hex;
+        App.Services.Settings.Save();
+        LoadFolderTree();
+        Refresh();
+    }
+
+    private static int CountNotes(string dirPath)
+    {
+        try { return GetAllNotePaths(dirPath).Count(); }
+        catch { return 0; }
+    }
+
+    // Recomputes the sidebar note counts after notes move around.
+    private void UpdateFolderCounts()
+    {
+        void Walk(IList<TreeViewNode> nodes)
+        {
+            foreach (var n in nodes)
+            {
+                if (n.Content is FolderTreeItem fi) fi.NoteCount = CountNotes(fi.Path);
+                Walk(n.Children);
+            }
+        }
+        Walk(FolderTree.RootNodes);
+    }
+
+    // Folder rows show their note count; on hover it gives way to the ⋯ button.
+    private void FolderRow_PointerEntered(object sender, PointerRoutedEventArgs e) => SetFolderRowHover(sender, true);
+    private void FolderRow_PointerExited(object sender, PointerRoutedEventArgs e)  => SetFolderRowHover(sender, false);
+
+    private static void SetFolderRowHover(object sender, bool hover)
+    {
+        if (sender is not Grid g) return;
+        foreach (var child in g.Children)
+        {
+            if (child is Button b) b.Opacity = hover ? 1 : 0;
+            else if (child is TextBlock t && Grid.GetColumn(t) == 1) t.Opacity = hover ? 0 : 1;
+        }
     }
 
     // ── Drag-drop from notes grid onto folder tree ────────────────────────────
@@ -1255,7 +1440,8 @@ public sealed partial class HomePage : Page
             {
                 Name     = name,
                 Path     = dirPath,
-                ParentId = parentInfo?.Id
+                ParentId = parentInfo?.Id,
+                Color    = FolderColors.NextFor(App.Services.Settings.Current.Folders)
             });
             App.Services.Settings.Save();
 

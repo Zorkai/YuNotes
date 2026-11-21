@@ -81,12 +81,9 @@
                         </StackPanel>
                     </Button>
 
-                    <!-- Dashed section divider -->
-                    <Line X1="0" X2="1" Stretch="Fill"
-                          Stroke="{ThemeResource AppBorderBrush}"
-                          StrokeThickness="1"
-                          StrokeDashArray="3,3"
-                          Margin="4,8,4,8" Opacity="0.6" />
+                    <!-- Section divider -->
+                    <Rectangle Height="1" Fill="{ThemeResource AppBorderBrush}"
+                               Margin="4,8,4,4" />
 
                 </StackPanel>
 
@@ -94,38 +91,27 @@
                 <Grid x:Name="FolderSection" Grid.Row="1">
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
-                        <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <Button x:Name="NewFolderBtn"
-                            Grid.Row="0"
-                            HorizontalAlignment="Stretch"
-                            HorizontalContentAlignment="Left"
-                            Background="Transparent"
-                            BorderThickness="0"
-                            CornerRadius="8"
-                            Padding="10,10,10,10"
-                            Margin="8,4,8,2">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <FontIcon Glyph="&#xE2CC;" FontSize="18"
+                    <!-- "Folders" header with a small + to create one -->
+                    <Grid Grid.Row="0" Margin="18,2,12,2">
+                        <TextBlock Text="Folders" FontSize="12"
+                                   VerticalAlignment="Center"
+                                   Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                        <Button x:Name="NewFolderBtn"
+                                HorizontalAlignment="Right"
+                                Background="Transparent" BorderThickness="0"
+                                CornerRadius="6" Padding="6,4"
+                                ToolTipService.ToolTip="New folder">
+                            <FontIcon Glyph="&#xE145;" FontSize="18"
                                       FontFamily="{StaticResource MaterialIconsFamily}"
-                                      Foreground="{ThemeResource AppTextPrimaryBrush}" />
-                            <TextBlock Text="New folder" FontSize="14"
-                                       Foreground="{ThemeResource AppTextPrimaryBrush}"
-                                       VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-
-                    <!-- Separator between New folder and the folder list -->
-                    <Line Grid.Row="1" X1="0" X2="1" Stretch="Fill"
-                          Stroke="{ThemeResource AppBorderBrush}"
-                          StrokeThickness="1"
-                          StrokeDashArray="3,3"
-                          Margin="8,2,8,6" Opacity="0.6" />
+                                      Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                        </Button>
+                    </Grid>
 
                     <TreeView x:Name="FolderTree"
-                              Grid.Row="2"
+                              Grid.Row="1"
                               SelectionMode="Single"
                               Padding="4,2,4,8"
                               AllowDrop="True">
@@ -137,7 +123,10 @@
                         </TreeView.ItemContainerStyle>
                         <TreeView.ItemTemplate>
                             <DataTemplate>
-                                <Grid Padding="0,2,4,2">
+                                <!-- Transparent background so hover fires across the whole row. -->
+                                <Grid Padding="0,2,4,2" Background="Transparent"
+                                      PointerEntered="FolderRow_PointerEntered"
+                                      PointerExited="FolderRow_PointerExited">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
@@ -146,14 +135,22 @@
                                                 Margin="-26,0,0,0">
                                         <FontIcon Glyph="{Binding Content.Glyph}" FontSize="18"
                                                   FontFamily="{StaticResource MaterialIconsFamily}"
-                                                  Foreground="{ThemeResource AppTextPrimaryBrush}" />
+                                                  Foreground="{Binding Content.ColorBrush}" />
                                         <TextBlock Text="{Binding Content.Name}"
                                                    FontSize="14"
+                                                   TextTrimming="CharacterEllipsis"
                                                    Foreground="{ThemeResource AppTextPrimaryBrush}"
                                                    VerticalAlignment="Center" />
                                     </StackPanel>
+                                    <!-- Note count, swapped for the ⋯ button while hovered. -->
+                                    <TextBlock Grid.Column="1"
+                                               Text="{Binding Content.CountText}"
+                                               FontSize="12" Margin="0,0,8,0"
+                                               VerticalAlignment="Center" HorizontalAlignment="Right"
+                                               Foreground="{ThemeResource AppTextSecondaryBrush}" />
                                     <Button Grid.Column="1"
                                             Click="FolderMoreBtn_Click"
+                                            Opacity="0"
                                             Background="Transparent"
                                             BorderThickness="0"
                                             Padding="6,2"
@@ -221,14 +218,15 @@
                 <Grid VerticalAlignment="Center">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
 
                     <!-- Window drag region. SetTitleBar turns this element's bounds
                          into non-client space (controls overlapping it lose input),
-                         so it only covers the empty middle column. -->
-                    <Border x:Name="HeaderDragRegion" Grid.Column="1"
+                         so it only covers the empty column between search and actions. -->
+                    <Border x:Name="HeaderDragRegion" Grid.Column="2"
                             Background="Transparent" Margin="0,-8" />
 
                     <!-- Left: sidebar toggle -->
@@ -240,18 +238,34 @@
                         </Button>
                     </StackPanel>
 
+                    <!-- Search: filters the visible notes by title or folder. -->
+                    <TextBox x:Name="SearchBox"
+                             Grid.Column="1"
+                             Width="320"
+                             Margin="8,0,8,0"
+                             VerticalAlignment="Center"
+                             PlaceholderText="Search notes (Ctrl+F)"
+                             CornerRadius="8"
+                             Padding="34,6,10,6" />
+                    <FontIcon Grid.Column="1" Glyph="&#xE8B6;" FontSize="18"
+                              FontFamily="{StaticResource MaterialIconsFamily}"
+                              HorizontalAlignment="Left" VerticalAlignment="Center"
+                              Margin="18,0,0,0" IsHitTestVisible="False"
+                              Foreground="{ThemeResource AppTextSecondaryBrush}" />
+
                     <!-- Normal mode -->
                     <StackPanel x:Name="HeaderNormal"
-                                Grid.Column="2"
+                                Grid.Column="3"
                                 Orientation="Horizontal"
                                 VerticalAlignment="Center"
-                                Spacing="4">
+                                Spacing="6">
                         <Button x:Name="NewBtn"
-                                Padding="12,8" CornerRadius="8"
-                                Background="Transparent" BorderThickness="0">
-                            <StackPanel Orientation="Horizontal" Spacing="7">
-                                <FontIcon Glyph="&#xe89c;" FontSize="18" />
-                                <TextBlock Text="Create note" VerticalAlignment="Center" FontSize="14" />
+                                Padding="12,7" CornerRadius="8"
+                                Style="{StaticResource AccentButtonStyle}">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xe145;" FontSize="18"
+                                          FontFamily="{StaticResource MaterialIconsFamily}" />
+                                <TextBlock Text="New note" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="OpenBtn"
@@ -263,15 +277,19 @@
                             </StackPanel>
                         </Button>
                         <Button x:Name="SelectBtn"
-                                Style="{StaticResource ToolButtonStyle}"
+                                Padding="12,8" CornerRadius="8"
+                                Background="Transparent" BorderThickness="0"
                                 ToolTipService.ToolTip="Select notes">
-                            <FontIcon Glyph="&#xe162;" />
+                            <StackPanel Orientation="Horizontal" Spacing="7">
+                                <FontIcon Glyph="&#xe162;" FontSize="18" />
+                                <TextBlock Text="Select" VerticalAlignment="Center" FontSize="14" />
+                            </StackPanel>
                         </Button>
                     </StackPanel>
 
                     <!-- Select mode -->
                     <StackPanel x:Name="HeaderSelect"
-                                Grid.Column="2"
+                                Grid.Column="3"
                                 Orientation="Horizontal"
                                 VerticalAlignment="Center"
                                 Spacing="8"
@@ -353,21 +371,32 @@
                         <Border Background="{ThemeResource AppSurfaceVariantBrush}"
                                 CornerRadius="8" Padding="2">
                             <StackPanel Orientation="Horizontal" Spacing="1">
-                                <Button x:Name="SortByDateBtn"
-                                        Content="Date" FontSize="13"
-                                        Padding="12,6" CornerRadius="6"
-                                        Background="{ThemeResource AppSurfaceBrush}"
-                                        BorderThickness="0" />
-                                <Button x:Name="SortByNameBtn"
-                                        Content="Name" FontSize="13"
-                                        Padding="12,6" CornerRadius="6"
-                                        Background="Transparent"
-                                        BorderThickness="0" />
-                                <Button x:Name="SortByTypeBtn"
-                                        Content="Type" FontSize="13"
-                                        Padding="12,6" CornerRadius="6"
-                                        Background="Transparent"
-                                        BorderThickness="0" />
+                                <!-- Clicking the active option flips the direction; the
+                                     arrow (shown only on the active one) says which way. -->
+                                <Button x:Name="SortByDateBtn" Padding="12,6" CornerRadius="6"
+                                        Background="{ThemeResource AppSurfaceBrush}" BorderThickness="0">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <TextBlock Text="Date" FontSize="13" VerticalAlignment="Center" />
+                                        <FontIcon x:Name="SortDateArrow" FontSize="14"
+                                                  FontFamily="{StaticResource MaterialIconsFamily}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="SortByNameBtn" Padding="12,6" CornerRadius="6"
+                                        Background="Transparent" BorderThickness="0">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <TextBlock Text="Name" FontSize="13" VerticalAlignment="Center" />
+                                        <FontIcon x:Name="SortNameArrow" FontSize="14"
+                                                  FontFamily="{StaticResource MaterialIconsFamily}" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="SortByFolderBtn" Padding="12,6" CornerRadius="6"
+                                        Background="Transparent" BorderThickness="0">
+                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                        <TextBlock Text="Folder" FontSize="13" VerticalAlignment="Center" />
+                                        <FontIcon x:Name="SortFolderArrow" FontSize="14"
+                                                  FontFamily="{StaticResource MaterialIconsFamily}" />
+                                    </StackPanel>
+                                </Button>
                             </StackPanel>
                         </Border>
                     </StackPanel>
@@ -386,7 +415,7 @@
                                    HorizontalAlignment="Center"
                                    FontSize="16"
                                    Foreground="{ThemeResource AppTextSecondaryBrush}" />
-                        <TextBlock x:Name="EmptyHintSubtitle" Text="Tap Create note to add one."
+                        <TextBlock x:Name="EmptyHintSubtitle" Text="Tap New note to add one."
                                    HorizontalAlignment="Center"
                                    FontSize="13"
                                    Foreground="{ThemeResource AppTextSecondaryBrush}"
@@ -414,7 +443,7 @@
                                          dashed rectangle has no fill, so without this the card
                                          interior is a hit-test hole and hover only fires on the
                                          icon/text. -->
-                                    <Grid Width="165" Height="215" Background="Transparent">
+                                    <Grid Width="176" Height="262" Background="Transparent">
 
                                         <!-- Regular note card -->
                                         <Border Background="{ThemeResource AppSurfaceBrush}"
@@ -432,49 +461,83 @@
                                                     <RowDefinition Height="*" />
                                                     <RowDefinition Height="Auto" />
                                                 </Grid.RowDefinitions>
-                                                <Border Grid.Row="0"
-                                                        CornerRadius="13,13,0,0"
-                                                        Background="{ThemeResource AppSurfaceVariantBrush}">
-                                                    <Image x:Name="CardThumb"
-                                                           Source="{Binding Thumbnail}"
-                                                           Stretch="Uniform" />
-                                                </Border>
+
+                                                <!-- Page preview: fills the card, page count in the corner. -->
+                                                <Grid Grid.Row="0" Padding="10,12,10,4">
+                                                    <Border HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                            CornerRadius="3"
+                                                            BorderBrush="{ThemeResource AppBorderBrush}"
+                                                            BorderThickness="1"
+                                                            Background="White">
+                                                        <Image Source="{Binding Thumbnail}" Stretch="Uniform" />
+                                                    </Border>
+                                                    <Border HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                            Margin="0,0,4,4" Padding="6,1"
+                                                            CornerRadius="4"
+                                                            Background="{ThemeResource AppSurfaceVariantBrush}"
+                                                            Visibility="{Binding PageBadgeVisibility}">
+                                                        <TextBlock Text="{Binding PageCount}" FontSize="11"
+                                                                   Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                                    </Border>
+                                                </Grid>
+
                                                 <StackPanel Grid.Row="1"
-                                                            Padding="10,8,10,10"
+                                                            Padding="10,4,10,10"
                                                             Spacing="2">
-                                                    <TextBlock Text="{Binding Title}"
-                                                               FontWeight="SemiBold"
+                                                    <TextBlock FontWeight="SemiBold"
                                                                FontSize="13"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               TextAlignment="Center" />
-                                                    <TextBlock Text="{Binding Subtitle}"
-                                                               FontSize="11"
-                                                               Style="{StaticResource MutedStyle}"
-                                                               TextTrimming="CharacterEllipsis"
-                                                               TextAlignment="Center" />
+                                                               TextTrimming="CharacterEllipsis">
+                                                        <Run Text="{Binding Title}" /><Run Text="{Binding TitleHint}"
+                                                             FontWeight="Normal"
+                                                             Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                                    </TextBlock>
+                                                    <StackPanel Orientation="Horizontal" Spacing="4">
+                                                        <FontIcon Glyph="&#xE415;" FontSize="13"
+                                                                  FontFamily="{StaticResource MaterialIconsFamily}"
+                                                                  Foreground="{ThemeResource AppTextSecondaryBrush}"
+                                                                  Visibility="{Binding PdfIconVisibility}"
+                                                                  ToolTipService.ToolTip="Imported PDF" />
+                                                        <TextBlock Text="{Binding Subtitle}"
+                                                                   FontSize="11"
+                                                                   Style="{StaticResource MutedStyle}"
+                                                                   TextTrimming="CharacterEllipsis" />
+                                                    </StackPanel>
+                                                    <!-- Folder chip: colored for a folder, muted "No folder" otherwise. -->
+                                                    <Border HorizontalAlignment="Left" Margin="0,3,0,0"
+                                                            Padding="6,1,7,2" CornerRadius="6"
+                                                            Background="{Binding FolderChipBrush}">
+                                                        <StackPanel Orientation="Horizontal" Spacing="4">
+                                                            <FontIcon Glyph="{Binding FolderGlyph}" FontSize="12"
+                                                                      FontFamily="{StaticResource MaterialIconsFamily}"
+                                                                      Foreground="{Binding FolderTextBrush}" />
+                                                            <TextBlock Text="{Binding FolderDisplay}" FontSize="11"
+                                                                       MaxWidth="128"
+                                                                       TextTrimming="CharacterEllipsis"
+                                                                       Foreground="{Binding FolderTextBrush}" />
+                                                        </StackPanel>
+                                                    </Border>
                                                 </StackPanel>
                                             </Grid>
                                         </Border>
 
-                                        <!-- "New..." card -->
+                                        <!-- "New note" card: one quiet dashed outline with a + and label. -->
                                         <Grid Visibility="{Binding NewCardVisibility}">
-                                            <Rectangle Stroke="{ThemeResource AppBorderBrush}"
-                                                       StrokeThickness="1.5"
+                                            <Rectangle Stroke="{ThemeResource AppTextSecondaryBrush}"
+                                                       StrokeThickness="1"
                                                        StrokeDashArray="4,3"
                                                        RadiusX="14" RadiusY="14"
-                                                       Opacity="0.5" />
+                                                       Opacity="0.35" />
                                             <StackPanel VerticalAlignment="Center"
                                                         HorizontalAlignment="Center"
-                                                        Spacing="10">
-                                                <FontIcon Glyph="&#xe145;"
-                                                          FontSize="28"
+                                                        Spacing="4">
+                                                <FontIcon Glyph="&#xE145;"
+                                                          FontFamily="{StaticResource MaterialIconsFamily}"
+                                                          FontSize="24"
                                                           HorizontalAlignment="Center"
-                                                          Foreground="{ThemeResource AppTextSecondaryBrush}"
-                                                          Opacity="0.6" />
-                                                <TextBlock Text="New..."
-                                                           FontSize="13"
+                                                          Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                                <TextBlock Text="New note"
+                                                           FontSize="12"
                                                            Foreground="{ThemeResource AppTextSecondaryBrush}"
-                                                           Opacity="0.7"
                                                            HorizontalAlignment="Center" />
                                             </StackPanel>
                                         </Grid>
