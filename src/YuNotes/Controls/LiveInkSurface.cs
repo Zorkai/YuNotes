@@ -52,6 +52,7 @@ internal sealed class LiveInkSurface
     private CanvasVirtualImageSource? _vsis;
     private CanvasDevice? _device;
     private float _scale = 2f;          // applied when the next stroke starts
+    private float _surfaceScale = 2f;   // scale of the current stroke's surface
     private float _pageW, _pageH;
 
     // ── Active stroke state ────────────────────────────────────────────────
@@ -62,7 +63,11 @@ internal sealed class LiveInkSurface
     private float _uniformWidth;
     private float _baseHalfWidth;
     private CanvasStrokeStyle? _roundStroke;
-    private readonly List<(CanvasGeometry Geo, Rect Bounds)> _frozen = new();
+    // Frozen chunks are cached as tessellated realizations: they only get
+    // repainted when a dirty region overlaps them (the tail curling back over
+    // earlier ink, or a surface invalidation), and re-tessellating the same
+    // geometry every time is wasted CPU.
+    private readonly List<(CanvasCachedGeometry Geo, Rect Bounds)> _frozen = new();
     private CanvasGeometry? _tail;
     private Rect _tailBounds;           // last sync's changed region (covers its stale prediction)
     private bool _hasTailBounds;
@@ -139,6 +144,7 @@ internal sealed class LiveInkSurface
         _pageW = pageW;
         _pageH = pageH;
         _device = CanvasDevice.GetSharedDevice();
+        _surfaceScale = _scale;
         _vsis = new CanvasVirtualImageSource(_device, pageW, pageH, 96f * _scale, CanvasAlphaMode.Premultiplied);
         _vsis.RegionsInvalidated += OnRegionsInvalidated;
 
@@ -207,7 +213,7 @@ internal sealed class LiveInkSurface
             float r = _baseHalfWidth * Math.Max(0.2f, p.Pressure);
             var dot = CanvasGeometry.CreateCircle(_device, p.X, p.Y, r);
             var b = Inflate(dot.ComputeBounds(), 2);
-            _frozen.Add((dot, b));
+            AddFrozen(dot, b);
             Redraw(b);
             _dotRendered = true;
         }
@@ -222,7 +228,7 @@ internal sealed class LiveInkSurface
                 // earlier tail draws; the geometry is kept only so dirty-region
                 // redraws can repaint it.
                 var g = BuildRibbon(pts, _chunkStart, end, predict: false);
-                _frozen.Add((g, Inflate(g.ComputeBounds(), 3)));
+                AddFrozen(g, Inflate(g.ComputeBounds(), 3));
                 _chunkStart = end;
             }
 
@@ -275,7 +281,7 @@ internal sealed class LiveInkSurface
             {
                 int end = _chunkStart + ChunkPoints - 1;
                 var g = BuildPolyline(pts, _chunkStart, end, predict: false);
-                _frozen.Add((g, Inflate(g.ComputeStrokeBounds(_uniformWidth, _roundStroke), 2)));
+                AddFrozen(g, Inflate(g.ComputeStrokeBounds(_uniformWidth, _roundStroke), 2));
                 _chunkStart = end;
             }
 
@@ -361,10 +367,25 @@ internal sealed class LiveInkSurface
         foreach (var (g, b) in _frozen)
         {
             if (Intersects(b, region))
-                DrawGeo(ds, g);
+                ds.DrawCachedGeometry(g, _color);
         }
         if (_tail is not null)
             DrawGeo(ds, _tail);
+    }
+
+    // Takes ownership of `g`. The pressure dot is a fill like the ribbon.
+    // Flattening tolerance is a quarter DEVICE pixel: the default (0.25 page
+    // units) would facet curves visibly at 8 px/unit.
+    private void AddFrozen(CanvasGeometry g, Rect bounds)
+    {
+        using (g)
+        {
+            float tol = 0.25f / _surfaceScale;
+            var cached = _pressure
+                ? CanvasCachedGeometry.CreateFill(g, tol)
+                : CanvasCachedGeometry.CreateStroke(g, _uniformWidth, _roundStroke, tol);
+            _frozen.Add((cached, bounds));
+        }
     }
 
     private void DrawGeo(CanvasDrawingSession ds, CanvasGeometry g)
