@@ -259,13 +259,28 @@
                                 Orientation="Horizontal"
                                 VerticalAlignment="Center"
                                 Spacing="6">
+                        <!-- Primary action in the app's own accent (soft tint + accent
+                             text) rather than the system accent fill, so it matches the
+                             rest of the chrome in both themes. -->
                         <Button x:Name="NewBtn"
-                                Padding="12,7" CornerRadius="8"
-                                Style="{StaticResource AccentButtonStyle}">
+                                Padding="12,8" CornerRadius="8" BorderThickness="1">
+                            <Button.Resources>
+                                <ResourceDictionary>
+                                    <StaticResource x:Key="ButtonBackground" ResourceKey="AppAccentSoftBrush" />
+                                    <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="AppAccentSoftBrush" />
+                                    <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="AppAccentSoftBrush" />
+                                    <StaticResource x:Key="ButtonForeground" ResourceKey="AppAccentBrush" />
+                                    <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="AppAccentBrush" />
+                                    <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="AppAccentBrush" />
+                                    <SolidColorBrush x:Key="ButtonBorderBrush" Color="Transparent" />
+                                    <StaticResource x:Key="ButtonBorderBrushPointerOver" ResourceKey="AppAccentBrush" />
+                                    <StaticResource x:Key="ButtonBorderBrushPressed" ResourceKey="AppAccentBrush" />
+                                </ResourceDictionary>
+                            </Button.Resources>
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <FontIcon Glyph="&#xe145;" FontSize="18"
                                           FontFamily="{StaticResource MaterialIconsFamily}" />
-                                <TextBlock Text="New note" VerticalAlignment="Center" FontSize="14" />
+                                <TextBlock Text="New note" VerticalAlignment="Center" FontSize="14" FontWeight="SemiBold" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="OpenBtn"
