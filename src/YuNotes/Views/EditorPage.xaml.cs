@@ -249,6 +249,12 @@ public sealed partial class EditorPage : Page
         };
         Unloaded += (_, __) => SetTitlePassthrough(null);
 
+        // Switching windows (Alt+Tab, touchpad swipe, clicking elsewhere) can cut
+        // a pen/mouse gesture off without a release, leaving the canvas stuck in
+        // it so the pen draws nothing. Reset input when the window loses focus.
+        Loaded += (_, __) => { if (App.MainWindow is { } w) { w.Activated -= OnWindowActivated; w.Activated += OnWindowActivated; } };
+        Unloaded += (_, __) => { if (App.MainWindow is { } w) w.Activated -= OnWindowActivated; };
+
         // Click-to-rename title.
         // The title moves (not just resizes) when toolbar buttons beside it
         // show/hide, so track every layout pass; UpdateTitlePassthrough only
@@ -894,6 +900,22 @@ public sealed partial class EditorPage : Page
         ToolSelect.IsChecked = k is ToolKind.Lasso or ToolKind.RectSelect;
         ToolExtend.IsChecked = k == ToolKind.ExtendPage;
         UpdateChevronColors();
+    }
+
+    private void OnWindowActivated(object sender, WindowActivatedEventArgs args)
+    {
+        // Only on losing focus: on regaining it, the activating pen press may
+        // already be a live stroke, and resetting would cut it off. Anything
+        // stale after that is cleared by PageCanvas on the next press.
+        if (args.WindowActivationState != WindowActivationState.Deactivated) return;
+        Canvas.ResetInputState();
+        // A momentary override (middle-mouse pan) cut off mid-gesture never
+        // restores the toolbar; put it back on the real tool.
+        if (_restoreToolKind is ToolKind k)
+        {
+            _restoreToolKind = null;
+            UpdateToolUi(k);
+        }
     }
 
     private void SelectTool(ToolKind k)

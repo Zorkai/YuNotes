@@ -102,6 +102,25 @@ public sealed partial class InkCanvasControl : UserControl
         _suppressing = true;
     }
 
+    /// <summary>
+    /// Ends any gesture left half-finished (e.g. by Alt+Tab or a touchpad swipe
+    /// mid-stroke, where no release ever arrives): restores the ScrollViewer's
+    /// pan/zoom suppression and resets every page's pointer state. Called when
+    /// the window is activated or deactivated; a no-op when idle.
+    /// </summary>
+    public void ResetInputState()
+    {
+        _suppressPointers.Clear();
+        if (_suppressing)
+        {
+            Scroller.HorizontalScrollMode = _savedHScroll;
+            Scroller.VerticalScrollMode = _savedVScroll;
+            Scroller.ZoomMode = _savedZoom;
+            _suppressing = false;
+        }
+        foreach (var pc in _pageCanvases) pc.ResetInputState();
+    }
+
     private void OnAnyPointerEnded(object sender, PointerRoutedEventArgs e)
     {
         if (!_suppressPointers.Remove(e.Pointer.PointerId)) return;

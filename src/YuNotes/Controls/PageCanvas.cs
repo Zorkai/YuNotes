@@ -240,7 +240,18 @@ public sealed class PageCanvas : ContentControl
         PointerMoved += OnPointerMoved;
         PointerReleased += OnPointerReleased;
         PointerCanceled += OnPointerReleased;
-        PointerCaptureLost += (_, __) => { _capturedPointerId = null; Canvas.SetZIndex(this, 0); };
+        PointerCaptureLost += (_, __) =>
+        {
+            // Lost without a release (see ResetInputState) → end the gesture cleanly.
+            if (_capturedPointerId is not null) ResetInputState();
+            _capturedPointerId = null;
+            Canvas.SetZIndex(this, 0);
+        };
+        // Eraser range preview: leave the page → hide; press/lift → re-evaluate
+        // (e.g. the eraser button was released mid-hover).
+        PointerExited += (_, e) => { if (_capturedPointerId != e.Pointer.PointerId) HideEraserCursor(); };
+        AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) => UpdateEraserCursor(e)), handledEventsToo: true);
+        AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => UpdateEraserCursor(e)), handledEventsToo: true);
         DoubleTapped += OnDoubleTapped;
         SetupExtensionHandles();
     }
@@ -1540,8 +1551,13 @@ public sealed class PageCanvas : ContentControl
         // document can't be mutated, but scroll/zoom (handled by the ScrollViewer)
         // still works.
         if (Context.EditingSuspended) return;
+        // A new press while a previous gesture is still marked in progress means
+        // that gesture was interrupted without a release — finish it first.
+        if (_panning || _selectingText || _drag != DragMode.None || _activeTool is not null)
+            ResetInputState();
         Focus(FocusState.Pointer);
         var p = ToPageSpace(e);
+        _lastToolPoint = p;
         Context.CurrentPage = Page;
         _penEventsSinceDown = 0;
 
@@ -1651,8 +1667,61 @@ public sealed class PageCanvas : ContentControl
 
     private void OnPointerMoved(object sender, PointerRoutedEventArgs e)
     {
-        try { OnPointerMovedCore(sender, e); }
+        try
+        {
+            UpdateEraserCursor(e);
+            OnPointerMovedCore(sender, e);
+        }
         catch (Exception ex) { App.LogError(ex, "OnPointerMoved"); }
+    }
+
+    // ── Eraser range preview ──────────────────────────────────────────────────
+    //
+    // A circle the size of the eraser follows the pointer whenever erasing is
+    // what a press would do — the eraser tool is active, or the pen's eraser
+    // button/tip is held — both while hovering and while erasing, so you can
+    // see what will be removed before touching the page.
+
+    private Microsoft.UI.Xaml.Shapes.Ellipse? _eraserCursor;
+
+    private void UpdateEraserCursor(PointerRoutedEventArgs e)
+    {
+        bool show = false;
+        if (e.Pointer.PointerDeviceType != Microsoft.UI.Input.PointerDeviceType.Touch
+            && !Context.EditingSuspended)
+        {
+            // Mid-gesture, the tool picked at press time decides; when hovering,
+            // the same rules as a press (eraser button, eraser tip, active tool).
+            var tool = _capturedPointerId == e.Pointer.PointerId ? _activeTool : PickTool(e);
+            show = tool is EraserTool;
+        }
+        if (!show) { HideEraserCursor(); return; }
+
+        if (_eraserCursor is null)
+        {
+            _eraserCursor = new Microsoft.UI.Xaml.Shapes.Ellipse
+            {
+                // Dark ring + faint fill: readable on white paper, ink and PDFs.
+                Stroke = new SolidColorBrush(Color.FromArgb(170, 40, 44, 56)),
+                StrokeThickness = 1.2,
+                Fill = new SolidColorBrush(Color.FromArgb(28, 91, 107, 255)),
+                IsHitTestVisible = false
+            };
+            Canvas.SetZIndex(_eraserCursor, 10000);
+            _overlay.Children.Add(_eraserCursor);
+        }
+        var d = Math.Max(2f, Context.EraserWidth);
+        var p = ToPageSpace(e);
+        _eraserCursor.Width = d;
+        _eraserCursor.Height = d;
+        Canvas.SetLeft(_eraserCursor, p.X - d / 2);
+        Canvas.SetTop(_eraserCursor, p.Y - d / 2);
+        _eraserCursor.Visibility = Visibility.Visible;
+    }
+
+    private void HideEraserCursor()
+    {
+        if (_eraserCursor is not null) _eraserCursor.Visibility = Visibility.Collapsed;
     }
     private void OnPointerMovedCore(object sender, PointerRoutedEventArgs e)
     {
@@ -1715,6 +1784,7 @@ public sealed class PageCanvas : ContentControl
             {
                 _activeTool.OnPointerMove(Context, p, PressureOf(e));
             }
+            _lastToolPoint = p;
         }
         finally
         {
@@ -1798,10 +1868,52 @@ public sealed class PageCanvas : ContentControl
             if (wasRectSelect && Context.LastDrawnRectSelection.HasValue)
                 RectSelectionCompleted?.Invoke(this, EventArgs.Empty);
         }
-        ReleasePointerCapture(e.Pointer);
+        // Clear first: ReleasePointerCapture raises PointerCaptureLost, whose
+        // handler would otherwise treat this finished gesture as interrupted.
         _capturedPointerId = null;
         _activeTool = null;
+        ReleasePointerCapture(e.Pointer);
         if (!skipFullRedraw) _canvas.Invalidate();
+    }
+
+    // ── Interrupted-gesture recovery ──────────────────────────────────────────
+    //
+    // When capture is lost mid-gesture (Alt+Tab, a touchpad swipe, the window
+    // being deactivated) no PointerReleased arrives, so the gesture never ended:
+    // _panning / _drag / _selectingText / _activeTool stayed set and the next
+    // pen stroke was routed into that dead gesture instead of drawing ink —
+    // "the pen stops working until I switch tools". This finishes whatever was
+    // in flight (committing ink drawn so far) and returns to a clean idle state.
+    // Safe to call any time; a no-op when nothing is in progress.
+    private Vector2 _lastToolPoint;
+
+    public void ResetInputState()
+    {
+        try
+        {
+            if (_panning)
+            {
+                _panning = false;
+                if (_inMomentaryPan)
+                {
+                    _inMomentaryPan = false;
+                    MomentaryToolEnd?.Invoke(this, EventArgs.Empty);
+                }
+            }
+            _selectingText = false;
+            if (_drag != DragMode.None) EndDrag();
+            if (_activeTool is { } tool)
+            {
+                _activeTool = null;
+                var wasSelect = tool is LassoTool or RectSelectTool;
+                tool.OnPointerUp(Context, _lastToolPoint, 1f);
+                TearDownLiveShapePreview();
+                if (wasSelect) Context.SelectionChanged?.Invoke();
+            }
+            _capturedPointerId = null;
+            HideEraserCursor();
+        }
+        catch (Exception ex) { App.LogError(ex, "ResetInputState"); }
     }
 
     private void StartDrag(DragMode mode, Vector2 p, bool tapDismisses = false)
