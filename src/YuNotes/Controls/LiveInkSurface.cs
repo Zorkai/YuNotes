@@ -16,8 +16,9 @@ namespace YuNotes.Controls;
 /// <summary>
 /// Live-stroke renderer backed by a CanvasVirtualImageSource (a virtualized
 /// DComp surface) instead of retained-mode XAML shapes. Pixels persist between
-/// pointer samples, so each sync clears and redraws ONLY the union of the old
-/// and new active-tail bounds — the composition visual itself never changes and
+/// pointer samples, so each sync clears and redraws ONLY the area around the
+/// samples whose outline changed (plus the previous sync's area, which held the
+/// stale prediction) — the composition visual itself never changes and
 /// DWM recomposites just the dirty region, instead of the whole window as it
 /// does when a XAML Path/Polyline's geometry is swapped every sample (measured
 /// at +3-5 GPU points of dwm.exe and ~2x app CPU; see prototypes/InkPerfLab).
@@ -27,8 +28,8 @@ namespace YuNotes.Controls;
 /// from the retained-XAML predecessor: opaque strokes freeze ChunkPoints-sample
 /// chunks (kept as geometries for dirty-region overlap redraws — their pixels
 /// are already on the surface); translucent strokes stay one geometry rebuilt
-/// per sync (chunk-boundary caps would double-blend), with the redraw region
-/// still limited to the samples that actually changed.
+/// per sync (chunk-boundary caps would double-blend). Either way the redraw
+/// region is limited to the samples that actually changed.
 ///
 /// Known live-only compromise: ink is clipped to the page surface while the
 /// pen is down, so a stroke dragged past the page edge shows its overflow only
@@ -63,7 +64,7 @@ internal sealed class LiveInkSurface
     private CanvasStrokeStyle? _roundStroke;
     private readonly List<(CanvasGeometry Geo, Rect Bounds)> _frozen = new();
     private CanvasGeometry? _tail;
-    private Rect _tailBounds;           // chunkable: full tail bounds; else last changed region
+    private Rect _tailBounds;           // last sync's changed region (covers its stale prediction)
     private bool _hasTailBounds;
     private int _chunkStart;
     private int _synced;
@@ -225,12 +226,17 @@ internal sealed class LiveInkSurface
                 _chunkStart = end;
             }
 
+            // Redraw only what changed (see ChangedPointBounds), not the whole
+            // tail: the tail can span a word, and repainting its box at up to
+            // 8 px/unit on every sample was most of the live GPU/DWM cost. A
+            // freeze always lands at or after the last previously-synced
+            // sample, so its seam is inside the changed region too.
             var tail = BuildRibbon(pts, _chunkStart, count - 1, predict: true);
-            var bounds = Inflate(tail.ComputeBounds(), 3);
             _tail?.Dispose();
             _tail = tail;
-            var region = _hasTailBounds ? Union(_tailBounds, bounds) : bounds;
-            _tailBounds = bounds;
+            var changed = ChangedPointBounds(s, prevSynced, pressureRadii: true);
+            var region = _hasTailBounds ? Union(_tailBounds, changed) : changed;
+            _tailBounds = changed;
             _hasTailBounds = true;
             Redraw(region);
         }
@@ -274,11 +280,11 @@ internal sealed class LiveInkSurface
             }
 
             var tail = BuildPolyline(pts, _chunkStart, count - 1, predict: true);
-            var bounds = Inflate(tail.ComputeStrokeBounds(_uniformWidth, _roundStroke), 2);
             _tail?.Dispose();
             _tail = tail;
-            var region = _hasTailBounds ? Union(_tailBounds, bounds) : bounds;
-            _tailBounds = bounds;
+            var changed = ChangedPointBounds(s, prevSynced, pressureRadii: false);
+            var region = _hasTailBounds ? Union(_tailBounds, changed) : changed;
+            _tailBounds = changed;
             _hasTailBounds = true;
             Redraw(region);
         }
