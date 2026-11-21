@@ -2958,6 +2958,114 @@ public sealed class PageCanvas : ContentControl
         _canvas.Invalidate();
     }
 
+    // Pixel budget for one exported page. A4 (1240×1754) at 4× is ~35 MP; this
+    // leaves room for that on 100% displays and caps hi-DPI / oversized pages
+    // before the render target and PNG encode get memory-hungry.
+    private const double ExportMaxPixels = 50_000_000;
+
+    /// <summary>
+    /// Picks the export render scale for this page: <paramref name="targetDensity"/>
+    /// (the densest view the user can get on screen, px per page unit) so the
+    /// exported PDF holds the same detail they see at max zoom — reduced only
+    /// where that buys nothing (an overlay page with nothing on it) or would
+    /// exceed the pixel budget / the GPU's max bitmap size.
+    /// </summary>
+    public float AutoExportScale(float targetDensity, bool overlayOnly)
+    {
+        bool hasBleed = (PrevPageCanvas?.BottomOverflow ?? 0f) > 0.5f
+                     || (NextPageCanvas?.TopOverflow ?? 0f) > 0.5f;
+        bool hasElements = Page.Strokes.Count > 0 || Page.Shapes.Count > 0
+                        || Page.Texts.Count > 0 || Page.Images.Count > 0 || hasBleed;
+        // Fully transparent overlay: the source PDF page shows through untouched.
+        if (overlayOnly && !hasElements) return 1f;
+
+        return ScaleForArea(Page.Width, Page.Height, targetDensity);
+    }
+
+    // targetDensity, reduced to fit a w×h area in the pixel budget and the
+    // GPU's max bitmap size.
+    private static float ScaleForArea(double w, double h, float targetDensity)
+    {
+        float scale = Math.Max(1f, targetDensity);
+        double area = Math.Max(1.0, w * h);
+        if (area * scale * scale > ExportMaxPixels)
+            scale = (float)Math.Sqrt(ExportMaxPixels / area);
+        float maxDim = CanvasDevice.GetSharedDevice().MaximumBitmapSizeInPixels;
+        float longest = (float)Math.Max(1.0, Math.Max(w, h));
+        scale = Math.Min(scale, maxDim / longest);
+        return Math.Max(0.25f, scale);
+    }
+
+    /// <summary>
+    /// Snapshot of this page for the vector PDF writer: strokes, shapes, images,
+    /// background and template are written as PDF vectors from the model; only
+    /// text is rasterized here (cropped to its bounds, at
+    /// <paramref name="targetDensity"/>) until it gets real PDF text.
+    /// </summary>
+    public PageVectorExport BuildVectorExport(float targetDensity, bool overlayOnly)
+    {
+        var e = new PageVectorExport { Page = Page, Template = PageTemplate, OverlayOnly = overlayOnly };
+        // Same offsets as DrawNeighborBleedForExport.
+        if (PrevPageCanvas is { } prev && prev.BottomOverflow > 0.5f)
+            e.Bleed.Add(new BleedSource(prev.Page, -(float)prev.Page.Height));
+        if (NextPageCanvas is { } next && next.TopOverflow > 0.5f)
+            e.Bleed.Add(new BleedSource(next.Page, (float)Page.Height));
+        RenderTextLayerForExport(e, targetDensity);
+        return e;
+    }
+
+    private void RenderTextLayerForExport(PageVectorExport e, float targetDensity)
+    {
+        var device = CanvasDevice.GetSharedDevice();
+        var pageRect = new Windows.Foundation.Rect(0, 0, Page.Width, Page.Height);
+
+        var items = new System.Collections.Generic.List<(TextElement Text, float OffsetY)>();
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        void Collect(NotePage page, float oy)
+        {
+            foreach (var t in page.Texts)
+            {
+                if (PageRenderer.TextInkBounds(device, t) is not { } b) continue;
+                b.Y += oy;
+                if (b.Right < pageRect.X || b.X > pageRect.Right || b.Bottom < pageRect.Y || b.Y > pageRect.Bottom)
+                    continue;   // e.g. a neighbour's text that doesn't cross the seam
+                items.Add((t, oy));
+                minX = Math.Min(minX, b.X); minY = Math.Min(minY, b.Y);
+                maxX = Math.Max(maxX, b.Right); maxY = Math.Max(maxY, b.Bottom);
+            }
+        }
+        Collect(Page, 0f);
+        foreach (var b in e.Bleed) Collect(b.Page, b.OffsetY);
+        if (items.Count == 0) return;
+
+        // Crop to the text, clamped to the page (the PDF clips there anyway).
+        double x0 = Math.Max(0, Math.Floor(minX)), y0 = Math.Max(0, Math.Floor(minY));
+        double x1 = Math.Min(Page.Width, Math.Ceiling(maxX)), y1 = Math.Min(Page.Height, Math.Ceiling(maxY));
+        if (x1 - x0 < 1 || y1 - y0 < 1) return;
+
+        float scale = ScaleForArea(x1 - x0, y1 - y0, targetDensity);
+        int pxW = (int)Math.Ceiling((x1 - x0) * scale), pxH = (int)Math.Ceiling((y1 - y0) * scale);
+
+        using var target = new CanvasRenderTarget(device, pxW, pxH, 96f);
+        using (var ds = target.CreateDrawingSession())
+        {
+            ds.Clear(Colors.Transparent);
+            var toTarget = Matrix3x2.CreateTranslation((float)-x0, (float)-y0) * Matrix3x2.CreateScale(scale);
+            foreach (var (t, oy) in items)
+            {
+                ds.Transform = Matrix3x2.CreateTranslation(0, oy) * toTarget;
+                Renderer.DrawTextElement(ds, t);
+            }
+        }
+        using var ms = new MemoryStream();
+        target.SaveAsync(ms.AsRandomAccessStream(), CanvasBitmapFileFormat.Png).AsTask().GetAwaiter().GetResult();
+        e.TextPng = ms.ToArray();
+        e.TextX = x0;
+        e.TextY = y0;
+        e.TextWidth = pxW / (double)scale;
+        e.TextHeight = pxH / (double)scale;
+    }
+
     public byte[] RenderToPng(float scale = 1.0f, bool overlayOnly = false)
     {
         var device = CanvasDevice.GetSharedDevice();

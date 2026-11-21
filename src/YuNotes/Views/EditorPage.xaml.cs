@@ -38,11 +38,10 @@ public sealed partial class EditorPage : Page
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? _autosaveTimer;
     private bool _saving;
 
-    // Ink/overlay is flattened to raster when a .pdf is saved/exported. The coord
-    // space is 150 DPI, so scale 1 embeds 150-DPI ink — soft when zoomed in an
-    // external viewer. 3× ≈ 450 DPI keeps hand-drawing crisp; overlay PNGs stay
-    // small since they're mostly transparent.
-    private const float ExportRenderScale = 3f;
+    // Ink/overlay is flattened to raster when a .pdf is saved/exported. The
+    // resolution is auto-detected per page (InkCanvasControl.RenderPageForExport
+    // → PageCanvas.AutoExportScale) to match the densest view the user gets on
+    // screen: max zoom tier × display scaling.
 
     // Per-tool width state (persists across tool switches within a session)
     private float _penWidth;
@@ -1613,8 +1612,14 @@ public sealed partial class EditorPage : Page
                 InitPicker(save);
                 var file = await save.PickSaveFileAsync();
                 if (file is null) return;
-                var pngs = Canvas.RenderAllToPng(scale: ExportRenderScale);
-                App.Services.PdfExport.Export(_doc, pngs, file.Path);
+                // Same vector writer as the .pdf save. Imported PDFs keep their
+                // original pages (selectable text) with the notes drawn on top.
+                bool useOverlay = _doc.SourcePdfBytes is { Length: > 0 };
+                var pages = new Rendering.PageVectorExport?[Canvas.PageCount];
+                for (int i = 0; i < pages.Length; i++) pages[i] = Canvas.BuildVectorExport(i, useOverlay);
+                var docRef = _doc;
+                var outPath = file.Path;
+                await Task.Run(() => App.Services.Documents.ExportPdf(docRef, pages, outPath, App.Services.PdfContainer));
                 await Notify("Exported", "PDF saved.");
             }
             else if (res == ContentDialogResult.Secondary)
@@ -1624,7 +1629,7 @@ public sealed partial class EditorPage : Page
                 InitPicker(folder);
                 var f = await folder.PickSingleFolderAsync();
                 if (f is null) return;
-                var pngs = Canvas.RenderAllToPng(scale: ExportRenderScale);
+                var pngs = Canvas.RenderAllForExport();
                 App.Services.PngExport.ExportAll(pngs, f.Path, _doc.Info.Title);
                 await Notify("Exported", "PNGs saved.");
             }
@@ -2040,13 +2045,15 @@ public sealed partial class EditorPage : Page
                 // of hard-freezing. (Win2D render stays on the UI thread — its
                 // geometry cache isn't thread-safe — but the input-blocking overlay
                 // stops concurrent edits.) Reused pages render nothing at all.
-                var pngs = new byte[n][];
+                var pngs = new Rendering.PageVectorExport?[n];
                 int toRender = reuse.Count(r => r is null);
                 int done = 0;
                 for (int i = 0; i < n; i++)
                 {
-                    if (reuse[i] is not null) { pngs[i] = System.Array.Empty<byte>(); continue; }
-                    pngs[i] = Canvas.RenderPageForExport(i, ExportRenderScale, useOverlay) ?? System.Array.Empty<byte>();
+                    if (reuse[i] is not null) continue;
+                    // Vectors come straight from the model; only text is
+                    // rasterized here (Win2D, UI thread), cropped to its bounds.
+                    pngs[i] = Canvas.BuildVectorExport(i, useOverlay);
                     UpdateSaveProgress(++done, toRender);
                     await AfterRenderAsync();
                 }

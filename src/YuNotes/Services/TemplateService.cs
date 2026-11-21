@@ -39,7 +39,7 @@ public sealed class TemplateService
         }
     }
 
-    private static Color ParseHex(string hex)
+    internal static Color ParseHex(string hex)
     {
         hex = hex.TrimStart('#');
         byte a = 0xFF, r, g, b;

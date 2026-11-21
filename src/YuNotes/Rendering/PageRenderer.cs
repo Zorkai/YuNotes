@@ -612,18 +612,18 @@ public sealed class PageRenderer
         path.EndFigure(CanvasFigureLoop.Closed);
     }
 
-    private void DrawText(CanvasDrawingSession ds, TextElement t)
-    {
-        // Guard every value that feeds Win2D: a negative Rect width/height throws
-        // in the Rect constructor, NaN/∞ throws inside DrawText, and FontSize <= 0
-        // throws when CanvasTextFormat is realized. Any of these inside this native
-        // callback would take the whole process down.
-        if (!IsFinite(t.X) || !IsFinite(t.Y) || !IsFinite(t.Width) || !IsFinite(t.Height))
-            return;
-        if (t.Width <= 0 || t.Height <= 0) return;
+    // Guard every value that feeds Win2D: a negative Rect width/height throws
+    // in the Rect constructor, NaN/∞ throws inside DrawText, and FontSize <= 0
+    // throws when CanvasTextFormat is realized. Any of these inside this native
+    // callback would take the whole process down.
+    private static bool IsDrawableText(TextElement t) =>
+        IsFinite(t.X) && IsFinite(t.Y) && IsFinite(t.Width) && IsFinite(t.Height) &&
+        t.Width > 0 && t.Height > 0;
 
+    private static CanvasTextFormat CreateTextFormat(TextElement t)
+    {
         float fontSize = IsFinite(t.FontSize) && t.FontSize > 0 ? t.FontSize : 18f;
-        using var fmt = new CanvasTextFormat
+        return new CanvasTextFormat
         {
             FontFamily = string.IsNullOrWhiteSpace(t.FontFamily) ? "Segoe UI" : t.FontFamily,
             FontSize = fontSize,
@@ -631,7 +631,57 @@ public sealed class PageRenderer
             FontStyle = t.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
             WordWrapping = CanvasWordWrapping.Wrap
         };
+    }
+
+    private void DrawText(CanvasDrawingSession ds, TextElement t)
+    {
+        if (!IsDrawableText(t)) return;
+        using var fmt = CreateTextFormat(t);
         ds.DrawText(t.Text ?? "", new Rect(t.X, t.Y, t.Width, t.Height), t.Color, fmt);
+    }
+
+    /// <summary>Draws one text element with its rotation, as DrawPage does.</summary>
+    public void DrawTextElement(CanvasDrawingSession ds, TextElement t)
+    {
+        var prev = ds.Transform;
+        if (t.Rotation != 0 && IsFinite(t.Rotation))
+        {
+            var cx = (float)(t.X + t.Width * 0.5);
+            var cy = (float)(t.Y + t.Height * 0.5);
+            ds.Transform = Matrix3x2.CreateRotation((float)(t.Rotation * Math.PI / 180.0), new Vector2(cx, cy)) * prev;
+        }
+        DrawText(ds, t);
+        ds.Transform = prev;
+    }
+
+    /// <summary>
+    /// Page-space bounds of everything a text element paints — its box plus any
+    /// glyphs overflowing it (long text, descenders, italics) — after rotation.
+    /// Null when it draws nothing.
+    /// </summary>
+    public static Rect? TextInkBounds(ICanvasResourceCreator dev, TextElement t)
+    {
+        if (!IsDrawableText(t) || string.IsNullOrEmpty(t.Text)) return null;
+        using var fmt = CreateTextFormat(t);
+        using var layout = new CanvasTextLayout(dev, t.Text, fmt, (float)t.Width, (float)t.Height);
+        var ink = layout.DrawBounds;
+        double pad = 2;
+        double l = Math.Min(0, ink.X) - pad, tp = Math.Min(0, ink.Y) - pad;
+        double r = Math.Max(t.Width, ink.X + ink.Width) + pad, b = Math.Max(t.Height, ink.Y + ink.Height) + pad;
+
+        double cx = t.Width * 0.5, cy = t.Height * 0.5;
+        double rad = IsFinite(t.Rotation) ? t.Rotation * Math.PI / 180.0 : 0;
+        double cos = Math.Cos(rad), sin = Math.Sin(rad);
+        double minX = double.MaxValue, minY = double.MaxValue, maxX = double.MinValue, maxY = double.MinValue;
+        foreach (var (px, py) in new[] { (l, tp), (r, tp), (r, b), (l, b) })
+        {
+            double dx = px - cx, dy = py - cy;
+            double x = t.X + cx + dx * cos - dy * sin;
+            double y = t.Y + cy + dx * sin + dy * cos;
+            minX = Math.Min(minX, x); minY = Math.Min(minY, y);
+            maxX = Math.Max(maxX, x); maxY = Math.Max(maxY, y);
+        }
+        return new Rect(minX, minY, maxX - minX, maxY - minY);
     }
 }
 

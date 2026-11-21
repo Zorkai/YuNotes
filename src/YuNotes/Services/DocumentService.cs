@@ -129,20 +129,28 @@ public sealed class DocumentService
         finally { try { File.Delete(temp2); } catch { } }
     }
 
-    // Save a doc to its .pdf container: flatten pages as images + embed the
+    // Save a doc to its .pdf container: write pages as vectors + embed the
     // full SQLite blob alongside, so the next open restores editable objects.
-    // flatPagePngs: when source PDF is present, these are TRANSPARENT overlays (just
-    // user content). When there's no source, they are the full flattened page renders.
-    // reusePageIndices/previousContainer: pages whose flattened image is
-    // unchanged since the last full save are cloned from the existing container
-    // (reusePageIndices[i] = that file's page index) instead of getting a fresh
-    // render — the caller then skips rendering them entirely, which is what
-    // makes saving a 30-page doc with 2 edited pages fast.
-    public void SavePdfContainer(Document doc, byte[][] flatPagePngs, byte[]? thumbnail, PdfContainerService container,
+    // pages: when source PDF is present, these are overlays (just user content)
+    // on the original pages. When there's no source, they are full pages.
+    // reusePageIndices/previousContainer: pages unchanged since the last full
+    // save are cloned from the existing container (reusePageIndices[i] = that
+    // file's page index) instead of being written again — the caller then skips
+    // preparing them entirely.
+    public void SavePdfContainer(Document doc, YuNotes.Rendering.PageVectorExport?[] pages, byte[]? thumbnail, PdfContainerService container,
                                  int?[]? reusePageIndices = null, byte[]? previousContainer = null)
+        => WritePdf(doc, pages, SerializeToBlob(doc, thumbnail), doc.Info.FilePath, container,
+                    reusePageIndices, previousContainer);
+
+    // Plain PDF export (no editable state embedded): original source pages are
+    // kept as-is with the user's content drawn on top, like the container.
+    public void ExportPdf(Document doc, YuNotes.Rendering.PageVectorExport?[] pages, string outputPath, PdfContainerService container)
+        => WritePdf(doc, pages, null, outputPath, container, null, null);
+
+    private static void WritePdf(Document doc, YuNotes.Rendering.PageVectorExport?[] pages, byte[]? blob,
+                                 string pdfPath, PdfContainerService container,
+                                 int?[]? reusePageIndices, byte[]? previousContainer)
     {
-        var pdfPath = doc.Info.FilePath;
-        var blob = SerializeToBlob(doc, thumbnail);
         var widths  = new double[doc.Pages.Count];
         var heights = new double[doc.Pages.Count];
         for (int i = 0; i < doc.Pages.Count; i++)
@@ -155,12 +163,12 @@ public sealed class DocumentService
         {
             var srcIdx = new int?[doc.Pages.Count];
             for (int i = 0; i < doc.Pages.Count; i++) srcIdx[i] = doc.Pages[i].SourcePageIndex;
-            container.WriteWithSource(flatPagePngs, widths, heights, srcIdx, src, blob, pdfPath,
+            container.WriteWithSource(pages, widths, heights, srcIdx, src, blob, pdfPath,
                                       reusePageIndices, previousContainer);
         }
         else
         {
-            container.Write(flatPagePngs, widths, heights, blob, pdfPath,
+            container.Write(pages, widths, heights, blob, pdfPath,
                             reusePageIndices, previousContainer);
         }
     }
@@ -425,7 +433,7 @@ public sealed class DocumentService
             var blob = File.ReadAllBytes(tempSqlite);
             var p = doc.Pages[0];
             container.Write(
-                new byte[][] { Array.Empty<byte>() },
+                new YuNotes.Rendering.PageVectorExport?[] { null },
                 new[] { p.Width },
                 new[] { p.Height },
                 blob, path);

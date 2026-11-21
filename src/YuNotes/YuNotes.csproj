@@ -38,7 +38,6 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.2.2" />
     <PackageReference Include="CommunityToolkit.WinUI.Controls.SettingsControls" Version="8.0.240109" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.6" />
-    <PackageReference Include="QuestPDF" Version="2024.6.0" />
     <PackageReference Include="PDFtoImage" Version="4.1.0" />
     <PackageReference Include="PdfSharp" Version="6.1.1" />
     <PackageReference Include="PdfPig" Version="0.1.10" />

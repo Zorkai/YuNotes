@@ -794,16 +794,42 @@ public sealed partial class InkCanvasControl : UserControl
 
     /// <summary>Renders one page's flattened/overlay PNG — lets the save loop
     /// render page-by-page and yield between pages so the UI stays responsive.</summary>
-    public byte[]? RenderPageForExport(int index, float scale, bool overlayOnly)
+    /// <summary>Densest view the user can get on screen, in device pixels per
+    /// page unit: the backing store tops out at the max zoom tier (DpiScale ≤ 4,
+    /// see ApplyZoomDpi) times the display's scaling. Exports render at this so
+    /// someone zooming into the PDF sees the same detail as in the app.</summary>
+    public float MaxOnScreenDensity
     {
-        if (index < 0 || index >= _pageCanvases.Count) return null;
-        return _pageCanvases[index].RenderToPng(scale, overlayOnly);
+        get
+        {
+            double raster = XamlRoot?.RasterizationScale ?? 1.0;
+            double zoomTier = Math.Min(4.0, Math.Max(1.0, Math.Ceiling(Scroller.MaxZoomFactor)));
+            return (float)(raster * zoomTier);
+        }
     }
 
-    public byte[][] RenderAllToPng(float scale = 1f, bool overlayOnly = false)
+    /// <summary>Renders one page's flattened/overlay PNG at its auto-detected
+    /// export resolution — lets the save loop render page-by-page and yield
+    /// between pages so the UI stays responsive.</summary>
+    public byte[]? RenderPageForExport(int index, bool overlayOnly)
+    {
+        if (index < 0 || index >= _pageCanvases.Count) return null;
+        var pc = _pageCanvases[index];
+        return pc.RenderToPng(pc.AutoExportScale(MaxOnScreenDensity, overlayOnly), overlayOnly);
+    }
+
+    /// <summary>One page prepared for the vector PDF writer (see
+    /// PageCanvas.BuildVectorExport). Must run on the UI thread.</summary>
+    public Rendering.PageVectorExport? BuildVectorExport(int index, bool overlayOnly)
+    {
+        if (index < 0 || index >= _pageCanvases.Count) return null;
+        return _pageCanvases[index].BuildVectorExport(MaxOnScreenDensity, overlayOnly);
+    }
+
+    public byte[][] RenderAllForExport(bool overlayOnly = false)
     {
         var result = new byte[_pageCanvases.Count][];
-        for (int i = 0; i < _pageCanvases.Count; i++) result[i] = _pageCanvases[i].RenderToPng(scale, overlayOnly);
+        for (int i = 0; i < _pageCanvases.Count; i++) result[i] = RenderPageForExport(i, overlayOnly)!;
         return result;
     }
 

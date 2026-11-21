@@ -4,6 +4,7 @@ using PdfSharp.Drawing;
 using PdfSharp.Pdf;
 using PdfSharp.Pdf.Advanced;
 using PdfSharp.Pdf.IO;
+using YuNotes.Rendering;
 
 namespace YuNotes.Services;
 
@@ -21,18 +22,24 @@ public sealed class PdfContainerService
         System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
     }
 
-    // Each pagePngs entry: a non-empty PNG draws onto a white page; an empty/null
-    // array yields a blank white page (used right after "New note" before the user
-    // has drawn anything worth flattening).
+    // Marks how the page content was written, in the document info dictionary.
+    // Pages are only cloned for reuse from a container written the same way —
+    // an older file's full-page raster flattens get re-written as vectors once.
+    private const string FlattenFormatKey = "/YuNotesFlatten";
+    private const string FlattenFormat = "vector-1";
+
+    // Each pages entry is drawn as vectors onto a white page (PdfVectorWriter); a
+    // null entry yields a blank white page.
     // reuseIndices/previousContainer: when reuseIndices[i] is set, page i is cloned
     // as-is from the previous container output (its flatten is unchanged) and
-    // pagePngs[i] is ignored — the caller skipped rendering it.
-    public void Write(byte[][] pagePngs, double[] widths, double[] heights, byte[] embeddedData, string outputPath,
+    // pages[i] is ignored — the caller skipped preparing it.
+    // embeddedData null: a plain export, no editable state attached.
+    public void Write(PageVectorExport?[] pages, double[] widths, double[] heights, byte[]? embeddedData, string outputPath,
                       int?[]? reuseIndices = null, byte[]? previousContainer = null)
     {
         using var prev = OpenPrevious(previousContainer, reuseIndices);
         using var doc = new PdfDocument();
-        for (int i = 0; i < pagePngs.Length; i++)
+        for (int i = 0; i < pages.Length; i++)
         {
             if (TryReusePage(doc, prev, reuseIndices, i)) continue;
             var page = doc.AddPage();
@@ -40,28 +47,27 @@ public sealed class PdfContainerService
             page.Height = XUnit.FromPoint(heights[i]);
             using var gfx = XGraphics.FromPdfPage(page);
             gfx.DrawRectangle(XBrushes.White, 0, 0, page.Width.Point, page.Height.Point);
-            DrawPngIfAny(gfx, pagePngs[i], page.Width.Point, page.Height.Point);
+            if (pages[i] is { } p) PdfVectorWriter.Draw(gfx, p, page.Width.Point, page.Height.Point);
         }
-        AttachEmbeddedFile(doc, EmbeddedName, embeddedData);
-        doc.Save(outputPath);
+        Finish(doc, embeddedData, null, outputPath);
     }
 
     // Vector-preserving write: clone pages from a source PDF (so the original's
-    // selectable text and vector graphics survive), then draw a transparent overlay
-    // PNG containing the user's strokes / text / images on top of each. Pages that
-    // don't map to the source (sourceIndices[i] == null) get a blank white page.
+    // selectable text and vector graphics survive), then draw the user's strokes /
+    // shapes / images as vectors on top of each. Pages that don't map to the
+    // source (sourceIndices[i] == null) get a blank white page.
     // Unchanged pages (reuseIndices[i] set) are cloned from the previous container
     // output instead — they already carry source content + overlay.
-    public void WriteWithSource(byte[][] overlayPngs, double[] widths, double[] heights,
+    public void WriteWithSource(PageVectorExport?[] overlays, double[] widths, double[] heights,
                                 int?[] sourceIndices, byte[] sourcePdfBytes,
-                                byte[] embeddedData, string outputPath,
+                                byte[]? embeddedData, string outputPath,
                                 int?[]? reuseIndices = null, byte[]? previousContainer = null)
     {
         using var prev = OpenPrevious(previousContainer, reuseIndices);
         using var source = OpenSource(sourcePdfBytes);
         using var doc = new PdfDocument();
 
-        for (int i = 0; i < overlayPngs.Length; i++)
+        for (int i = 0; i < overlays.Length; i++)
         {
             if (TryReusePage(doc, prev, reuseIndices, i)) continue;
             PdfPage page;
@@ -80,12 +86,22 @@ public sealed class PdfContainerService
             }
 
             // Append-mode XGraphics so the overlay draws ON TOP of existing page content.
+            if (overlays[i] is not { } overlay) continue;
             using var gfx = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
-            DrawPngIfAny(gfx, overlayPngs[i], page.Width.Point, page.Height.Point);
+            PdfVectorWriter.Draw(gfx, overlay, page.Width.Point, page.Height.Point);
         }
 
-        AttachEmbeddedFile(doc, EmbeddedName, embeddedData);
-        AttachEmbeddedFile(doc, EmbeddedSourceName, sourcePdfBytes);
+        Finish(doc, embeddedData, sourcePdfBytes, outputPath);
+    }
+
+    private static void Finish(PdfDocument doc, byte[]? embeddedData, byte[]? sourcePdfBytes, string outputPath)
+    {
+        if (embeddedData is not null)
+        {
+            doc.Info.Elements.SetString(FlattenFormatKey, FlattenFormat);
+            AttachEmbeddedFile(doc, EmbeddedName, embeddedData);
+            if (sourcePdfBytes is not null) AttachEmbeddedFile(doc, EmbeddedSourceName, sourcePdfBytes);
+        }
         doc.Save(outputPath);
     }
 
@@ -100,6 +116,7 @@ public sealed class PdfContainerService
             var bytes = File.ReadAllBytes(pdfPath);
             using var ms = new MemoryStream(bytes, 0, bytes.Length, writable: false, publiclyVisible: true);
             using var doc = PdfReader.Open(ms, PdfDocumentOpenMode.Import);
+            if (doc.Info.Elements.GetString(FlattenFormatKey) != FlattenFormat) return null;
             return (bytes, doc.PageCount);
         }
         catch { return null; }
@@ -128,14 +145,6 @@ public sealed class PdfContainerService
         // PdfReader.Open from byte[] needs a seekable stream.
         var ms = new MemoryStream(bytes, 0, bytes.Length, writable: false, publiclyVisible: true);
         return PdfReader.Open(ms, PdfDocumentOpenMode.Import);
-    }
-
-    private static void DrawPngIfAny(XGraphics gfx, byte[]? png, double width, double height)
-    {
-        if (png is not { Length: > 0 }) return;
-        using var ms = new MemoryStream(png, 0, png.Length, writable: false, publiclyVisible: true);
-        var img = XImage.FromStream(ms);
-        gfx.DrawImage(img, 0, 0, width, height);
     }
 
     public byte[]? ExtractSourcePdf(string pdfPath)
