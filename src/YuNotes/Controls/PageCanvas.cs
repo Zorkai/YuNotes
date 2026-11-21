@@ -1534,7 +1534,7 @@ public sealed class PageCanvas : ContentControl
             var v = (rawPressure - (float)s.MinPressure) * (float)s.PressureMultiplier;
             if (v < 0) v = 0;
             if (v > 1) v = 1;
-            return v;
+            return (float)YuNotes.Input.PressureCurve.Evaluate(v, s);
         }
         return rawPressure;
     }

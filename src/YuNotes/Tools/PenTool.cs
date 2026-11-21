@@ -47,8 +47,22 @@ public sealed class PenTool : ITool
             PressureMode = UsePressure
         };
         ctx.ActiveStroke.Points.Add(new InkPoint(p.X, p.Y, UsePressure ? pressure : 1f));
+        _smoothed = p;
         ctx.InvalidateLive?.Invoke();
         StartHoldTimer(ctx, p);
+    }
+
+    // Smoothing: each sample moves only part of the way toward the pen, which
+    // irons out tremor. Level 10 keeps 20% of each step.
+    private Vector2 _smoothed;
+
+    private Vector2 Smooth(Vector2 p)
+    {
+        int level = Math.Clamp(App.Services.Settings.Current.SmoothingLevel, 0, 10);
+        if (level == 0) return _smoothed = p;
+        float follow = 1f - level * 0.08f;
+        _smoothed += (p - _smoothed) * follow;
+        return _smoothed;
     }
 
     // Pen snaps to the ruler edge when it comes within this many document pixels.
@@ -71,6 +85,9 @@ public sealed class PenTool : ITool
             ctx.InvalidateLive?.Invoke();
             return;
         }
+
+        // Smooth before the ruler snap so ruler-guided lines stay exact.
+        p = Smooth(p);
 
         // Ruler snap: snap to the nearer EDGE of the ruler, not its centre line.
         //

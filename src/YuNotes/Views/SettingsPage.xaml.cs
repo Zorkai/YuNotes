@@ -5,15 +5,16 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Microsoft.UI.Dispatching;
 using Microsoft.UI.Input;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 using Windows.Storage.Pickers;
-using Windows.UI;
+using YuNotes.Controls;
+using YuNotes.Input;
 using YuNotes.Models;
 
 namespace YuNotes.Views;
@@ -44,6 +45,9 @@ public sealed class ToolEntry : INotifyPropertyChanged
     }
 }
 
+// Settings: a sidebar of categories, one page each. Changes apply as you make
+// them and are saved after a short pause; a toast offers Undo for the last
+// batch. Rows whose value differs from the default show a dot and a Reset link.
 public sealed partial class SettingsPage : Page
 {
     private static readonly (PenButtonAction Value, string Label)[] ButtonActions =
@@ -78,29 +82,60 @@ public sealed partial class SettingsPage : Page
         ("AddPage",     "Add blank page",""),
     };
 
+    private static readonly (string Title, string[] Keys)[] Shortcuts =
+    {
+        ("Undo",                     new[] { "Ctrl", "Z" }),
+        ("Redo",                     new[] { "Ctrl", "Y" }),
+        ("Save",                     new[] { "Ctrl", "S" }),
+        ("Find in document",         new[] { "Ctrl", "F" }),
+        ("Copy selected text",       new[] { "Ctrl", "C" }),
+        ("Paste image",              new[] { "Ctrl", "V" }),
+        ("Duplicate selection",      new[] { "Ctrl", "D" }),
+        ("Delete selection",         new[] { "Delete" }),
+        ("Clear selection",          new[] { "Esc" }),
+        ("Pan the page",             new[] { "Middle mouse button" }),
+        ("Switch tool while held",   new[] { "Pen barrel button" }),
+    };
+
     private readonly ObservableCollection<ToolEntry> _drawingTools = new();
     private readonly ObservableCollection<ToolEntry> _actionTools = new();
 
     private readonly StringBuilder _log = new();
     private readonly HashSet<uint> _activeTouchIds = new();
-    private bool _settingsDirty;
-    private bool _settingsLoading;
+    private bool _loading;
+
+    // Category that was open last time, so Settings reopens where you left it.
+    private static string s_category = "pen";
 
     public SettingsPage()
     {
         InitializeComponent();
-        BackBtn.Click += async (_, __) => { if (await ConfirmLeaveSettingsAsync()) GoBack(); };
-        SaveBtn.Click += (_, __) => Save();
-        DiscardBtn.Click += (_, __) => { RestoreColorSnapshot(); LoadIntoUi(); };
-        SettingsSearch.TextChanged += (_, __) => ApplySearch(SettingsSearch.Text);
-        TileGrid.SizeChanged += (_, e) => LayoutTiles(e.NewSize.Width);
-        RootScroller.SizeChanged += (_, e) => FitContentWidth(e.NewSize.Width);
-        foreach (var (key, ex) in Sections())
+        BuildShortcutRows();
+        BuildCurvePresets();
+        CollectRows();
+
+        _commitTimer = DispatcherQueue.CreateTimer();
+        _commitTimer.Interval = TimeSpan.FromMilliseconds(600);
+        _commitTimer.IsRepeating = false;
+        _commitTimer.Tick += (_, _) => Commit();
+        _toastTimer = DispatcherQueue.CreateTimer();
+        _toastTimer.Interval = TimeSpan.FromSeconds(6);
+        _toastTimer.IsRepeating = false;
+        _toastTimer.Tick += (_, _) => HideToast();
+
+        BackBtn.Click += (_, _) => { Commit(); MainWindow.GoBack(); };
+        UndoBtn.Click += (_, _) => UndoLast();
+        Unloaded += (_, _) => Commit();
+
+        SettingsSearch.TextChanged += (_, _) => ApplySearch();
+        NavList.SelectionChanged += (_, _) =>
         {
-            ex.IsExpanded = s_openSections.Contains(key);
-            ex.Expanding += (_, _) => s_openSections.Add(key);
-            ex.Collapsed += (_, _) => s_openSections.Remove(key);
-        }
+            if (NavList.SelectedItem is ListViewItem { Tag: string key }) ShowCategory(key);
+        };
+        UpdateChip.Click += (_, _) => SelectCategory("updates");
+        RootScroller.SizeChanged += (_, e) => FitContentWidth(e.NewSize.Width);
+        SizeChanged += (_, e) => FitSidebar(e.NewSize.Width);
+
         var findKey = new KeyboardAccelerator
         {
             Key = Windows.System.VirtualKey.F,
@@ -109,20 +144,27 @@ public sealed partial class SettingsPage : Page
         findKey.Invoked += (_, e) => { SettingsSearch.Focus(FocusState.Keyboard); e.Handled = true; };
         KeyboardAccelerators.Add(findKey);
         KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
-        PickFolderBtn.Click += async (_, __) => await PickFolder();
-        ShowLogsBtn.Click += async (_, __) => await ShowLogs();
-        ExportDebugBtn.Click += async (_, __) => await ExportDebug();
-        CrashLogBtn.Click += async (_, __) => await ShowCrashLog();
 
-        // Stylus & pen input live bindings
-        MinPressureSlider.ValueChanged += (_, e) => MinPressureLabel.Text = $"{e.NewValue:0.00}";
-        PressureMultSlider.ValueChanged += (_, e) => PressureMultLabel.Text = $"{e.NewValue:0.00}";
+        PickFolderBtn.Click += async (_, _) => await PickFolder();
+        ShowLogsBtn.Click += async (_, _) => await ShowLogs();
+        ExportDebugBtn.Click += async (_, _) => await ExportDebug();
+        CrashLogBtn.Click += async (_, _) => await ShowCrashLog();
 
-        // Pressure preview sandbox
-        PressureSandbox.PointerPressed += OnPressureSandbox;
-        PressureSandbox.PointerMoved += OnPressureSandbox;
-        PressureSandbox.PointerReleased += OnPressureSandbox;
-        PressureClearBtn.Click += (_, __) => { PressureCanvas.Children.Clear(); PressureHint.Visibility = Visibility.Visible; };
+        // Pressure test area
+        PressureSandbox.PointerPressed += (_, e) => { BeginSuppress(e.Pointer.PointerId); PressureSandbox.CapturePointer(e.Pointer); OnPressureSandbox(e); };
+        PressureSandbox.PointerMoved += (_, e) => OnPressureSandbox(e);
+        PressureSandbox.PointerReleased += (_, e) => { EndSuppress(e.Pointer.PointerId); OnPressureSandbox(e); };
+        PressureSandbox.PointerCaptureLost += (_, e) => EndSuppress(e.Pointer.PointerId);
+        PressureClearBtn.Click += (_, _) =>
+        {
+            PressureCanvas.Children.Clear();
+            PressureHint.Visibility = Visibility.Visible;
+            PressureReadout.Text = "";
+            CurveEditor.HideLive();
+        };
+        CurveEditor.AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) => BeginSuppress(e.Pointer.PointerId)), true);
+        CurveEditor.AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => EndSuppress(e.Pointer.PointerId)), true);
+        CurveEditor.AddHandler(PointerCaptureLostEvent, new PointerEventHandler((_, e) => EndSuppress(e.Pointer.PointerId)), true);
 
         // Diagnostics sandbox
         Sandbox.PointerEntered += OnSandbox;
@@ -133,28 +175,837 @@ public sealed partial class SettingsPage : Page
         Sandbox.PointerCaptureLost += OnSandboxEnded;
         Sandbox.PointerExited += OnSandboxEnded;
 
-        // The outer ScrollViewer's DirectManipulation grabs pen/touch input for pan/zoom
-        // before the inner sandboxes can capture it. We suppress scroll/zoom on the
-        // RootScroller while any pen is pressed (anywhere on the page) or any pointer
-        // is pressed inside a sandbox, so the second finger isn't stolen for pinch-zoom.
+        // The ScrollViewer's DirectManipulation grabs pen/touch input for pan/zoom
+        // before the test areas can capture it, so scrolling is suspended while a
+        // pen is down anywhere on the page or a pointer is down in a test area.
         AddHandler(PointerPressedEvent, new PointerEventHandler(OnPagePointerPressed), handledEventsToo: true);
         AddHandler(PointerReleasedEvent, new PointerEventHandler(OnPagePointerEnded), handledEventsToo: true);
         AddHandler(PointerCanceledEvent, new PointerEventHandler(OnPagePointerEnded), handledEventsToo: true);
         AddHandler(PointerCaptureLostEvent, new PointerEventHandler(OnPagePointerEnded), handledEventsToo: true);
 
-        ColorToolPen.Checked += (_, __) => RebuildColorSwatches();
-        ColorToolHighlighter.Checked += (_, __) => RebuildColorSwatches();
+        WireChangeHandlers();
 
-        Loaded += (_, __) =>
+        Loaded += (_, _) =>
         {
             MainWindow.SetDragRegion(HeaderDragRegion);
             HeaderGrid.Padding = new Thickness(12, 0, 12 + MainWindow.CaptionButtonInset, 0);
-            TakeColorSnapshot();
             LoadIntoUi();
+            _committed = App.Services.Settings.Snapshot();
+            SelectCategory(s_category);
+
+            Services.UpdateService.StatusChanged -= ShowUpdateStatus;
+            Services.UpdateService.StatusChanged += ShowUpdateStatus;
+            ShowUpdateStatus();
         };
-        WireDirtyHandlers();
+        Unloaded += (_, _) => Services.UpdateService.StatusChanged -= ShowUpdateStatus;
     }
 
+    // ─── Saving, undo and reset ─────────────────────────────────────────────
+    private readonly DispatcherQueueTimer _commitTimer;
+    private readonly DispatcherQueueTimer _toastTimer;
+    private string _committed = "";   // settings as last saved
+    private string? _undoBase;        // settings before the change being made now
+    private string? _toastUndo;       // what the toast's Undo goes back to
+    private string _pendingLabel = "";
+
+    // Any control changed: copy the UI into the settings right away (the editor
+    // reads them live) and save once the user pauses.
+    private void OnChanged(object? sender)
+    {
+        if (_loading) return;
+        _undoBase ??= _committed;
+        ApplyUiToSettings();
+        _pendingLabel = DescribeChange(sender);
+        RefreshSummaries();
+        RefreshModified();
+        _commitTimer.Stop();
+        _commitTimer.Start();
+    }
+
+    private void Commit()
+    {
+        _commitTimer.Stop();
+        if (_undoBase is null) return;
+        App.Services.Settings.Save();
+        _committed = App.Services.Settings.Snapshot();
+        if (_committed != _undoBase) ShowToast(_pendingLabel, _undoBase);
+        _undoBase = null;
+    }
+
+    private void UndoLast()
+    {
+        var target = _toastUndo;
+        HideToast();
+        if (target is null) return;
+        _commitTimer.Stop();
+        _undoBase = null;
+        App.Services.Settings.Restore(target);
+        _committed = App.Services.Settings.Snapshot();
+        LoadIntoUi();
+    }
+
+    private void ResetRow(SettingRow row)
+    {
+        if (!Defaults.TryGetValue(row.SettingKey, out var def)) return;
+        _undoBase ??= _committed;
+        def.Reset(App.Services.Settings.Current);
+        LoadIntoUi();
+        _pendingLabel = $"{row.Title} reset to default";
+        Commit();
+    }
+
+    private void ShowToast(string text, string undoTo)
+    {
+        _toastUndo = undoTo;
+        ToastText.Text = text;
+        Toast.Opacity = 1;
+        Toast.IsHitTestVisible = true;
+        _toastTimer.Stop();
+        _toastTimer.Start();
+    }
+
+    private void HideToast()
+    {
+        _toastTimer.Stop();
+        _toastUndo = null;
+        Toast.Opacity = 0;
+        Toast.IsHitTestVisible = false;
+    }
+
+    // "Smoothing set to 4", "Palm rejection off", "Theme: Dark".
+    private string DescribeChange(object? sender)
+    {
+        var row = sender is DependencyObject d ? RowOf(d) : null;
+        string title = row?.Title ?? "Setting";
+        return sender switch
+        {
+            ToggleSwitch t => $"{title} {(t.IsOn ? "on" : "off")}",
+            ComboBox c => $"{title}: {(c.SelectedItem as ComboBoxItem)?.Content}",
+            Slider s => $"{title} set to {s.Value:0.##}",
+            NumberBox n when !double.IsNaN(n.Value) => $"{title} set to {n.Value:0.##}",
+            _ => $"{title} changed",
+        };
+    }
+
+    private static SettingRow? RowOf(DependencyObject d)
+    {
+        for (var cur = d; cur is not null; cur = VisualTreeHelper.GetParent(cur))
+            if (cur is SettingRow r) return r;
+        return null;
+    }
+
+    // ─── Defaults: how to compare and reset each setting ────────────────────
+    private static readonly AppSettings D = new();
+    private static readonly string DefaultFolder =
+        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "YuNotes");
+
+    private static string J(IEnumerable<string> xs) => string.Join("|", xs);
+
+    private static string ToolSig(AppSettings s, List<string> order, (string Key, string Label, string Glyph)[] defs) =>
+        J(EffectiveOrder(order, defs)) + "/" + J(defs.Select(x => x.Key).Where(s.HiddenToolbarTools.Contains));
+
+    private static void ResetTools(AppSettings s, List<string> order, (string Key, string Label, string Glyph)[] defs)
+    {
+        order.Clear();
+        s.HiddenToolbarTools.RemoveAll(k => defs.Any(x => x.Key == k));
+    }
+
+    private static readonly Dictionary<string, (Func<AppSettings, string> Sig, Action<AppSettings> Reset)> Defaults = new()
+    {
+        ["pressure"]      = (s => $"{s.PressureEnabled}", s => s.PressureEnabled = D.PressureEnabled),
+        ["curve"]         = (s => $"{s.PressureCurveX1:0.###},{s.PressureCurveY1:0.###},{s.PressureCurveX2:0.###},{s.PressureCurveY2:0.###}",
+                             s => { s.PressureCurveX1 = D.PressureCurveX1; s.PressureCurveY1 = D.PressureCurveY1;
+                                    s.PressureCurveX2 = D.PressureCurveX2; s.PressureCurveY2 = D.PressureCurveY2; }),
+        ["minpressure"]   = (s => $"{s.MinPressure:0.##}", s => s.MinPressure = D.MinPressure),
+        ["boost"]         = (s => $"{s.PressureMultiplier:0.##}", s => s.PressureMultiplier = D.PressureMultiplier),
+        ["smoothing"]     = (s => $"{s.SmoothingLevel}", s => s.SmoothingLevel = D.SmoothingLevel),
+        ["barrel"]        = (s => $"{s.BarrelButtonAction}", s => s.BarrelButtonAction = D.BarrelButtonAction),
+        ["snap"]          = (s => $"{s.HoldToSnapEnabled}", s => s.HoldToSnapEnabled = D.HoldToSnapEnabled),
+        ["palm"]          = (s => $"{s.PalmRejectionEnabled}", s => s.PalmRejectionEnabled = D.PalmRejectionEnabled),
+        ["ignoretouch"]   = (s => $"{s.IgnoreTouchWhilePenActive}", s => s.IgnoreTouchWhilePenActive = D.IgnoreTouchWhilePenActive),
+        ["grace"]         = (s => $"{s.PalmRejectionGraceMs}", s => s.PalmRejectionGraceMs = D.PalmRejectionGraceMs),
+        ["pencolors"]     = (s => J(s.PenPresetColors), s => s.PenPresetColors = new List<string>(D.PenPresetColors)),
+        ["hicolors"]      = (s => J(s.HighlighterPresetColors), s => s.HighlighterPresetColors = new List<string>(D.HighlighterPresetColors)),
+        ["penwidth"]      = (s => $"{s.DefaultPenWidth:0.##}", s => s.DefaultPenWidth = D.DefaultPenWidth),
+        ["hiwidth"]       = (s => $"{s.DefaultHighlighterWidth:0.##}", s => s.DefaultHighlighterWidth = D.DefaultHighlighterWidth),
+        ["eraserwidth"]   = (s => $"{s.DefaultEraserWidth:0.##}", s => s.DefaultEraserWidth = D.DefaultEraserWidth),
+        ["theme"]         = (s => $"{s.Theme}", s => s.Theme = D.Theme),
+        ["glass"]         = (s => $"{s.LiquidGlassEnabled}", s => s.LiquidGlassEnabled = D.LiquidGlassEnabled),
+        ["seamless"]      = (s => $"{s.SeamlessPages}", s => s.SeamlessPages = D.SeamlessPages),
+        ["zoombar"]       = (s => $"{s.HideZoomBar}", s => s.HideZoomBar = D.HideZoomBar),
+        ["tbpos"]         = (s => $"{s.ToolbarPosition}", s => { if (s.ToolbarPosition != D.ToolbarPosition) { s.ToolbarOffsetX = 0; s.ToolbarOffsetY = 0; } s.ToolbarPosition = D.ToolbarPosition; }),
+        ["tbsize"]        = (s => $"{s.ToolbarSize}", s => s.ToolbarSize = D.ToolbarSize),
+        ["drawtools"]     = (s => ToolSig(s, s.ToolbarDrawingOrder, DrawingToolDefs), s => ResetTools(s, s.ToolbarDrawingOrder, DrawingToolDefs)),
+        ["actiontools"]   = (s => ToolSig(s, s.ToolbarActionOrder, ActionToolDefs), s => ResetTools(s, s.ToolbarActionOrder, ActionToolDefs)),
+        ["export"]        = (s => $"{s.HiddenToolbarTools.Contains("Export")}", s => s.HiddenToolbarTools.Remove("Export")),
+        ["folder"]        = (s => s.DocumentsFolder, s => s.DocumentsFolder = DefaultFolder),
+        ["autosave"]      = (s => $"{s.AutosaveEnabled}", s => s.AutosaveEnabled = D.AutosaveEnabled),
+        ["autosavedelay"] = (s => $"{s.AutosaveDelaySeconds:0.##}", s => s.AutosaveDelaySeconds = D.AutosaveDelaySeconds),
+        ["autoupdate"]    = (s => $"{s.AutoUpdateEnabled}", s => s.AutoUpdateEnabled = D.AutoUpdateEnabled),
+        ["emulatetip"]    = (s => $"{s.EmulateTipOnButtonPress}", s => s.EmulateTipOnButtonPress = D.EmulateTipOnButtonPress),
+    };
+
+    private static string DefaultSig(string key) =>
+        key == "folder" ? DefaultFolder : Defaults[key].Sig(D);
+
+    private void RefreshModified()
+    {
+        var s = App.Services.Settings.Current;
+        var changedCategories = new HashSet<string>();
+        foreach (var (row, category) in _rows)
+        {
+            bool mod = Defaults.TryGetValue(row.SettingKey, out var def) && def.Sig(s) != DefaultSig(row.SettingKey);
+            row.IsModified = mod;
+            if (mod) changedCategories.Add(category);
+        }
+        foreach (var (key, dot) in NavDots())
+            dot.Visibility = changedCategories.Contains(key) ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private IEnumerable<(string, Ellipse)> NavDots() => new[]
+    {
+        ("pen", NavDotPen), ("touch", NavDotTouch), ("ink", NavDotInk), ("appearance", NavDotAppearance),
+        ("storage", NavDotStorage), ("updates", NavDotUpdates), ("diagnostics", NavDotDiagnostics),
+    };
+
+    // ─── Categories, rows and search ────────────────────────────────────────
+    private readonly List<(SettingRow Row, string Category)> _rows = new();
+
+    private IEnumerable<StackPanel> Panels() => new[]
+    {
+        PenPanel, TouchPanel, InkPanel, AppearancePanel, StoragePanel, UpdatesPanel, ShortcutsPanel, DiagnosticsPanel,
+    };
+
+    private void CollectRows()
+    {
+        foreach (var panel in Panels())
+            foreach (var row in LogicalDescendants(panel).OfType<SettingRow>())
+            {
+                _rows.Add((row, (string)panel.Tag));
+                row.ResetRequested += (s, _) => ResetRow((SettingRow)s!);
+            }
+    }
+
+    // Walks panels, borders and content controls without needing the visual
+    // tree, so rows on pages that were never shown are found too.
+    private static IEnumerable<UIElement> LogicalDescendants(UIElement root)
+    {
+        var stack = new Stack<UIElement>();
+        stack.Push(root);
+        while (stack.Count > 0)
+        {
+            var e = stack.Pop();
+            yield return e;
+            switch (e)
+            {
+                case Panel p: foreach (var c in p.Children) stack.Push(c); break;
+                case Border b when b.Child is not null: stack.Push(b.Child); break;
+                case SettingRow r: break;   // a row's own control holds no rows
+                case ContentControl cc when cc.Content is UIElement u: stack.Push(u); break;
+            }
+        }
+    }
+
+    private void SelectCategory(string key)
+    {
+        var item = NavList.Items.OfType<ListViewItem>().FirstOrDefault(i => (string)i.Tag == key)
+                   ?? NavList.Items.OfType<ListViewItem>().First();
+        if (ReferenceEquals(NavList.SelectedItem, item)) ShowCategory((string)item.Tag);
+        else NavList.SelectedItem = item;
+    }
+
+    private void ShowCategory(string key)
+    {
+        s_category = key;
+        if (SettingsSearch.Text.Length > 0) { SettingsSearch.Text = ""; return; }   // ApplySearch shows the category
+        ApplySearch();
+        RootScroller.ChangeView(null, 0, null, disableAnimation: true);
+    }
+
+    private bool _searching;
+
+    // While searching, every category shows its matching rows; otherwise only
+    // the selected category is shown, in full.
+    private void ApplySearch()
+    {
+        var terms = SettingsSearch.Text.Trim().ToLowerInvariant().Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        _searching = terms.Length > 0;
+        int shown = 0;
+
+        foreach (var panel in Panels())
+        {
+            string category = (string)panel.Tag;
+            string categoryTitle = ((panel.Children[0] as StackPanel)?.Children[0] as TextBlock)?.Text ?? "";
+            int panelShown = 0;
+            foreach (var (row, cat) in _rows.Where(r => r.Category == category))
+            {
+                var hay = $"{row.Title} {row.Description} {row.Keywords} {categoryTitle}".ToLowerInvariant();
+                bool ok = !_searching || terms.All(hay.Contains);
+                row.Visibility = ok ? Visibility.Visible : Visibility.Collapsed;
+                if (ok) panelShown++;
+            }
+            // Hide cards whose rows are all filtered out, and fix row hairlines.
+            foreach (var card in panel.Children.OfType<Border>())
+            {
+                var rows = (card.Child as Panel)?.Children.OfType<SettingRow>().ToList() ?? new();
+                bool any = rows.Any(r => r.Visibility == Visibility.Visible);
+                card.Visibility = any ? Visibility.Visible : Visibility.Collapsed;
+                bool first = true;
+                foreach (var r in rows.Where(r => r.Visibility == Visibility.Visible))
+                {
+                    r.BorderThickness = first ? new Thickness(0) : new Thickness(0, 1, 0, 0);
+                    first = false;
+                }
+            }
+            bool visible = _searching ? panelShown > 0 : category == s_category;
+            panel.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
+            if (visible) shown++;
+        }
+        NoResultsText.Visibility = shown == 0 ? Visibility.Visible : Visibility.Collapsed;
+        NavList.Opacity = _searching ? 0.5 : 1;
+    }
+
+    // ─── Layout ─────────────────────────────────────────────────────────────
+    private const double ContentMaxWidth = 760;
+
+    private void FitContentWidth(double viewport)
+    {
+        double w = Math.Max(0, viewport - RootStack.Margin.Left - RootStack.Margin.Right);
+        RootStack.Width = Math.Min(ContentMaxWidth, w);
+    }
+
+    // Narrow windows get an icon-only sidebar.
+    private void FitSidebar(double width)
+    {
+        bool narrow = width < 760;
+        NavColumn.Width = new GridLength(narrow ? 64 : 220);
+        NavLegend.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+        foreach (var item in NavList.Items.OfType<ListViewItem>())
+            if (item.Content is Grid g && g.Children.Count > 1)
+            {
+                g.Children[1].Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
+                ToolTipService.SetToolTip(item, narrow ? (g.Children[1] as TextBlock)?.Text : null);
+            }
+    }
+
+    private void BuildShortcutRows()
+    {
+        foreach (var (title, keys) in Shortcuts)
+        {
+            var caps = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 4 };
+            foreach (var k in keys)
+                caps.Children.Add(new Border
+                {
+                    Style = (Style)Resources["KeyCapStyle"],
+                    Child = new TextBlock { Text = k, FontSize = 12 },
+                });
+            ShortcutRows.Children.Add(new SettingRow
+            {
+                Title = title,
+                Keywords = "shortcut keyboard " + string.Join(" ", keys),
+                Content = caps,
+            });
+        }
+    }
+
+    private void BuildCurvePresets()
+    {
+        foreach (var p in PressureCurve.Presets)
+        {
+            var b = new Button { Content = p.Name, Padding = new Thickness(14, 4, 14, 4), CornerRadius = new CornerRadius(14), Tag = p };
+            b.Click += (_, _) =>
+            {
+                CurveEditor.SetCurve(p.X1, p.Y1, p.X2, p.Y2);
+                OnChanged(CurveEditor);
+                _pendingLabel = $"Pressure curve set to {p.Name}";
+            };
+            CurvePresetPanel.Children.Add(b);
+        }
+        CurvePresetPanel.Children.Add(new TextBlock
+        {
+            Text = "Custom curve",
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(6, 0, 0, 0),
+            Style = (Style)Resources["RowHintStyle"],
+        });
+    }
+
+    private void RefreshPresetButtons()
+    {
+        var s = App.Services.Settings.Current;
+        bool any = false;
+        foreach (var b in CurvePresetPanel.Children.OfType<Button>())
+        {
+            var p = ((string Name, double X1, double Y1, double X2, double Y2))b.Tag;
+            bool on = Math.Abs(p.X1 - s.PressureCurveX1) < 0.01 && Math.Abs(p.Y1 - s.PressureCurveY1) < 0.01
+                   && Math.Abs(p.X2 - s.PressureCurveX2) < 0.01 && Math.Abs(p.Y2 - s.PressureCurveY2) < 0.01;
+            b.Style = on ? (Style)Application.Current.Resources["AccentButtonStyle"] : null;
+            any |= on;
+        }
+        CurvePresetPanel.Children.OfType<TextBlock>().First().Visibility = any ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    // ─── Summaries and dependent rows ───────────────────────────────────────
+    private static void SetRowEnabled(SettingRow row, bool on)
+    {
+        row.IsEnabled = on;
+        row.Opacity = on ? 1 : 0.5;
+    }
+
+    private void RefreshSummaries()
+    {
+        var st = App.Services.Settings.Current;
+        bool pressure = PressureToggle.IsOn;
+        bool palm = PalmToggle.IsOn;
+        bool autosave = AutosaveToggle.IsOn;
+
+        SetRowEnabled(CurveRow, pressure);
+        SetRowEnabled(MinPressureRow, pressure);
+        SetRowEnabled(BoostRow, pressure);
+        SetRowEnabled(IgnoreTouchRow, palm);
+        SetRowEnabled(GraceRow, palm);
+        SetRowEnabled(AutosaveDelayRow, autosave);
+
+        MinPressureLabel.Text = $"{MinPressureSlider.Value:0.00}";
+        PressureMultLabel.Text = $"×{PressureMultSlider.Value:0.##}";
+        SmoothingLabel.Text = SmoothingSlider.Value == 0 ? "Off" : $"{SmoothingSlider.Value:0}";
+        RefreshPresetButtons();
+
+        var barrel = (BarrelCombo.SelectedItem as ComboBoxItem)?.Content as string ?? "";
+        PenSummary.Text = (pressure ? $"Pressure on, ×{PressureMultSlider.Value:0.##}" : "Pressure off") +
+                          $" · Smoothing {SmoothingLabel.Text.ToLowerInvariant()} · Barrel button: {barrel}";
+
+        string grace = double.IsNaN(GraceBox.Value) ? "500" : $"{GraceBox.Value:0}";
+        PalmSummary.Text = !palm ? "Palm rejection off · touch always draws"
+            : $"{(IgnoreTouchToggle.IsOn ? "Touch ignored near the pen" : "Touch allowed near the pen")} · {grace} ms grace";
+
+        InkSummary.Text = $"{st.PenPresetColors.Count} pen and {st.HighlighterPresetColors.Count} highlighter colors · " +
+                          $"pen {PenWidthBox.Value:0.#} px, highlighter {HighWidthBox.Value:0.#} px, eraser {EraserWidthBox.Value:0.#} px";
+
+        string ComboText(ComboBox c) => ((c.SelectedItem as ComboBoxItem)?.Content as string ?? "").ToLowerInvariant();
+        string theme = ThemeCombo.SelectedIndex switch { 1 => "Light", 2 => "Dark", _ => "System" };
+        int hidden = _drawingTools.Count(t => !t.IsVisible) + _actionTools.Count(t => !t.IsVisible);
+        AppearanceSummary.Text = $"{theme} theme · toolbar {ComboText(ToolbarPositionCombo)}, {ComboText(ToolbarSizeCombo)}" +
+                                 (hidden > 0 ? $" · {hidden} tool{(hidden == 1 ? "" : "s")} hidden" : "");
+
+        string delay = double.IsNaN(AutosaveDelayBox.Value) ? "2.5" : $"{AutosaveDelayBox.Value:0.#}";
+        StorageSummary.Text = $"{(autosave ? $"Autosave after {delay} s" : "Autosave off")} · {FolderBox.Text}";
+    }
+
+    // ─── Change wiring ──────────────────────────────────────────────────────
+    private void WireChangeHandlers()
+    {
+        foreach (var t in new[] { PressureToggle, HoldToSnapToggle, PalmToggle, IgnoreTouchToggle, LiquidGlassToggle,
+                                  SeamlessPagesToggle, HideZoomBarToggle, ExportToggle, AutosaveToggle, AutoUpdateToggle,
+                                  EmulateTipToggle })
+            t.Toggled += (s, _) => OnChanged(s);
+        foreach (var sl in new[] { MinPressureSlider, PressureMultSlider, SmoothingSlider })
+            sl.ValueChanged += (s, _) => OnChanged(s);
+        foreach (var nb in new[] { GraceBox, PenWidthBox, HighWidthBox, EraserWidthBox, AutosaveDelayBox })
+            nb.ValueChanged += (s, _) => OnChanged(s);
+        foreach (var cb in new[] { BarrelCombo, ThemeCombo, ToolbarPositionCombo, ToolbarSizeCombo })
+            cb.SelectionChanged += (s, _) => OnChanged(s);
+        CurveEditor.CurveChanged += (s, _) => OnChanged(s);
+
+        CheckUpdatesBtn.Click += async (_, _) => await Services.UpdateService.CheckAndInstallAsync();
+
+        void WireTools(ObservableCollection<ToolEntry> list, ListView view) =>
+            list.CollectionChanged += (_, e) =>
+            {
+                if (e.NewItems != null)
+                    foreach (ToolEntry item in e.NewItems) item.PropertyChanged += (_, _) => OnChanged(view);
+                OnChanged(view);
+            };
+        WireTools(_drawingTools, DrawingToolsList);
+        WireTools(_actionTools, ActionToolsList);
+    }
+
+    private void LoadIntoUi()
+    {
+        _loading = true;
+        try { LoadIntoUiCore(); }
+        finally { _loading = false; }
+        RefreshSummaries();
+        RefreshModified();
+        ApplySearch();
+    }
+
+    private void LoadIntoUiCore()
+    {
+        var s = App.Services.Settings.Current;
+
+        RebuildColorSwatches(PenColorsPanel, isPen: true);
+        RebuildColorSwatches(HighlighterColorsPanel, isPen: false);
+
+        PressureToggle.IsOn = s.PressureEnabled;
+        CurveEditor.SetCurve(s.PressureCurveX1, s.PressureCurveY1, s.PressureCurveX2, s.PressureCurveY2);
+        MinPressureSlider.Value = s.MinPressure;
+        PressureMultSlider.Value = s.PressureMultiplier;
+        SmoothingSlider.Value = s.SmoothingLevel;
+        BindButtonCombo(BarrelCombo, s.BarrelButtonAction);
+        HoldToSnapToggle.IsOn = s.HoldToSnapEnabled;
+        EmulateTipToggle.IsOn = s.EmulateTipOnButtonPress;
+
+        PalmToggle.IsOn = s.PalmRejectionEnabled;
+        IgnoreTouchToggle.IsOn = s.IgnoreTouchWhilePenActive;
+        GraceBox.Value = s.PalmRejectionGraceMs;
+
+        ThemeCombo.SelectedIndex = (int)s.Theme;
+        ToolbarPositionCombo.SelectedIndex = (int)s.ToolbarPosition;
+        ToolbarSizeCombo.SelectedIndex = (int)s.ToolbarSize;
+        HideZoomBarToggle.IsOn = s.HideZoomBar;
+        SeamlessPagesToggle.IsOn = s.SeamlessPages;
+        LiquidGlassToggle.IsOn = s.LiquidGlassEnabled;
+
+        var hidden = s.HiddenToolbarTools;
+        PopulateToolList(_drawingTools, DrawingToolDefs, s.ToolbarDrawingOrder, hidden);
+        PopulateToolList(_actionTools, ActionToolDefs, s.ToolbarActionOrder, hidden);
+        DrawingToolsList.ItemsSource = _drawingTools;
+        ActionToolsList.ItemsSource = _actionTools;
+        ExportToggle.IsOn = !hidden.Contains("Export");
+
+        PenWidthBox.Value = s.DefaultPenWidth;
+        HighWidthBox.Value = s.DefaultHighlighterWidth;
+        EraserWidthBox.Value = s.DefaultEraserWidth;
+        FolderBox.Text = s.DocumentsFolder;
+
+        AutosaveToggle.IsOn = s.AutosaveEnabled;
+        AutosaveDelayBox.Value = s.AutosaveDelaySeconds;
+        AutoUpdateToggle.IsOn = s.AutoUpdateEnabled;
+    }
+
+    private void ApplyUiToSettings()
+    {
+        var s = App.Services.Settings.Current;
+        s.PressureEnabled = PressureToggle.IsOn;
+        s.PressureCurveX1 = CurveEditor.X1; s.PressureCurveY1 = CurveEditor.Y1;
+        s.PressureCurveX2 = CurveEditor.X2; s.PressureCurveY2 = CurveEditor.Y2;
+        s.MinPressure = MinPressureSlider.Value;
+        s.PressureMultiplier = PressureMultSlider.Value;
+        s.SmoothingLevel = (int)Math.Round(SmoothingSlider.Value);
+        s.BarrelButtonAction = ReadCombo(BarrelCombo);
+        s.HoldToSnapEnabled = HoldToSnapToggle.IsOn;
+        s.EmulateTipOnButtonPress = EmulateTipToggle.IsOn;
+
+        s.PalmRejectionEnabled = PalmToggle.IsOn;
+        s.IgnoreTouchWhilePenActive = IgnoreTouchToggle.IsOn;
+        if (!double.IsNaN(GraceBox.Value)) s.PalmRejectionGraceMs = (int)Math.Clamp(GraceBox.Value, 0, 3000);
+
+        s.Theme = (AppThemeMode)Math.Max(0, ThemeCombo.SelectedIndex);
+        var oldToolbarPos = s.ToolbarPosition;
+        s.ToolbarPosition = (ToolbarPosition)Math.Max(0, ToolbarPositionCombo.SelectedIndex);
+        // Changing the dock edge moves the anchor, so a saved free-drag offset no
+        // longer makes sense — start the new side at its default position.
+        if (s.ToolbarPosition != oldToolbarPos) { s.ToolbarOffsetX = 0; s.ToolbarOffsetY = 0; }
+        s.ToolbarSize = (ToolbarSize)Math.Max(0, ToolbarSizeCombo.SelectedIndex);
+        s.HideZoomBar = HideZoomBarToggle.IsOn;
+        s.SeamlessPages = SeamlessPagesToggle.IsOn;
+        s.LiquidGlassEnabled = LiquidGlassToggle.IsOn;
+
+        // NumberBox yields NaN when the field is cleared; keep the old value then.
+        if (!double.IsNaN(PenWidthBox.Value)) s.DefaultPenWidth = (float)PenWidthBox.Value;
+        if (!double.IsNaN(HighWidthBox.Value)) s.DefaultHighlighterWidth = (float)HighWidthBox.Value;
+        if (!double.IsNaN(EraserWidthBox.Value)) s.DefaultEraserWidth = (float)EraserWidthBox.Value;
+        s.DocumentsFolder = FolderBox.Text;
+
+        s.AutosaveEnabled = AutosaveToggle.IsOn;
+        if (!double.IsNaN(AutosaveDelayBox.Value)) s.AutosaveDelaySeconds = Math.Clamp(AutosaveDelayBox.Value, 0.5, 120);
+        s.AutoUpdateEnabled = AutoUpdateToggle.IsOn;
+
+        s.HiddenToolbarTools.Clear();
+        s.ToolbarDrawingOrder.Clear();
+        s.ToolbarActionOrder.Clear();
+        foreach (var item in _drawingTools)
+        {
+            s.ToolbarDrawingOrder.Add(item.Key);
+            if (!item.IsVisible) s.HiddenToolbarTools.Add(item.Key);
+        }
+        foreach (var item in _actionTools)
+        {
+            s.ToolbarActionOrder.Add(item.Key);
+            if (!item.IsVisible) s.HiddenToolbarTools.Add(item.Key);
+        }
+        if (!ExportToggle.IsOn) s.HiddenToolbarTools.Add("Export");
+    }
+
+    // ─── Updates ────────────────────────────────────────────────────────────
+    // Ring shows the current step's progress; the four-step track shows where
+    // in Check → Download → Prepare → Ready the update is. The header chip
+    // shows the same state in a few words.
+    private void ShowUpdateStatus()
+    {
+        var state = Services.UpdateService.Current;
+        var avail = Services.UpdateService.AvailableVersion;
+        var installed = Services.UpdateService.InstalledVersion;
+        double p = Services.UpdateService.Progress;
+        var res = Application.Current.Resources;
+        var accent = (Brush)res["AppAccentBrush"];
+        var ok = (Brush)res["AppSuccessBrush"];
+        var muted = (Brush)res["AppTextSecondaryBrush"];
+        var primary = (Brush)res["AppTextPrimaryBrush"];
+
+        bool busy = state is Services.UpdateService.State.Checking
+                          or Services.UpdateService.State.Downloading
+                          or Services.UpdateService.State.Staging;
+        bool good = state is Services.UpdateService.State.Ready or Services.UpdateService.State.UpToDate;
+
+        UpdateStatusText.Text = state == Services.UpdateService.State.Idle
+            ? "YuNotes checks GitHub for a newer version when it starts."
+            : Services.UpdateService.StatusText;
+        UpdateTitleText.Text = state switch
+        {
+            Services.UpdateService.State.Downloading or Services.UpdateService.State.Staging
+                when avail is not null => $"Updating to YuNotes {Short(avail)}",
+            Services.UpdateService.State.Ready when avail is not null => $"YuNotes {Short(avail)} is ready",
+            Services.UpdateService.State.UpToDate => "You're up to date",
+            Services.UpdateService.State.Failed => "Update check failed",
+            _ => "Updates",
+        };
+
+        bool determinate = state is Services.UpdateService.State.Downloading or Services.UpdateService.State.Staging;
+        UpdateRing.IsIndeterminate = state == Services.UpdateService.State.Checking;
+        UpdateRing.Value = determinate ? p : good ? 100 : 0;
+        UpdateRing.Foreground = good ? ok : accent;
+        UpdatePercentText.Text = $"{Math.Round(p)}%";
+        UpdatePercentText.Visibility = determinate ? Visibility.Visible : Visibility.Collapsed;
+        UpdateStateIcon.Visibility = determinate || state == Services.UpdateService.State.Checking
+            ? Visibility.Collapsed : Visibility.Visible;
+        string glyph = good ? "" : state == Services.UpdateService.State.Failed ? "" : "";
+        UpdateStateIcon.Glyph = glyph;
+        UpdateStateIcon.Foreground = good ? ok : state == Services.UpdateService.State.Failed ? muted : accent;
+
+        int step = state switch
+        {
+            Services.UpdateService.State.Checking => 0,
+            Services.UpdateService.State.Downloading => 1,
+            Services.UpdateService.State.Staging => 2,
+            Services.UpdateService.State.Ready => 4,
+            _ => -1,
+        };
+        UpdateSteps.Visibility = step >= 0 ? Visibility.Visible : Visibility.Collapsed;
+        var bars = new[] { StepCheckBar, StepDownloadBar, StepStageBar, StepReadyBar };
+        var labels = new[] { StepCheckLabel, StepDownloadLabel, StepStageLabel, StepReadyLabel };
+        for (int i = 0; i < bars.Length; i++)
+        {
+            bool done = i < step || step == 4;
+            bool cur = i == step;
+            bars[i].IsIndeterminate = cur && state == Services.UpdateService.State.Checking;
+            bars[i].Value = done ? 100 : cur ? p : 0;
+            bars[i].Foreground = step == 4 ? ok : accent;
+            labels[i].Foreground = done || cur ? primary : muted;
+            labels[i].FontWeight = cur ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal;
+        }
+
+        if (state == Services.UpdateService.State.Downloading)
+        {
+            const double MB = 1024 * 1024;
+            double got = Services.UpdateService.BytesReceived / MB;
+            double rate = Services.UpdateService.BytesPerSecond / MB;
+            var parts = new List<string>();
+            parts.Add(Services.UpdateService.BytesTotal is { } total
+                ? $"{got:0.0} / {total / MB:0.0} MB" : $"{got:0.0} MB");
+            if (rate > 0.01) parts.Add($"{rate:0.0} MB/s");
+            if (rate > 0.01 && Services.UpdateService.BytesTotal is { } t2)
+                parts.Add($"{Math.Max(0, Math.Ceiling((t2 / MB - got) / rate))} s left");
+            UpdateMetaText.Text = string.Join("  ·  ", parts);
+            UpdateMetaText.Visibility = Visibility.Visible;
+        }
+        else UpdateMetaText.Visibility = Visibility.Collapsed;
+
+        CheckUpdatesBtn.IsEnabled = Services.UpdateService.IsSupported && !busy
+                                    && state != Services.UpdateService.State.Ready;
+        string checkedText = Services.UpdateService.LastChecked is { } at ? $" · checked {Ago(at)}" : "";
+        AppVersionText.Text = installed is null ? "Development build"
+            : Services.UpdateService.IsSupported ? $"Installed version {Short(installed)}{checkedText}"
+            : $"Installed version {Short(installed)} · updates come from the Microsoft Store";
+        CheckUpdatesBtn.Visibility = state == Services.UpdateService.State.Ready ? Visibility.Collapsed : Visibility.Visible;
+        CheckUpdatesBtn.Content = state == Services.UpdateService.State.Failed ? "Try again" : "Check for updates";
+
+        UpdateChipText.Text = state switch
+        {
+            Services.UpdateService.State.Checking => "Checking…",
+            Services.UpdateService.State.Downloading => $"Downloading {Math.Round(p)}%",
+            Services.UpdateService.State.Staging => "Preparing update",
+            Services.UpdateService.State.Ready => "Update ready",
+            Services.UpdateService.State.UpToDate => "Up to date",
+            Services.UpdateService.State.Failed => "Update failed",
+            _ => "Updates",
+        };
+        UpdateChipIcon.Glyph = glyph;
+        UpdateChipIcon.Foreground = good ? ok : state == Services.UpdateService.State.Failed ? muted : accent;
+        NavDotUpdates.Visibility = state == Services.UpdateService.State.Ready || RowIsModified("autoupdate")
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private bool RowIsModified(string key) => _rows.Any(r => r.Row.SettingKey == key && r.Row.IsModified);
+
+    private static string Short(Version v) => $"{v.Major}.{v.Minor}.{v.Build}";
+
+    private static string Ago(DateTime at)
+    {
+        var d = DateTime.Now - at;
+        if (d.TotalMinutes < 1) return "just now";
+        if (d.TotalHours < 1) return $"{(int)d.TotalMinutes} min ago";
+        if (d.TotalDays < 1) return $"{(int)d.TotalHours} h ago";
+        return at.ToString("d MMM");
+    }
+
+    // ─── Toolbar tool lists ─────────────────────────────────────────────────
+    // Saved order first, then any keys added since that aren't in it yet.
+    private static List<string> EffectiveOrder(List<string> savedOrder, (string Key, string Label, string Glyph)[] defs) =>
+        savedOrder.Count > 0
+            ? savedOrder.Where(k => defs.Any(d => d.Key == k))
+                        .Concat(defs.Select(d => d.Key).Where(k => !savedOrder.Contains(k)))
+                        .ToList()
+            : defs.Select(d => d.Key).ToList();
+
+    private static void PopulateToolList(
+        ObservableCollection<ToolEntry> collection,
+        (string Key, string Label, string Glyph)[] defs,
+        List<string> savedOrder,
+        List<string> hidden)
+    {
+        collection.Clear();
+        foreach (var key in EffectiveOrder(savedOrder, defs))
+        {
+            var def = defs.FirstOrDefault(d => d.Key == key);
+            if (def == default) continue;
+            collection.Add(new ToolEntry(def.Key, def.Label, def.Glyph, !hidden.Contains(def.Key)));
+        }
+    }
+
+    private static void BindButtonCombo(ComboBox combo, PenButtonAction selected)
+    {
+        combo.Items.Clear();
+        foreach (var (val, label) in ButtonActions)
+            combo.Items.Add(new ComboBoxItem { Content = label, Tag = val });
+        combo.SelectedIndex = 0;
+        for (int i = 0; i < ButtonActions.Length; i++)
+            if (ButtonActions[i].Value == selected) { combo.SelectedIndex = i; break; }
+    }
+
+    private static PenButtonAction ReadCombo(ComboBox combo)
+        => combo.SelectedItem is ComboBoxItem it && it.Tag is PenButtonAction a ? a : PenButtonAction.None;
+
+    // ─── Preset colors ──────────────────────────────────────────────────────
+    // Edits change the settings lists directly; OnChanged then saves them and
+    // offers Undo like any other change.
+    private void RebuildColorSwatches(StackPanel panel, bool isPen)
+    {
+        var s = App.Services.Settings.Current;
+        var list = isPen ? s.PenPresetColors : s.HighlighterPresetColors;
+        var res = Application.Current.Resources;
+        panel.Children.Clear();
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            int idx = i;
+            var cell = new Grid { Width = 44, Height = 44 };
+            var circle = new Button
+            {
+                Width = 36, Height = 36,
+                CornerRadius = new CornerRadius(18),
+                Padding = new Thickness(0),
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center,
+                Background = new SolidColorBrush(ColorPickerControl.ParseHex(list[i])),
+                BorderThickness = new Thickness(1.5),
+                BorderBrush = (Brush)res["AppBorderBrush"]
+            };
+            ToolTipService.SetToolTip(circle, "Edit color");
+            circle.Click += async (_, _) =>
+            {
+                var picker = new Microsoft.UI.Xaml.Controls.ColorPicker
+                {
+                    IsAlphaEnabled = !isPen,
+                    Color = ColorPickerControl.ParseHex(list[idx])
+                };
+                var dlg = new ContentDialog
+                {
+                    Title = "Edit color", Content = picker,
+                    PrimaryButtonText = "OK", CloseButtonText = "Cancel",
+                    XamlRoot = XamlRoot
+                };
+                if (await dlg.ShowAsync() == ContentDialogResult.Primary)
+                {
+                    list[idx] = ColorPickerControl.ToHex(picker.Color);
+                    RebuildColorSwatches(panel, isPen);
+                    OnChanged(panel);
+                }
+            };
+
+            var del = new Button
+            {
+                Width = 16, Height = 16,
+                Padding = new Thickness(0),
+                CornerRadius = new CornerRadius(8),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Background = (Brush)res["AppSurfaceBrush"],
+                BorderBrush = (Brush)res["AppBorderBrush"],
+                BorderThickness = new Thickness(1),
+                Content = new FontIcon { Glyph = "", FontSize = 8 }
+            };
+            ToolTipService.SetToolTip(del, "Remove color");
+            del.Click += (_, _) =>
+            {
+                list.RemoveAt(idx);
+                RebuildColorSwatches(panel, isPen);
+                OnChanged(panel);
+            };
+
+            cell.Children.Add(circle);
+            cell.Children.Add(del);
+            panel.Children.Add(cell);
+        }
+
+        var addBtn = new Button
+        {
+            Width = 36, Height = 36,
+            CornerRadius = new CornerRadius(18),
+            Padding = new Thickness(0),
+            Background = (Brush)res["AppSurfaceVariantBrush"],
+            BorderThickness = new Thickness(1),
+            BorderBrush = (Brush)res["AppBorderBrush"],
+            Content = new FontIcon { Glyph = "", FontSize = 14 },
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        ToolTipService.SetToolTip(addBtn, "Add color");
+        addBtn.Click += async (_, _) =>
+        {
+            var picker = new Microsoft.UI.Xaml.Controls.ColorPicker
+            {
+                IsAlphaEnabled = !isPen,
+                Color = isPen
+                    ? Windows.UI.Color.FromArgb(255, 27, 31, 42)
+                    : Windows.UI.Color.FromArgb(128, 255, 235, 59)
+            };
+            var dlg = new ContentDialog
+            {
+                Title = "Add color", Content = picker,
+                PrimaryButtonText = "Add", CloseButtonText = "Cancel",
+                XamlRoot = XamlRoot
+            };
+            if (await dlg.ShowAsync() == ContentDialogResult.Primary)
+            {
+                list.Add(ColorPickerControl.ToHex(picker.Color));
+                RebuildColorSwatches(panel, isPen);
+                OnChanged(panel);
+            }
+        };
+        panel.Children.Add(addBtn);
+    }
+
+    private async System.Threading.Tasks.Task PickFolder()
+    {
+        var p = new FolderPicker();
+        p.FileTypeFilter.Add("*");
+        WinRT.Interop.InitializeWithWindow.Initialize(p, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
+        var f = await p.PickSingleFolderAsync();
+        if (f is not null && f.Path != FolderBox.Text) { FolderBox.Text = f.Path; OnChanged(FolderBox); }
+    }
+
+    // ─── Scroll suppression for the test areas ──────────────────────────────
     private readonly HashSet<uint> _suppressPointers = new();
     private bool _suppressing;
     private ScrollMode _savedHScroll;
@@ -194,10 +1045,61 @@ public sealed partial class SettingsPage : Page
         if (e.Pointer.PointerDeviceType == PointerDeviceType.Pen) EndSuppress(e.Pointer.PointerId);
     }
 
+    // ─── Pressure test area ─────────────────────────────────────────────────
+    // Runs each sample through the same mapping as the editor, draws a circle
+    // sized to the result, and moves the live dot on the curve editor.
+    private void OnPressureSandbox(PointerRoutedEventArgs e)
+    {
+        var pt = e.GetCurrentPoint(PressureSandbox);
+        if (!pt.IsInContact) return;
+
+        var s = App.Services.Settings.Current;
+        float raw = pt.Properties.Pressure;
+        if (raw <= 0) raw = 0.5f;
+        bool isPen = e.Pointer.PointerDeviceType == PointerDeviceType.Pen;
+
+        float pressure;
+        if (isPen && s.PressureEnabled)
+        {
+            if (!PressureCurve.TryMap(raw, s, out float input, out pressure))
+            {
+                PressureReadout.Text = $"{raw:0.00} · ignored (too light)";
+                return;
+            }
+            CurveEditor.ShowLive(input);
+            PressureReadout.Text = $"pen {raw:0.00} → width {pressure:0.00}";
+        }
+        else
+        {
+            pressure = isPen ? raw : 0.6f;
+            PressureReadout.Text = isPen ? "Pressure is off" : "Use a pen to test pressure";
+        }
+
+        var radius = 3 + pressure * 16;
+        byte a = (byte)(80 + pressure * 175);
+        var accent = ((SolidColorBrush)Application.Current.Resources["AppAccentBrush"]).Color;
+        var dot = new Ellipse
+        {
+            Width = radius * 2,
+            Height = radius * 2,
+            Fill = new SolidColorBrush(Windows.UI.Color.FromArgb(a, accent.R, accent.G, accent.B)),
+            IsHitTestVisible = false
+        };
+        Canvas.SetLeft(dot, pt.Position.X - radius);
+        Canvas.SetTop(dot, pt.Position.Y - radius);
+        PressureCanvas.Children.Add(dot);
+        PressureHint.Visibility = Visibility.Collapsed;
+
+        const int max = 1500;
+        while (PressureCanvas.Children.Count > max)
+            PressureCanvas.Children.RemoveAt(0);
+    }
+
+    // ─── Diagnostics ────────────────────────────────────────────────────────
     private void OnSandboxPressed(object sender, PointerRoutedEventArgs e)
     {
-        // Disable outer-page pan/zoom BEFORE handing off so a second finger isn't
-        // stolen by DirectManipulation for pinch-zoom.
+        // Disable outer-page pan/zoom before capturing so a second finger isn't
+        // taken by DirectManipulation for pinch-zoom.
         BeginSuppress(e.Pointer.PointerId);
         Sandbox.CapturePointer(e.Pointer);
         TrackTouch(e, contact: true);
@@ -211,663 +1113,16 @@ public sealed partial class SettingsPage : Page
         OnSandbox(sender, e);
     }
 
-    private void Mark(object? s = null, object? e = null)
-    {
-        if (_settingsLoading) return;
-        _settingsDirty = true;
-        UpdateSaveBar();
-        RefreshSummaries();
-    }
-
-    private void UpdateSaveBar() =>
-        SaveBar.Visibility = _settingsDirty ? Visibility.Visible : Visibility.Collapsed;
-
-    // ─── Layout helpers ─────────────────────────────────────────────────────
-    private const double ContentMaxWidth = 920;
-
-    // Centered column up to 920 px wide. Set explicitly because a Stretch panel
-    // with MaxWidth inside the ScrollViewer doesn't center, and a Center panel
-    // would shrink to its content (squashing the star-sized tile columns).
-    private void FitContentWidth(double viewport)
-    {
-        double w = Math.Max(0, viewport - RootScroller.Padding.Left - RootScroller.Padding.Right);
-        RootStack.Width = Math.Min(ContentMaxWidth, w);
-        SaveBarContent.Width = Math.Min(ContentMaxWidth, Math.Max(0, viewport - 64));
-    }
-
-    // Sections that were open stay open the next time Settings is shown.
-    private static readonly HashSet<string> s_openSections = new();
-
-    private IEnumerable<(string Key, Expander Section)> Sections() => new[]
-    {
-        ("pen", PenSection), ("palm", PalmSection), ("ink", InkSection),
-        ("appearance", AppearanceSection), ("storage", StorageSection), ("advanced", AdvancedSection),
-    };
-
-    // ─── Live summaries ─────────────────────────────────────────────────────
-    // Section subtitles and tile captions describe the current values, so most
-    // settings can be read without expanding anything. Dependent controls are
-    // disabled while the switch they depend on is off.
-    private void RefreshSummaries()
-    {
-        bool pressure = PressureEnabledBox.IsChecked == true;
-        bool palm = PalmToggle.IsChecked == true;
-        bool autosave = AutosaveToggle.IsChecked == true;
-
-        MinPressureSlider.IsEnabled = pressure;
-        PressureMultSlider.IsEnabled = pressure;
-        IgnoreTouchToggle.IsEnabled = palm;
-        GraceBox.IsEnabled = palm;
-        AutosaveDelayBox.IsEnabled = autosave;
-
-        string grace = double.IsNaN(GraceBox.Value) ? "500" : $"{GraceBox.Value:0}";
-        string delay = double.IsNaN(AutosaveDelayBox.Value) ? "2.5" : $"{AutosaveDelayBox.Value:0.#}";
-
-        PressureEnabledBox.Caption = pressure ? $"On · ×{PressureMultSlider.Value:0.##}" : "Off";
-        PalmToggle.Caption         = palm ? $"On · {grace} ms" : "Off";
-        HoldToSnapToggle.Caption   = HoldToSnapToggle.IsChecked == true ? "On · 750 ms hold" : "Off";
-        AutosaveToggle.Caption     = autosave ? $"On · after {delay} s" : "Off";
-        AutoUpdateToggle.Caption   = AutoUpdateToggle.IsChecked == true ? "On · installs on close" : "Off";
-        LiquidGlassBox.Caption     = LiquidGlassBox.IsChecked == true ? "On" : "Off · plain acrylic";
-        SeamlessPagesBox.Caption   = SeamlessPagesBox.IsChecked == true ? "On · no page gaps" : "Off";
-        HideZoomBarBox.Caption     = HideZoomBarBox.IsChecked == true ? "Hidden" : "Off · zoom bar shown";
-
-        var barrel = (BarrelCombo.SelectedItem as ComboBoxItem)?.Content as string ?? "";
-        PenSummary.Text = pressure
-            ? $"Pressure from {MinPressureSlider.Value:0.00}, ×{PressureMultSlider.Value:0.##} · Barrel button: {barrel}"
-            : $"Pressure off · Barrel button: {barrel}";
-
-        PalmSummary.Text = !palm ? "Off · touch always draws"
-            : $"{(IgnoreTouchToggle.IsOn ? "Touch ignored near the pen" : "Touch allowed near the pen")} · {grace} ms grace";
-
-        var st = App.Services.Settings.Current;
-        InkSummary.Text = $"{st.PenPresetColors.Count} pen and {st.HighlighterPresetColors.Count} highlighter colors · " +
-                          $"pen {PenWidthBox.Value:0.#} px, highlighter {HighWidthBox.Value:0.#} px, eraser {EraserWidthBox.Value:0.#} px";
-
-        string ComboText(ComboBox c) => ((c.SelectedItem as ComboBoxItem)?.Content as string ?? "").ToLowerInvariant();
-        string theme = ThemeCombo.SelectedIndex switch { 1 => "Light", 2 => "Dark", _ => "System" };
-        int hidden = _drawingTools.Count(t => !t.IsVisible) + _actionTools.Count(t => !t.IsVisible);
-        AppearanceSummary.Text = $"{theme} theme · toolbar {ComboText(ToolbarPositionCombo)}, {ComboText(ToolbarSizeCombo)}" +
-                                 (hidden > 0 ? $" · {hidden} tool{(hidden == 1 ? "" : "s")} hidden" : "");
-
-        StorageSummary.Text = $"{(autosave ? $"Autosave after {delay} s" : "Autosave off")} · {FolderBox.Text}";
-    }
-
-    // Preset-color edits change the settings lists in place, so keep a copy to
-    // put back when the user discards.
-    private List<string> _penColorsSnapshot = new();
-    private List<string> _highlighterColorsSnapshot = new();
-
-    private void TakeColorSnapshot()
-    {
-        var s = App.Services.Settings.Current;
-        _penColorsSnapshot = new List<string>(s.PenPresetColors);
-        _highlighterColorsSnapshot = new List<string>(s.HighlighterPresetColors);
-    }
-
-    private void RestoreColorSnapshot()
-    {
-        var s = App.Services.Settings.Current;
-        s.PenPresetColors.Clear(); s.PenPresetColors.AddRange(_penColorsSnapshot);
-        s.HighlighterPresetColors.Clear(); s.HighlighterPresetColors.AddRange(_highlighterColorsSnapshot);
-    }
-
-    // ─── Quick tiles: 4 per row, 2 when the window is narrow ────────────────
-    private int _tileColumns;
-    private int _tileCount;
-
-    private void LayoutTiles(double width)
-    {
-        int cols = width < 560 ? 2 : 4;
-        var visible = TileGrid.Children.Where(c => c.Visibility == Visibility.Visible).ToList();
-        if (cols == _tileColumns && visible.Count == _tileCount) return;
-        _tileColumns = cols;
-        _tileCount = visible.Count;
-        TileGrid.ColumnDefinitions.Clear();
-        TileGrid.RowDefinitions.Clear();
-        for (int c = 0; c < cols; c++) TileGrid.ColumnDefinitions.Add(new ColumnDefinition());
-        for (int r = 0; r < (visible.Count + cols - 1) / cols; r++)
-            TileGrid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
-        for (int i = 0; i < visible.Count; i++)
-        {
-            Grid.SetColumn((FrameworkElement)visible[i], i % cols);
-            Grid.SetRow((FrameworkElement)visible[i], i / cols);
-        }
-    }
-
-    // ─── Search ─────────────────────────────────────────────────────────────
-    // Filters tiles by their label and tooltip, the Updates card by a few
-    // keywords, and each section by its Tag keywords plus header text.
-    // Matching sections expand so the hit is visible.
-    private void ApplySearch(string? query)
-    {
-        var terms = (query ?? "").Trim().ToLowerInvariant()
-            .Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        bool Match(string haystack) => terms.All(t => haystack.Contains(t));
-        bool searching = terms.Length > 0;
-        int shown = 0;
-
-        foreach (var tile in TileGrid.Children.OfType<ToggleButton>())
-        {
-            var text = (TileLabel(tile) + " " + ToolTipService.GetToolTip(tile)).ToLowerInvariant();
-            bool ok = !searching || Match(text);
-            tile.Visibility = ok ? Visibility.Visible : Visibility.Collapsed;
-            if (ok) shown++;
-        }
-        TileGrid.Visibility = TileGrid.Children.Any(c => c.Visibility == Visibility.Visible)
-            ? Visibility.Visible : Visibility.Collapsed;
-        LayoutTiles(RootStack.ActualWidth);
-
-        bool updOk = !searching || Match("updates update version download install automatically check");
-        UpdatesCard.Visibility = updOk ? Visibility.Visible : Visibility.Collapsed;
-        if (updOk) shown++;
-
-        foreach (var ex in new[] { PenSection, PalmSection, InkSection, AppearanceSection, StorageSection, AdvancedSection })
-        {
-            var text = ((ex.Tag as string ?? "") + " " + HeaderText(ex)).ToLowerInvariant();
-            bool ok = !searching || Match(text);
-            ex.Visibility = ok ? Visibility.Visible : Visibility.Collapsed;
-            if (searching && ok) ex.IsExpanded = true;
-            if (ok) shown++;
-        }
-        NoResultsText.Visibility = shown == 0 ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private static string TileLabel(ToggleButton tile) => tile.Content as string ?? "";
-
-    private static string HeaderText(Expander ex) =>
-        ex.Header is Panel p
-            ? string.Join(" ", p.Children.OfType<Panel>().SelectMany(c => c.Children.OfType<TextBlock>()).Select(t => t.Text))
-            : "";
-
-    private void WireDirtyHandlers()
-    {
-        PressureEnabledBox.Checked += Mark; PressureEnabledBox.Unchecked += Mark;
-        EmulateTipBox.Checked += Mark; EmulateTipBox.Unchecked += Mark;
-
-        MinPressureSlider.ValueChanged += (s, e) => Mark();
-        PressureMultSlider.ValueChanged += (s, e) => Mark();
-        GraceBox.ValueChanged += (s, e) => Mark();
-        PenWidthBox.ValueChanged += (s, e) => Mark();
-        HighWidthBox.ValueChanged += (s, e) => Mark();
-        EraserWidthBox.ValueChanged += (s, e) => Mark();
-
-        BarrelCombo.SelectionChanged += Mark;
-        ThemeCombo.SelectionChanged += Mark;
-        ToolbarPositionCombo.SelectionChanged += Mark;
-        ToolbarSizeCombo.SelectionChanged += Mark;
-        HideZoomBarBox.Checked += Mark; HideZoomBarBox.Unchecked += Mark;
-        SeamlessPagesBox.Checked += Mark; SeamlessPagesBox.Unchecked += Mark;
-        LiquidGlassBox.Checked += Mark; LiquidGlassBox.Unchecked += Mark;
-
-        PalmToggle.Checked += Mark; PalmToggle.Unchecked += Mark;
-        IgnoreTouchToggle.Toggled += Mark;
-        HoldToSnapToggle.Checked += Mark; HoldToSnapToggle.Unchecked += Mark;
-
-        AutosaveToggle.Checked += Mark; AutosaveToggle.Unchecked += Mark;
-        AutosaveToggle.Checked   += (_, _) => AutosaveDelayBox.IsEnabled = true;
-        AutosaveToggle.Unchecked += (_, _) => AutosaveDelayBox.IsEnabled = false;
-        AutosaveDelayBox.ValueChanged += (_, _) => Mark();
-
-        // Updates
-        AutoUpdateToggle.Checked += Mark; AutoUpdateToggle.Unchecked += Mark;
-        CheckUpdatesBtn.Click += async (_, _) => await Services.UpdateService.CheckAndInstallAsync();
-        Loaded += (_, _) =>
-        {
-            Services.UpdateService.StatusChanged -= ShowUpdateStatus;
-            Services.UpdateService.StatusChanged += ShowUpdateStatus;
-            ShowUpdateStatus();
-        };
-        Unloaded += (_, _) => Services.UpdateService.StatusChanged -= ShowUpdateStatus;
-
-        ToolVisExport.Checked   += Mark;
-        ToolVisExport.Unchecked += Mark;
-
-        _drawingTools.CollectionChanged += (_, e) =>
-        {
-            if (e.NewItems != null)
-                foreach (ToolEntry item in e.NewItems) item.PropertyChanged += (_, _) => Mark();
-            Mark();
-        };
-        _actionTools.CollectionChanged += (_, e) =>
-        {
-            if (e.NewItems != null)
-                foreach (ToolEntry item in e.NewItems) item.PropertyChanged += (_, _) => Mark();
-            Mark();
-        };
-    }
-
-    private async System.Threading.Tasks.Task<bool> ConfirmLeaveSettingsAsync()
-    {
-        if (!_settingsDirty) return true;
-        var dlg = new ContentDialog
-        {
-            Title = "Unsaved settings",
-            Content = "Save changes to your settings before leaving?",
-            PrimaryButtonText = "Save",
-            SecondaryButtonText = "Don't save",
-            CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Primary,
-            XamlRoot = this.XamlRoot
-        };
-        var res = await dlg.ShowAsync();
-        if (res == ContentDialogResult.None) return false;
-        if (res == ContentDialogResult.Primary) { Save(); return false; }   // Save() also goes back
-        RestoreColorSnapshot();
-        return true;                                                        // Discard → proceed
-    }
-
-    private void LoadIntoUi()
-    {
-        _settingsLoading = true;
-        try { LoadIntoUiCore(); }
-        finally { _settingsLoading = false; _settingsDirty = false; UpdateSaveBar(); RefreshSummaries(); }
-    }
-
-    private void LoadIntoUiCore()
-    {
-        var s = App.Services.Settings.Current;
-
-        // Rebuild color swatches for the currently selected tool tab
-        RebuildColorSwatches();
-
-        // Stylus & pen input — pressure
-        PressureEnabledBox.IsChecked = s.PressureEnabled;
-        MinPressureSlider.Value = s.MinPressure;
-        PressureMultSlider.Value = s.PressureMultiplier;
-        MinPressureLabel.Text = $"{s.MinPressure:0.00}";
-        PressureMultLabel.Text = $"{s.PressureMultiplier:0.00}";
-
-        // Button mappings — populate dropdown with friendly labels
-        BindButtonCombo(BarrelCombo, s.BarrelButtonAction);
-        EmulateTipBox.IsChecked = s.EmulateTipOnButtonPress;
-
-        // Palm rejection
-        PalmToggle.IsChecked = s.PalmRejectionEnabled;
-        IgnoreTouchToggle.IsOn = s.IgnoreTouchWhilePenActive;
-        GraceBox.Value = s.PalmRejectionGraceMs;
-
-        // Shape recognition
-        HoldToSnapToggle.IsChecked = s.HoldToSnapEnabled;
-
-        // Appearance
-        ThemeCombo.SelectedIndex = (int)s.Theme;
-
-        // Layout
-        ToolbarPositionCombo.SelectedIndex = (int)s.ToolbarPosition;
-        ToolbarSizeCombo.SelectedIndex = (int)s.ToolbarSize;
-        HideZoomBarBox.IsChecked = s.HideZoomBar;
-        SeamlessPagesBox.IsChecked = s.SeamlessPages;
-        LiquidGlassBox.IsChecked = s.LiquidGlassEnabled;
-
-        // Toolbar tool order + visibility
-        var hidden = s.HiddenToolbarTools;
-        PopulateToolList(_drawingTools, DrawingToolDefs, s.ToolbarDrawingOrder, hidden);
-        PopulateToolList(_actionTools, ActionToolDefs, s.ToolbarActionOrder, hidden);
-        DrawingToolsList.ItemsSource = _drawingTools;
-        ActionToolsList.ItemsSource  = _actionTools;
-        ToolVisExport.IsChecked      = !hidden.Contains("Export");
-
-        // Defaults
-        PenWidthBox.Value = s.DefaultPenWidth;
-        HighWidthBox.Value = s.DefaultHighlighterWidth;
-        EraserWidthBox.Value = s.DefaultEraserWidth;
-        FolderBox.Text  = s.DocumentsFolder;
-
-        // Autosave
-        AutosaveToggle.IsChecked = s.AutosaveEnabled;
-        AutosaveDelayBox.Value = s.AutosaveDelaySeconds;
-        AutosaveDelayBox.IsEnabled = s.AutosaveEnabled;
-
-        // Updates
-        AutoUpdateToggle.IsChecked = s.AutoUpdateEnabled;
-    }
-
-    // ─── Updates card ────────────────────────────────────────────────────────
-    // Ring shows the current step's progress; the four-step track shows where
-    // in Check → Download → Prepare → Ready the update is.
-    private void ShowUpdateStatus()
-    {
-        var state = Services.UpdateService.Current;
-        var avail = Services.UpdateService.AvailableVersion;
-        var installed = Services.UpdateService.InstalledVersion;
-        double p = Services.UpdateService.Progress;
-        var res = Application.Current.Resources;
-        var accent = (Brush)res["AppAccentBrush"];
-        var ok = (Brush)res["AppSuccessBrush"];
-        var muted = (Brush)res["AppTextSecondaryBrush"];
-        var primary = (Brush)res["AppTextPrimaryBrush"];
-
-        bool busy = state is Services.UpdateService.State.Checking
-                          or Services.UpdateService.State.Downloading
-                          or Services.UpdateService.State.Staging;
-
-        UpdateStatusText.Text = state == Services.UpdateService.State.Idle
-            ? "YuNotes checks GitHub for a newer version when it starts."
-            : Services.UpdateService.StatusText;
-        UpdateTitleText.Text = state switch
-        {
-            Services.UpdateService.State.Downloading or Services.UpdateService.State.Staging
-                when avail is not null => $"Updating to YuNotes {Short(avail)}",
-            Services.UpdateService.State.Ready when avail is not null => $"YuNotes {Short(avail)} is ready",
-            Services.UpdateService.State.UpToDate => "You're up to date",
-            Services.UpdateService.State.Failed => "Update check failed",
-            _ => "Updates",
-        };
-
-        // Ring
-        bool determinate = state is Services.UpdateService.State.Downloading or Services.UpdateService.State.Staging;
-        UpdateRing.IsIndeterminate = state == Services.UpdateService.State.Checking;
-        UpdateRing.Value = determinate ? p
-            : state is Services.UpdateService.State.Ready or Services.UpdateService.State.UpToDate ? 100 : 0;
-        UpdateRing.Foreground = state is Services.UpdateService.State.Ready or Services.UpdateService.State.UpToDate ? ok : accent;
-        UpdatePercentText.Text = $"{Math.Round(p)}%";
-        UpdatePercentText.Visibility = determinate ? Visibility.Visible : Visibility.Collapsed;
-        UpdateStateIcon.Visibility = determinate || state == Services.UpdateService.State.Checking
-            ? Visibility.Collapsed : Visibility.Visible;
-        UpdateStateIcon.Glyph = state switch
-        {
-            Services.UpdateService.State.Ready or Services.UpdateService.State.UpToDate => "\uE5CA",   // check
-            Services.UpdateService.State.Failed => "\uE000",                                           // error
-            _ => "\uE923",                                                                              // update
-        };
-        UpdateStateIcon.Foreground = state switch
-        {
-            Services.UpdateService.State.Ready or Services.UpdateService.State.UpToDate => ok,
-            Services.UpdateService.State.Failed => muted,
-            _ => accent,
-        };
-
-        // Step track: only meaningful once a newer version was found (or while checking).
-        int step = state switch
-        {
-            Services.UpdateService.State.Checking => 0,
-            Services.UpdateService.State.Downloading => 1,
-            Services.UpdateService.State.Staging => 2,
-            Services.UpdateService.State.Ready => 4,
-            _ => -1,
-        };
-        UpdateSteps.Visibility = step >= 0 ? Visibility.Visible : Visibility.Collapsed;
-        var bars = new[] { StepCheckBar, StepDownloadBar, StepStageBar, StepReadyBar };
-        var labels = new[] { StepCheckLabel, StepDownloadLabel, StepStageLabel, StepReadyLabel };
-        for (int i = 0; i < bars.Length; i++)
-        {
-            bool done = i < step || step == 4;
-            bool cur = i == step;
-            bars[i].IsIndeterminate = cur && state == Services.UpdateService.State.Checking;
-            bars[i].Value = done ? 100 : cur ? p : 0;
-            bars[i].Foreground = step == 4 ? ok : accent;
-            labels[i].Foreground = done || cur ? primary : muted;
-            labels[i].FontWeight = cur ? Microsoft.UI.Text.FontWeights.SemiBold : Microsoft.UI.Text.FontWeights.Normal;
-        }
-
-        // Download readout
-        if (state == Services.UpdateService.State.Downloading)
-        {
-            const double MB = 1024 * 1024;
-            double got = Services.UpdateService.BytesReceived / MB;
-            double rate = Services.UpdateService.BytesPerSecond / MB;
-            var parts = new List<string>();
-            parts.Add(Services.UpdateService.BytesTotal is { } total
-                ? $"{got:0.0} / {total / MB:0.0} MB" : $"{got:0.0} MB");
-            if (rate > 0.01) parts.Add($"{rate:0.0} MB/s");
-            if (rate > 0.01 && Services.UpdateService.BytesTotal is { } t2)
-                parts.Add($"{Math.Max(0, Math.Ceiling((t2 / MB - got) / rate))} s left");
-            UpdateMetaText.Text = string.Join("  ·  ", parts);
-            UpdateMetaText.Visibility = Visibility.Visible;
-        }
-        else UpdateMetaText.Visibility = Visibility.Collapsed;
-
-        CheckUpdatesBtn.IsEnabled = Services.UpdateService.IsSupported && !busy
-                                    && state != Services.UpdateService.State.Ready;
-        string checkedText = Services.UpdateService.LastChecked is { } at ? $" · checked {Ago(at)}" : "";
-        AppVersionText.Text = installed is null ? "Development build"
-            : Services.UpdateService.IsSupported ? $"Installed version {Short(installed)}{checkedText}"
-            : $"Installed version {Short(installed)} · updates come from the Microsoft Store";
-        CheckUpdatesBtn.Visibility = state == Services.UpdateService.State.Ready ? Visibility.Collapsed : Visibility.Visible;
-        CheckUpdatesBtn.Content = state == Services.UpdateService.State.Failed ? "Try again" : "Check for updates";
-    }
-
-    private static string Short(Version v) => $"{v.Major}.{v.Minor}.{v.Build}";
-
-    private static string Ago(DateTime at)
-    {
-        var d = DateTime.Now - at;
-        if (d.TotalMinutes < 1) return "just now";
-        if (d.TotalHours < 1) return $"{(int)d.TotalMinutes} min ago";
-        if (d.TotalDays < 1) return $"{(int)d.TotalHours} h ago";
-        return at.ToString("d MMM");
-    }
-
-    private static void PopulateToolList(
-        ObservableCollection<ToolEntry> collection,
-        (string Key, string Label, string Glyph)[] defs,
-        List<string> savedOrder,
-        List<string> hidden)
-    {
-        collection.Clear();
-
-        // Build ordered sequence: saved order first, then any new keys not yet in the order
-        var order = savedOrder.Count > 0
-            ? savedOrder.Where(k => defs.Any(d => d.Key == k))
-                        .Concat(defs.Select(d => d.Key).Where(k => !savedOrder.Contains(k)))
-                        .ToList()
-            : defs.Select(d => d.Key).ToList();
-
-        foreach (var key in order)
-        {
-            var def = defs.FirstOrDefault(d => d.Key == key);
-            if (def == default) continue;
-            collection.Add(new ToolEntry(def.Key, def.Label, def.Glyph, !hidden.Contains(def.Key)));
-        }
-    }
-
-    private static void BindButtonCombo(ComboBox combo, PenButtonAction selected)
-    {
-        combo.Items.Clear();
-        foreach (var (val, label) in ButtonActions)
-            combo.Items.Add(new ComboBoxItem { Content = label, Tag = val });
-        combo.SelectedIndex = 0;
-        for (int i = 0; i < ButtonActions.Length; i++)
-            if (ButtonActions[i].Value == selected) { combo.SelectedIndex = i; break; }
-    }
-
-    private static PenButtonAction ReadCombo(ComboBox combo)
-        => combo.SelectedItem is ComboBoxItem it && it.Tag is PenButtonAction a ? a : PenButtonAction.None;
-
-    private void RebuildColorSwatches()
-    {
-        var s = App.Services.Settings.Current;
-        bool isPen = ColorToolPen.IsChecked == true;
-        var list = isPen ? s.PenPresetColors : s.HighlighterPresetColors;
-
-        ColorsPanel.Children.Clear();
-
-        for (int i = 0; i < list.Count; i++)
-        {
-            int idx = i;
-            var parsed = Controls.ColorPickerControl.ParseHex(list[i]);
-
-            // Container grid: color circle + small delete button in corner
-            var cell = new Grid { Width = 44, Height = 44 };
-
-            var circle = new Button
-            {
-                Width = 36, Height = 36,
-                CornerRadius = new CornerRadius(18),
-                Padding = new Thickness(0),
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center,
-                Background = new SolidColorBrush(parsed),
-                BorderThickness = new Thickness(1.5),
-                BorderBrush = (Brush)Application.Current.Resources["AppBorderBrush"]
-            };
-            circle.Click += async (_, __) =>
-            {
-                var isAlpha = !isPen;  // allow alpha for highlighter
-                var picker = new Microsoft.UI.Xaml.Controls.ColorPicker
-                {
-                    IsAlphaEnabled = isAlpha,
-                    Color = Controls.ColorPickerControl.ParseHex(list[idx])
-                };
-                var dlg = new ContentDialog
-                {
-                    Title = "Edit color", Content = picker,
-                    PrimaryButtonText = "OK", CloseButtonText = "Cancel",
-                    XamlRoot = this.XamlRoot
-                };
-                if (await dlg.ShowAsync() == ContentDialogResult.Primary)
-                {
-                    list[idx] = Controls.ColorPickerControl.ToHex(picker.Color);
-                    Mark();
-                    RebuildColorSwatches();
-                }
-            };
-
-            var del = new Button
-            {
-                Width = 16, Height = 16,
-                Padding = new Thickness(0),
-                CornerRadius = new CornerRadius(8),
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Top,
-                Background = (Brush)Application.Current.Resources["AppSurfaceBrush"],
-                BorderBrush = (Brush)Application.Current.Resources["AppBorderBrush"],
-                BorderThickness = new Thickness(1),
-                Content = new FontIcon { Glyph = "", FontSize = 8 }
-            };
-            del.Click += (_, __) =>
-            {
-                list.RemoveAt(idx);
-                Mark();
-                RebuildColorSwatches();
-            };
-
-            cell.Children.Add(circle);
-            cell.Children.Add(del);
-            ColorsPanel.Children.Add(cell);
-        }
-
-        // "Add color" button
-        var addBtn = new Button
-        {
-            Width = 36, Height = 36,
-            CornerRadius = new CornerRadius(18),
-            Padding = new Thickness(0),
-            Background = (Brush)Application.Current.Resources["AppSurfaceVariantBrush"],
-            BorderThickness = new Thickness(1),
-            BorderBrush = (Brush)Application.Current.Resources["AppBorderBrush"],
-            Content = new FontIcon { Glyph = "", FontSize = 14 },
-            VerticalAlignment = VerticalAlignment.Center
-        };
-        ToolTipService.SetToolTip(addBtn, "Add color");
-        addBtn.Click += async (_, __) =>
-        {
-            var isAlpha = !isPen;
-            var picker = new Microsoft.UI.Xaml.Controls.ColorPicker
-            {
-                IsAlphaEnabled = isAlpha,
-                Color = isPen
-                    ? Windows.UI.Color.FromArgb(255, 27, 31, 42)
-                    : Windows.UI.Color.FromArgb(128, 255, 235, 59)
-            };
-            var dlg = new ContentDialog
-            {
-                Title = "Add color", Content = picker,
-                PrimaryButtonText = "Add", CloseButtonText = "Cancel",
-                XamlRoot = this.XamlRoot
-            };
-            if (await dlg.ShowAsync() == ContentDialogResult.Primary)
-            {
-                list.Add(Controls.ColorPickerControl.ToHex(picker.Color));
-                Mark();
-                RebuildColorSwatches();
-            }
-        };
-        ColorsPanel.Children.Add(addBtn);
-    }
-
-    private async System.Threading.Tasks.Task PickFolder()
-    {
-        var p = new FolderPicker();
-        p.FileTypeFilter.Add("*");
-        WinRT.Interop.InitializeWithWindow.Initialize(p, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
-        var f = await p.PickSingleFolderAsync();
-        if (f is not null && f.Path != FolderBox.Text) { FolderBox.Text = f.Path; Mark(); }
-    }
-
-    private void Save()
-    {
-        var s = App.Services.Settings.Current;
-        s.PressureEnabled = PressureEnabledBox.IsChecked == true;
-        s.MinPressure = MinPressureSlider.Value;
-        s.PressureMultiplier = PressureMultSlider.Value;
-        s.BarrelButtonAction = ReadCombo(BarrelCombo);
-        s.EmulateTipOnButtonPress = EmulateTipBox.IsChecked == true;
-        s.PalmRejectionEnabled = PalmToggle.IsChecked == true;
-        s.IgnoreTouchWhilePenActive = IgnoreTouchToggle.IsOn;
-        s.PalmRejectionGraceMs = (int)GraceBox.Value;
-        s.HoldToSnapEnabled = HoldToSnapToggle.IsChecked == true;
-        s.Theme = (AppThemeMode)Math.Max(0, ThemeCombo.SelectedIndex);
-        s.DefaultPenWidth = (float)PenWidthBox.Value;
-        s.DefaultHighlighterWidth = (float)HighWidthBox.Value;
-        s.DefaultEraserWidth = (float)EraserWidthBox.Value;
-        s.DocumentsFolder  = FolderBox.Text;
-        var oldToolbarPos = s.ToolbarPosition;
-        s.ToolbarPosition = (ToolbarPosition)ToolbarPositionCombo.SelectedIndex;
-        // Changing the dock edge moves the anchor, so a saved free-drag offset no
-        // longer makes sense — start the new side at its default position.
-        if (s.ToolbarPosition != oldToolbarPos) { s.ToolbarOffsetX = 0; s.ToolbarOffsetY = 0; }
-        s.ToolbarSize = (ToolbarSize)ToolbarSizeCombo.SelectedIndex;
-        s.HideZoomBar = HideZoomBarBox.IsChecked == true;
-        s.SeamlessPages = SeamlessPagesBox.IsChecked == true;
-        s.LiquidGlassEnabled = LiquidGlassBox.IsChecked == true;
-
-        s.AutosaveEnabled = AutosaveToggle.IsChecked == true;
-        // NumberBox yields NaN if the field is cleared — fall back to the default.
-        s.AutosaveDelaySeconds = double.IsNaN(AutosaveDelayBox.Value)
-            ? 2.5 : Math.Clamp(AutosaveDelayBox.Value, 0.5, 120);
-
-        s.AutoUpdateEnabled = AutoUpdateToggle.IsChecked == true;
-
-        s.HiddenToolbarTools.Clear();
-        s.ToolbarDrawingOrder.Clear();
-        s.ToolbarActionOrder.Clear();
-        foreach (var item in _drawingTools)
-        {
-            s.ToolbarDrawingOrder.Add(item.Key);
-            if (!item.IsVisible) s.HiddenToolbarTools.Add(item.Key);
-        }
-        foreach (var item in _actionTools)
-        {
-            s.ToolbarActionOrder.Add(item.Key);
-            if (!item.IsVisible) s.HiddenToolbarTools.Add(item.Key);
-        }
-        if (ToolVisExport.IsChecked != true) s.HiddenToolbarTools.Add("Export");
-
-        App.Services.Settings.Save();
-        GoBack();
-    }
-
-    private static void GoBack() => MainWindow.GoBack();
-
-    // ─── Diagnostics sandbox ────────────────────────────────────────────────
-
     private void OnSandbox(object sender, PointerRoutedEventArgs e)
     {
         var pt = e.GetCurrentPoint(Sandbox);
         var props = pt.Properties;
         var kind = e.Pointer.PointerDeviceType;
 
-        // Log a one-liner
         _log.AppendLine($"{DateTime.Now:HH:mm:ss.fff} {e.Pointer.PointerId} {kind} contact={pt.IsInContact} eraser={props.IsEraser} L={props.IsLeftButtonPressed} M={props.IsMiddleButtonPressed} R={props.IsRightButtonPressed} barrel={props.IsBarrelButtonPressed} P={props.Pressure:0.00}");
-
-        // Last device text
         LastDeviceText.Text = $"{kind} (id {e.Pointer.PointerId})";
-
         UpdateTouchDots(_activeTouchIds.Count);
 
-        // Reset all chips then highlight active ones
         Highlight(IndMouseInUse, kind == PointerDeviceType.Mouse);
         Highlight(IndMouseL, kind == PointerDeviceType.Mouse && props.IsLeftButtonPressed);
         Highlight(IndMouseM, kind == PointerDeviceType.Mouse && props.IsMiddleButtonPressed);
@@ -882,7 +1137,7 @@ public sealed partial class SettingsPage : Page
         Highlight(IndEraserTip, isEraserTip && pt.IsInContact);
     }
 
-    private void Highlight(Border b, bool on)
+    private static void Highlight(Border b, bool on)
     {
         b.Background = on
             ? (Brush)Application.Current.Resources["AppAccentBrush"]
@@ -919,64 +1174,12 @@ public sealed partial class SettingsPage : Page
             Content = new ScrollViewer
             {
                 Height = 380,
-                Content = new TextBlock { Text = _log.Length == 0 ? "(no events yet)" : _log.ToString(), TextWrapping = TextWrapping.Wrap, FontFamily = new FontFamily("Consolas") }
+                Content = new TextBlock { Text = _log.Length == 0 ? "No events yet." : _log.ToString(), TextWrapping = TextWrapping.Wrap, FontFamily = new FontFamily("Consolas") }
             },
             CloseButtonText = "Close",
-            XamlRoot = this.XamlRoot
+            XamlRoot = XamlRoot
         };
         await dlg.ShowAsync();
-    }
-
-    private void OnPressureSandbox(object sender, PointerRoutedEventArgs e)
-    {
-        var pt = e.GetCurrentPoint(PressureSandbox);
-        if (!pt.IsInContact) return;
-
-        // Apply the same transform as the editor so the preview reflects current settings.
-        var s = App.Services.Settings.Current;
-        float rawPressure = pt.Properties.Pressure;
-        if (rawPressure <= 0) rawPressure = 0.5f;
-        bool isPen = e.Pointer.PointerDeviceType == PointerDeviceType.Pen;
-
-        float pressure;
-        if (isPen && s.PressureEnabled)
-        {
-            if (rawPressure < (float)s.MinPressure) return;  // dropped sample
-            pressure = (rawPressure - (float)s.MinPressure) * (float)s.PressureMultiplier;
-            if (pressure < 0) pressure = 0;
-            if (pressure > 1) pressure = 1;
-        }
-        else
-        {
-            pressure = isPen ? rawPressure : 0.6f;
-        }
-
-        // Map pressure to circle radius (4–22 px).
-        var radius = 4 + pressure * 18;
-
-        // Color the dot by pressure: low = light blue, high = accent.
-        byte a = (byte)(80 + pressure * 175);
-        var accent = ((SolidColorBrush)Application.Current.Resources["AppAccentBrush"]).Color;
-        var fill = new SolidColorBrush(Windows.UI.Color.FromArgb(a, accent.R, accent.G, accent.B));
-
-        var dot = new Ellipse
-        {
-            Width = radius * 2,
-            Height = radius * 2,
-            Fill = fill,
-            IsHitTestVisible = false
-        };
-        Canvas.SetLeft(dot, pt.Position.X - radius);
-        Canvas.SetTop(dot, pt.Position.Y - radius);
-        PressureCanvas.Children.Add(dot);
-
-        if (PressureHint.Visibility == Visibility.Visible)
-            PressureHint.Visibility = Visibility.Collapsed;
-
-        // Cap the number of dots so the canvas doesn't grow without bound.
-        const int max = 1500;
-        while (PressureCanvas.Children.Count > max)
-            PressureCanvas.Children.RemoveAt(0);
     }
 
     private async System.Threading.Tasks.Task ExportDebug()
