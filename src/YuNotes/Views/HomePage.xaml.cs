@@ -895,8 +895,15 @@ public sealed partial class HomePage : Page
         var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var infos  = new List<DocumentInfo>();
 
-        foreach (var d in App.Services.Documents.ListRecent(folder))
-            if (seen.Add(d.FilePath)) infos.Add(d);
+        // Every note under the notes folder, subfolders included (Trash and
+        // Archive are system folders and stay out). Recently opened notes that
+        // live elsewhere are added below.
+        foreach (var p in GetAllNotePaths(folder))
+        {
+            if (!seen.Add(p)) continue;
+            try { infos.Add(App.Services.Documents.ReadInfo(p)); }
+            catch { }
+        }
 
         var recent = App.Services.Settings.Current.RecentDocuments;
         var stale  = new List<string>();

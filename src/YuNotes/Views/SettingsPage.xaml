@@ -279,35 +279,54 @@
                                                 </Grid>
                                             </Border>
                                         </Grid>
-                                        <StackPanel x:Name="CurvePresetPanel" Orientation="Horizontal" Spacing="6" />
+                                        <StackPanel Orientation="Horizontal" Spacing="10">
+                                            <controls:ChoiceStrip x:Name="CurvePresets" />
+                                            <TextBlock x:Name="CustomCurveText" Text="Custom curve" VerticalAlignment="Center"
+                                                       Style="{StaticResource RowHintStyle}" />
+                                        </StackPanel>
                                     </StackPanel>
                                 </controls:SettingRow>
-                                <controls:SettingRow x:Name="MinPressureRow" Title="Ignore light touches" SettingKey="minpressure"
-                                                     Description="Pen samples lighter than this are dropped."
-                                                     Keywords="minimum pressure threshold">
-                                    <StackPanel Orientation="Horizontal" Spacing="10">
-                                        <Slider x:Name="MinPressureSlider" Width="180" Minimum="0" Maximum="0.5" StepFrequency="0.01" VerticalAlignment="Center" />
-                                        <TextBlock x:Name="MinPressureLabel" Width="40" TextAlignment="Right" VerticalAlignment="Center" />
+                                <controls:SettingRow x:Name="MinPressureRow" Title="Lightest touch that draws" SettingKey="minpressure"
+                                                     Description="Raise it if the pen leaves dots while it hovers."
+                                                     Keywords="minimum pressure threshold ignore light touches sensitivity">
+                                    <StackPanel Orientation="Horizontal" Spacing="14">
+                                        <StackPanel Width="200">
+                                            <Slider x:Name="MinPressureSlider" Minimum="0" Maximum="4" StepFrequency="1" SnapsTo="StepValues"
+                                                    TickFrequency="1" TickPlacement="Outside" IsThumbToolTipEnabled="False" />
+                                            <Grid>
+                                                <TextBlock Text="Feather" Style="{StaticResource RowHintStyle}" />
+                                                <TextBlock Text="Very firm" Style="{StaticResource RowHintStyle}" HorizontalAlignment="Right" />
+                                            </Grid>
+                                        </StackPanel>
+                                        <TextBlock x:Name="MinPressureLabel" Width="140" VerticalAlignment="Center"
+                                                   Foreground="{ThemeResource AppAccentBrush}" FontWeight="SemiBold" />
                                     </StackPanel>
                                 </controls:SettingRow>
-                                <controls:SettingRow x:Name="BoostRow" Title="Pressure boost" SettingKey="boost"
-                                                     Description="Reach full width with a lighter press."
-                                                     Keywords="pressure multiplier">
-                                    <StackPanel Orientation="Horizontal" Spacing="10">
-                                        <Slider x:Name="PressureMultSlider" Width="180" Minimum="0.25" Maximum="3.0" StepFrequency="0.05" VerticalAlignment="Center" />
-                                        <TextBlock x:Name="PressureMultLabel" Width="40" TextAlignment="Right" VerticalAlignment="Center" />
+                                <controls:SettingRow x:Name="BoostRow" Title="Press for full width" SettingKey="boost"
+                                                     Description="How hard you press to reach the thickest line."
+                                                     Keywords="pressure multiplier boost">
+                                    <StackPanel Orientation="Horizontal" Spacing="14">
+                                        <StackPanel Width="200">
+                                            <Slider x:Name="PressureMultSlider" Minimum="0" Maximum="4" StepFrequency="1" SnapsTo="StepValues"
+                                                    TickFrequency="1" TickPlacement="Outside" IsThumbToolTipEnabled="False" />
+                                            <Grid>
+                                                <TextBlock Text="Light press" Style="{StaticResource RowHintStyle}" />
+                                                <TextBlock Text="Hard press" Style="{StaticResource RowHintStyle}" HorizontalAlignment="Right" />
+                                            </Grid>
+                                        </StackPanel>
+                                        <TextBlock x:Name="PressureMultLabel" Width="140" VerticalAlignment="Center"
+                                                   Foreground="{ThemeResource AppAccentBrush}" FontWeight="SemiBold" />
                                     </StackPanel>
                                 </controls:SettingRow>
                             </StackPanel>
                         </Border>
                         <Border Style="{StaticResource GroupCardStyle}">
                             <StackPanel>
-                                <controls:SettingRow Title="Smoothing" SettingKey="smoothing"
-                                                     Description="Steadies shaky lines. Higher values make the ink trail the pen a little."
-                                                     Keywords="stabilizer jitter shaky smooth">
-                                    <StackPanel Orientation="Horizontal" Spacing="10">
-                                        <Slider x:Name="SmoothingSlider" Width="180" Minimum="0" Maximum="10" StepFrequency="1" VerticalAlignment="Center" />
-                                        <TextBlock x:Name="SmoothingLabel" Width="40" TextAlignment="Right" VerticalAlignment="Center" />
+                                <controls:SettingRow x:Name="SmoothingRow" Title="Smoothing" SettingKey="smoothing"
+                                                     Keywords="stabilizer jitter shaky smooth steady">
+                                    <StackPanel Orientation="Horizontal" Spacing="14">
+                                        <Canvas x:Name="SmoothingPreview" Width="84" Height="28" VerticalAlignment="Center" />
+                                        <controls:ChoiceStrip x:Name="SmoothingChoice" />
                                     </StackPanel>
                                 </controls:SettingRow>
                                 <controls:SettingRow Title="Barrel button" SettingKey="barrel"
@@ -342,11 +361,9 @@
                                                      Keywords="touch finger hover">
                                     <ToggleSwitch x:Name="IgnoreTouchToggle" OnContent="" OffContent="" MinWidth="0" />
                                 </controls:SettingRow>
-                                <controls:SettingRow x:Name="GraceRow" Title="Grace period" SettingKey="grace"
-                                                     Description="How long touch stays blocked after the pen lifts, in milliseconds."
-                                                     Keywords="grace delay ms milliseconds">
-                                    <NumberBox x:Name="GraceBox" Width="140" Minimum="0" Maximum="3000"
-                                               SmallChange="50" LargeChange="250" SpinButtonPlacementMode="Inline" />
+                                <controls:SettingRow x:Name="GraceRow" Title="Palm block after the pen lifts" SettingKey="grace"
+                                                     Keywords="grace period delay ms milliseconds palm block">
+                                    <controls:ChoiceStrip x:Name="GraceChoice" />
                                 </controls:SettingRow>
                             </StackPanel>
                         </Border>
@@ -380,14 +397,20 @@
                         </Border>
                         <Border Style="{StaticResource GroupCardStyle}">
                             <StackPanel>
-                                <controls:SettingRow Title="Default pen width" SettingKey="penwidth" Keywords="width size thickness">
-                                    <NumberBox x:Name="PenWidthBox" Width="140" Minimum="1" Maximum="40" SmallChange="0.5" SpinButtonPlacementMode="Inline" />
+                                <controls:SettingRow Title="Pen width" SettingKey="penwidth"
+                                                     Description="Thickness new pen strokes start with."
+                                                     Keywords="default width size thickness pen">
+                                    <controls:ChoiceStrip x:Name="PenWidthChoice" />
                                 </controls:SettingRow>
-                                <controls:SettingRow Title="Default highlighter width" SettingKey="hiwidth" Keywords="width size thickness">
-                                    <NumberBox x:Name="HighWidthBox" Width="140" Minimum="2" Maximum="60" SpinButtonPlacementMode="Inline" />
+                                <controls:SettingRow Title="Highlighter width" SettingKey="hiwidth"
+                                                     Description="Thickness new highlighter strokes start with."
+                                                     Keywords="default width size thickness highlighter">
+                                    <controls:ChoiceStrip x:Name="HighWidthChoice" />
                                 </controls:SettingRow>
-                                <controls:SettingRow Title="Default eraser width" SettingKey="eraserwidth" Keywords="width size">
-                                    <NumberBox x:Name="EraserWidthBox" Width="140" Minimum="2" Maximum="80" SpinButtonPlacementMode="Inline" />
+                                <controls:SettingRow Title="Eraser size" SettingKey="eraserwidth"
+                                                     Description="Size of the eraser when you pick it."
+                                                     Keywords="default width size eraser">
+                                    <controls:ChoiceStrip x:Name="EraserWidthChoice" />
                                 </controls:SettingRow>
                             </StackPanel>
                         </Border>
@@ -489,7 +512,10 @@
                         </StackPanel>
                         <Border Style="{StaticResource GroupCardStyle}">
                             <StackPanel>
-                                <controls:SettingRow Title="Notes folder" SettingKey="folder" Stacked="True"
+                                <!-- No SettingKey: the default depends on where Windows puts
+                                     Documents (OneDrive or not), so "Reset" could point
+                                     YuNotes at an empty folder. -->
+                                <controls:SettingRow Title="Notes folder" Stacked="True"
                                                      Keywords="folder documents location path">
                                     <Grid ColumnSpacing="10">
                                         <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>

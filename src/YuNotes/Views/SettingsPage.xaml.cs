@@ -97,6 +97,26 @@ public sealed partial class SettingsPage : Page
         ("Switch tool while held",   new[] { "Pen barrel button" }),
     };
 
+    // Named steps for settings that used to be raw numbers. Index 0 is the left
+    // end of the slider / first chip. Each list contains the default value.
+    private static readonly (string Name, double Value)[] MinPressureSteps =
+        { ("Feather", 0), ("Light", 0.05), ("Medium", 0.12), ("Firm", 0.2), ("Very firm", 0.3) };
+    // Left = a light press already reaches full width (big boost).
+    private static readonly (string Name, double Value)[] BoostSteps =
+        { ("Barely", 3.0), ("Gently", 1.6), ("Normally", 1.0), ("Firmly", 0.75), ("Hard", 0.5) };
+    private static readonly (string Name, int Value, string Description)[] SmoothingSteps =
+    {
+        ("Off",    0, "Lines stay exactly as you draw them."),
+        ("Light",  3, "Irons out small wobbles."),
+        ("Medium", 6, "Steadier lines; the ink lags the pen slightly."),
+        ("Strong", 9, "Very steady lines; the ink trails the pen."),
+    };
+    private static readonly (string Name, int Ms, string Phrase)[] GraceSteps =
+        { ("Short", 250, "a quarter second"), ("Normal", 500, "half a second"), ("Long", 1000, "a full second") };
+    private static readonly float[] PenWidths = { 1f, 2.5f, 4f, 6f };
+    private static readonly float[] HighlighterWidths = { 10f, 18f, 28f };
+    private static readonly float[] EraserWidths = { 10f, 20f, 40f };
+
     private readonly ObservableCollection<ToolEntry> _drawingTools = new();
     private readonly ObservableCollection<ToolEntry> _actionTools = new();
 
@@ -112,6 +132,7 @@ public sealed partial class SettingsPage : Page
         InitializeComponent();
         BuildShortcutRows();
         BuildCurvePresets();
+        BuildChoiceControls();
         CollectRows();
 
         _commitTimer = DispatcherQueue.CreateTimer();
@@ -279,6 +300,9 @@ public sealed partial class SettingsPage : Page
         string title = row?.Title ?? "Setting";
         return sender switch
         {
+            ChoiceStrip c when c.SelectedIndex >= 0 => $"{title}: {c.LabelOf(c.SelectedIndex)}",
+            Slider s when s == MinPressureSlider => $"{title}: {MinPressureSteps[Step(s)].Name}",
+            Slider s when s == PressureMultSlider => $"{title}: {BoostSteps[Step(s)].Name}",
             ToggleSwitch t => $"{title} {(t.IsOn ? "on" : "off")}",
             ComboBox c => $"{title}: {(c.SelectedItem as ComboBoxItem)?.Content}",
             Slider s => $"{title} set to {s.Value:0.##}",
@@ -296,8 +320,6 @@ public sealed partial class SettingsPage : Page
 
     // ─── Defaults: how to compare and reset each setting ────────────────────
     private static readonly AppSettings D = new();
-    private static readonly string DefaultFolder =
-        System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "YuNotes");
 
     private static string J(IEnumerable<string> xs) => string.Join("|", xs);
 
@@ -338,7 +360,6 @@ public sealed partial class SettingsPage : Page
         ["drawtools"]     = (s => ToolSig(s, s.ToolbarDrawingOrder, DrawingToolDefs), s => ResetTools(s, s.ToolbarDrawingOrder, DrawingToolDefs)),
         ["actiontools"]   = (s => ToolSig(s, s.ToolbarActionOrder, ActionToolDefs), s => ResetTools(s, s.ToolbarActionOrder, ActionToolDefs)),
         ["export"]        = (s => $"{s.HiddenToolbarTools.Contains("Export")}", s => s.HiddenToolbarTools.Remove("Export")),
-        ["folder"]        = (s => s.DocumentsFolder, s => s.DocumentsFolder = DefaultFolder),
         ["autosave"]      = (s => $"{s.AutosaveEnabled}", s => s.AutosaveEnabled = D.AutosaveEnabled),
         ["autosavedelay"] = (s => $"{s.AutosaveDelaySeconds:0.##}", s => s.AutosaveDelaySeconds = D.AutosaveDelaySeconds),
         ["autoupdate"]    = (s => $"{s.AutoUpdateEnabled}", s => s.AutoUpdateEnabled = D.AutoUpdateEnabled),
@@ -346,7 +367,7 @@ public sealed partial class SettingsPage : Page
     };
 
     private static string DefaultSig(string key) =>
-        key == "folder" ? DefaultFolder : Defaults[key].Sig(D);
+        Defaults[key].Sig(D);
 
     private void RefreshModified()
     {
@@ -510,39 +531,180 @@ public sealed partial class SettingsPage : Page
 
     private void BuildCurvePresets()
     {
-        foreach (var p in PressureCurve.Presets)
+        foreach (var p in PressureCurve.Presets) CurvePresets.Add(p.Name, p.Name, minWidth: 64);
+        CurvePresets.ItemClicked += (_, i) =>
         {
-            var b = new Button { Content = p.Name, Padding = new Thickness(14, 4, 14, 4), CornerRadius = new CornerRadius(14), Tag = p };
-            b.Click += (_, _) =>
-            {
-                CurveEditor.SetCurve(p.X1, p.Y1, p.X2, p.Y2);
-                OnChanged(CurveEditor);
-                _pendingLabel = $"Pressure curve set to {p.Name}";
-            };
-            CurvePresetPanel.Children.Add(b);
-        }
-        CurvePresetPanel.Children.Add(new TextBlock
-        {
-            Text = "Custom curve",
-            VerticalAlignment = VerticalAlignment.Center,
-            Margin = new Thickness(6, 0, 0, 0),
-            Style = (Style)Resources["RowHintStyle"],
-        });
+            var p = PressureCurve.Presets[i];
+            CurveEditor.SetCurve(p.X1, p.Y1, p.X2, p.Y2);
+            OnChanged(CurveEditor);
+            _pendingLabel = $"Pressure curve set to {p.Name}";
+        };
     }
 
+    // Highlights the preset that matches the saved curve, or none plus a
+    // "Custom curve" note when the handles were dragged.
     private void RefreshPresetButtons()
     {
         var s = App.Services.Settings.Current;
-        bool any = false;
-        foreach (var b in CurvePresetPanel.Children.OfType<Button>())
+        CurvePresets.SelectedIndex = Array.FindIndex(PressureCurve.Presets, p =>
+            Math.Abs(p.X1 - s.PressureCurveX1) < 0.01 && Math.Abs(p.Y1 - s.PressureCurveY1) < 0.01 &&
+            Math.Abs(p.X2 - s.PressureCurveX2) < 0.01 && Math.Abs(p.Y2 - s.PressureCurveY2) < 0.01);
+        CustomCurveText.Visibility = CurvePresets.SelectedIndex < 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ─── Named steps and choice chips ───────────────────────────────────────
+    private static int Step(Slider s) => (int)Math.Round(s.Value);
+
+    private static int Nearest((string Name, double Value)[] steps, double v)
+    {
+        int best = 0;
+        for (int i = 1; i < steps.Length; i++)
+            if (Math.Abs(steps[i].Value - v) < Math.Abs(steps[best].Value - v)) best = i;
+        return best;
+    }
+
+    // "Light · default", "Firm", or "Custom (0.07)" for a value between steps.
+    private static string StepWord((string Name, double Value)[] steps, double v, double def)
+    {
+        var hit = steps.FirstOrDefault(x => Math.Abs(x.Value - v) < 0.001);
+        if (hit.Name is null) return $"Custom ({v:0.##})";
+        return Math.Abs(v - def) < 0.001 ? $"{hit.Name} · default" : hit.Name;
+    }
+
+    private void BuildChoiceControls()
+    {
+        var s = App.Services.Settings.Current;
+
+        for (int i = 0; i < SmoothingSteps.Length; i++)
+            SmoothingChoice.Add(SmoothingSteps[i].Name, SmoothingSteps[i].Name);
+        SmoothingChoice.ItemClicked += (strip, i) =>
         {
-            var p = ((string Name, double X1, double Y1, double X2, double Y2))b.Tag;
-            bool on = Math.Abs(p.X1 - s.PressureCurveX1) < 0.01 && Math.Abs(p.Y1 - s.PressureCurveY1) < 0.01
-                   && Math.Abs(p.X2 - s.PressureCurveX2) < 0.01 && Math.Abs(p.Y2 - s.PressureCurveY2) < 0.01;
-            b.Style = on ? (Style)Application.Current.Resources["AccentButtonStyle"] : null;
-            any |= on;
+            App.Services.Settings.Current.SmoothingLevel = SmoothingSteps[i].Value;
+            SmoothingChoice.SelectedIndex = i;
+            OnChanged(strip);
+        };
+
+        foreach (var g in GraceSteps) GraceChoice.Add(g.Name, g.Name, minWidth: 72);
+        GraceChoice.ItemClicked += (strip, i) =>
+        {
+            App.Services.Settings.Current.PalmRejectionGraceMs = GraceSteps[i].Ms;
+            GraceChoice.SelectedIndex = i;
+            OnChanged(strip);
+        };
+
+        var ink = (Brush)Application.Current.Resources["AppTextPrimaryBrush"];
+        BuildWidthChoice(PenWidthChoice, PenWidths, 1, 40, 0.5,
+            w => new Polyline { Points = Squiggle(28, 14), Stroke = ink, StrokeThickness = w,
+                                StrokeStartLineCap = PenLineCap.Round, StrokeEndLineCap = PenLineCap.Round, StrokeLineJoin = PenLineJoin.Round },
+            v => App.Services.Settings.Current.DefaultPenWidth = v);
+        var marker = new SolidColorBrush(Windows.UI.Color.FromArgb(0xB0, 0xFF, 0xD5, 0x3B));
+        BuildWidthChoice(HighWidthChoice, HighlighterWidths, 2, 60, 1,
+            w => new Rectangle { Width = 26, Height = Math.Min(24, w * 0.65), Fill = marker, RadiusX = 2, RadiusY = 2 },
+            v => App.Services.Settings.Current.DefaultHighlighterWidth = v);
+        var rim = (Brush)Application.Current.Resources["AppTextSecondaryBrush"];
+        BuildWidthChoice(EraserWidthChoice, EraserWidths, 2, 80, 1,
+            w => new Ellipse { Width = Math.Min(26, w * 0.6), Height = Math.Min(26, w * 0.6), Stroke = rim, StrokeThickness = 1.5 },
+            v => App.Services.Settings.Current.DefaultEraserWidth = v);
+    }
+
+    // Preset chips draw a stroke at that width; the last chip is "Custom" and
+    // opens a number box for any other width.
+    private void BuildWidthChoice(ChoiceStrip strip, float[] presets, double min, double max, double step,
+                                  Func<float, FrameworkElement> preview, Action<float> set)
+    {
+        foreach (var w in presets)
+            strip.Add($"{w:0.#} px", preview(w));
+        int custom = presets.Length;
+        strip.Add("Custom", new TextBlock { Text = "Custom", FontSize = 12 }, minWidth: 64);
+
+        strip.ItemClicked += (_, i) =>
+        {
+            if (i < custom)
+            {
+                set(presets[i]);
+                strip.SelectedIndex = i;
+                OnChanged(strip);
+                return;
+            }
+            var box = new NumberBox
+            {
+                Header = "Width in pixels",
+                Minimum = min, Maximum = max, SmallChange = step, LargeChange = step * 4,
+                SpinButtonPlacementMode = NumberBoxSpinButtonPlacementMode.Inline,
+                Width = 170,
+                Value = CurrentWidth(strip),
+            };
+            box.ValueChanged += (_, e) =>
+            {
+                if (double.IsNaN(e.NewValue)) return;
+                set((float)Math.Clamp(e.NewValue, min, max));
+                OnChanged(strip);
+                _pendingLabel = $"{RowOf(strip)?.Title ?? "Width"} set to {e.NewValue:0.#} px";
+            };
+            var flyout = new Flyout { Content = box };
+            flyout.Opened += (_, _) => box.Focus(FocusState.Programmatic);
+            flyout.ShowAt(strip.ButtonAt(custom));
+        };
+    }
+
+    private float CurrentWidth(ChoiceStrip strip)
+    {
+        var s = App.Services.Settings.Current;
+        return strip == PenWidthChoice ? s.DefaultPenWidth
+             : strip == HighWidthChoice ? s.DefaultHighlighterWidth
+             : s.DefaultEraserWidth;
+    }
+
+    private static void SyncWidthChoice(ChoiceStrip strip, float[] presets, float value)
+    {
+        int i = Array.FindIndex(presets, p => Math.Abs(p - value) < 0.01f);
+        int custom = presets.Length;
+        strip.SelectedIndex = i >= 0 ? i : custom;
+        var text = i >= 0 ? "Custom" : $"{value:0.#} px";
+        strip.SetLabel(custom, i >= 0 ? "Custom" : $"Custom: {value:0.#} px",
+                       new TextBlock { Text = text, FontSize = 12 });
+    }
+
+    private static PointCollection Squiggle(double w, double h)
+    {
+        var pts = new PointCollection();
+        for (int i = 0; i <= 16; i++)
+        {
+            double t = i / 16.0;
+            pts.Add(new Windows.Foundation.Point(2 + t * (w - 4), h / 2 + Math.Sin(t * Math.PI * 2) * (h / 2 - 4)));
         }
-        CurvePresetPanel.Children.OfType<TextBlock>().First().Visibility = any ? Visibility.Collapsed : Visibility.Visible;
+        return pts;
+    }
+
+    // Draws a shaky line run through the same smoothing as PenTool, so the
+    // preview shows what that level really does.
+    private void DrawSmoothingPreview(int level)
+    {
+        double w = SmoothingPreview.Width, h = SmoothingPreview.Height;
+        var raw = new List<Windows.Foundation.Point>();
+        var rng = new Random(7);
+        for (int i = 0; i <= 40; i++)
+        {
+            double t = i / 40.0;
+            raw.Add(new Windows.Foundation.Point(2 + t * (w - 4),
+                h / 2 + Math.Sin(t * Math.PI * 1.5) * 5 + (rng.NextDouble() - 0.5) * 9));
+        }
+        float follow = 1f - Math.Clamp(level, 0, 10) * 0.08f;
+        var pts = new PointCollection();
+        var cur = raw[0];
+        foreach (var p in raw)
+        {
+            cur = level == 0 ? p : new Windows.Foundation.Point(cur.X + (p.X - cur.X) * follow, cur.Y + (p.Y - cur.Y) * follow);
+            pts.Add(cur);
+        }
+        SmoothingPreview.Children.Clear();
+        SmoothingPreview.Children.Add(new Polyline
+        {
+            Points = pts,
+            Stroke = (Brush)Application.Current.Resources["AppTextPrimaryBrush"],
+            StrokeThickness = 1.6,
+            StrokeLineJoin = PenLineJoin.Round,
+        });
     }
 
     // ─── Summaries and dependent rows ───────────────────────────────────────
@@ -566,21 +728,36 @@ public sealed partial class SettingsPage : Page
         SetRowEnabled(GraceRow, palm);
         SetRowEnabled(AutosaveDelayRow, autosave);
 
-        MinPressureLabel.Text = $"{MinPressureSlider.Value:0.00}";
-        PressureMultLabel.Text = $"×{PressureMultSlider.Value:0.##}";
-        SmoothingLabel.Text = SmoothingSlider.Value == 0 ? "Off" : $"{SmoothingSlider.Value:0}";
+        string touchWord = StepWord(MinPressureSteps, st.MinPressure, D.MinPressure);
+        string pressWord = StepWord(BoostSteps, st.PressureMultiplier, D.PressureMultiplier);
+        MinPressureLabel.Text = touchWord;
+        PressureMultLabel.Text = pressWord;
         RefreshPresetButtons();
 
-        var barrel = (BarrelCombo.SelectedItem as ComboBoxItem)?.Content as string ?? "";
-        PenSummary.Text = (pressure ? $"Pressure on, ×{PressureMultSlider.Value:0.##}" : "Pressure off") +
-                          $" · Smoothing {SmoothingLabel.Text.ToLowerInvariant()} · Barrel button: {barrel}";
+        int smooth = Array.FindIndex(SmoothingSteps, x => x.Value == st.SmoothingLevel);
+        SmoothingChoice.SelectedIndex = smooth;
+        SmoothingRow.Description = smooth >= 0 ? SmoothingSteps[smooth].Description : $"Custom level {st.SmoothingLevel}.";
+        DrawSmoothingPreview(st.SmoothingLevel);
 
-        string grace = double.IsNaN(GraceBox.Value) ? "500" : $"{GraceBox.Value:0}";
+        int grace = Array.FindIndex(GraceSteps, x => x.Ms == st.PalmRejectionGraceMs);
+        GraceChoice.SelectedIndex = grace;
+        string graceText = grace >= 0 ? GraceSteps[grace].Phrase : $"{st.PalmRejectionGraceMs} ms";
+        GraceRow.Description = $"Your hand can't draw for {graceText} after the pen lifts.";
+
+        SyncWidthChoice(PenWidthChoice, PenWidths, st.DefaultPenWidth);
+        SyncWidthChoice(HighWidthChoice, HighlighterWidths, st.DefaultHighlighterWidth);
+        SyncWidthChoice(EraserWidthChoice, EraserWidths, st.DefaultEraserWidth);
+
+        string smoothName = smooth >= 0 ? SmoothingSteps[smooth].Name.ToLowerInvariant() : "custom";
+        var barrel = (BarrelCombo.SelectedItem as ComboBoxItem)?.Content as string ?? "";
+        PenSummary.Text = (pressure ? $"Pressure on, full width when pressing {pressWord.Split(' ')[0].ToLowerInvariant()}" : "Pressure off") +
+                          $" · Smoothing {smoothName} · Barrel button: {barrel}";
+
         PalmSummary.Text = !palm ? "Palm rejection off · touch always draws"
-            : $"{(IgnoreTouchToggle.IsOn ? "Touch ignored near the pen" : "Touch allowed near the pen")} · {grace} ms grace";
+            : $"{(IgnoreTouchToggle.IsOn ? "Touch ignored near the pen" : "Touch allowed near the pen")} · blocked for {graceText} after the pen lifts";
 
         InkSummary.Text = $"{st.PenPresetColors.Count} pen and {st.HighlighterPresetColors.Count} highlighter colors · " +
-                          $"pen {PenWidthBox.Value:0.#} px, highlighter {HighWidthBox.Value:0.#} px, eraser {EraserWidthBox.Value:0.#} px";
+                          $"pen {st.DefaultPenWidth:0.#} px, highlighter {st.DefaultHighlighterWidth:0.#} px, eraser {st.DefaultEraserWidth:0.#} px";
 
         string ComboText(ComboBox c) => ((c.SelectedItem as ComboBoxItem)?.Content as string ?? "").ToLowerInvariant();
         string theme = ThemeCombo.SelectedIndex switch { 1 => "Light", 2 => "Dark", _ => "System" };
@@ -599,10 +776,21 @@ public sealed partial class SettingsPage : Page
                                   SeamlessPagesToggle, HideZoomBarToggle, ExportToggle, AutosaveToggle, AutoUpdateToggle,
                                   EmulateTipToggle })
             t.Toggled += (s, _) => OnChanged(s);
-        foreach (var sl in new[] { MinPressureSlider, PressureMultSlider, SmoothingSlider })
-            sl.ValueChanged += (s, _) => OnChanged(s);
-        foreach (var nb in new[] { GraceBox, PenWidthBox, HighWidthBox, EraserWidthBox, AutosaveDelayBox })
-            nb.ValueChanged += (s, _) => OnChanged(s);
+        // Stepped controls write their setting directly, and only when the user
+        // moves them, so a value that sits between steps survives other edits.
+        MinPressureSlider.ValueChanged += (s, _) =>
+        {
+            if (_loading) return;
+            App.Services.Settings.Current.MinPressure = MinPressureSteps[Step(MinPressureSlider)].Value;
+            OnChanged(s);
+        };
+        PressureMultSlider.ValueChanged += (s, _) =>
+        {
+            if (_loading) return;
+            App.Services.Settings.Current.PressureMultiplier = BoostSteps[Step(PressureMultSlider)].Value;
+            OnChanged(s);
+        };
+        AutosaveDelayBox.ValueChanged += (s, _) => OnChanged(s);
         foreach (var cb in new[] { BarrelCombo, ThemeCombo, ToolbarPositionCombo, ToolbarSizeCombo })
             cb.SelectionChanged += (s, _) => OnChanged(s);
         CurveEditor.CurveChanged += (s, _) => OnChanged(s);
@@ -639,16 +827,14 @@ public sealed partial class SettingsPage : Page
 
         PressureToggle.IsOn = s.PressureEnabled;
         CurveEditor.SetCurve(s.PressureCurveX1, s.PressureCurveY1, s.PressureCurveX2, s.PressureCurveY2);
-        MinPressureSlider.Value = s.MinPressure;
-        PressureMultSlider.Value = s.PressureMultiplier;
-        SmoothingSlider.Value = s.SmoothingLevel;
+        MinPressureSlider.Value = Nearest(MinPressureSteps, s.MinPressure);
+        PressureMultSlider.Value = Nearest(BoostSteps, s.PressureMultiplier);
         BindButtonCombo(BarrelCombo, s.BarrelButtonAction);
         HoldToSnapToggle.IsOn = s.HoldToSnapEnabled;
         EmulateTipToggle.IsOn = s.EmulateTipOnButtonPress;
 
         PalmToggle.IsOn = s.PalmRejectionEnabled;
         IgnoreTouchToggle.IsOn = s.IgnoreTouchWhilePenActive;
-        GraceBox.Value = s.PalmRejectionGraceMs;
 
         ThemeCombo.SelectedIndex = (int)s.Theme;
         ToolbarPositionCombo.SelectedIndex = (int)s.ToolbarPosition;
@@ -664,9 +850,6 @@ public sealed partial class SettingsPage : Page
         ActionToolsList.ItemsSource = _actionTools;
         ExportToggle.IsOn = !hidden.Contains("Export");
 
-        PenWidthBox.Value = s.DefaultPenWidth;
-        HighWidthBox.Value = s.DefaultHighlighterWidth;
-        EraserWidthBox.Value = s.DefaultEraserWidth;
         FolderBox.Text = s.DocumentsFolder;
 
         AutosaveToggle.IsOn = s.AutosaveEnabled;
@@ -680,16 +863,14 @@ public sealed partial class SettingsPage : Page
         s.PressureEnabled = PressureToggle.IsOn;
         s.PressureCurveX1 = CurveEditor.X1; s.PressureCurveY1 = CurveEditor.Y1;
         s.PressureCurveX2 = CurveEditor.X2; s.PressureCurveY2 = CurveEditor.Y2;
-        s.MinPressure = MinPressureSlider.Value;
-        s.PressureMultiplier = PressureMultSlider.Value;
-        s.SmoothingLevel = (int)Math.Round(SmoothingSlider.Value);
+        // Pressure steps, smoothing, palm block and widths are written by their
+        // own handlers (see WireChangeHandlers / BuildChoiceControls).
         s.BarrelButtonAction = ReadCombo(BarrelCombo);
         s.HoldToSnapEnabled = HoldToSnapToggle.IsOn;
         s.EmulateTipOnButtonPress = EmulateTipToggle.IsOn;
 
         s.PalmRejectionEnabled = PalmToggle.IsOn;
         s.IgnoreTouchWhilePenActive = IgnoreTouchToggle.IsOn;
-        if (!double.IsNaN(GraceBox.Value)) s.PalmRejectionGraceMs = (int)Math.Clamp(GraceBox.Value, 0, 3000);
 
         s.Theme = (AppThemeMode)Math.Max(0, ThemeCombo.SelectedIndex);
         var oldToolbarPos = s.ToolbarPosition;
@@ -702,10 +883,6 @@ public sealed partial class SettingsPage : Page
         s.SeamlessPages = SeamlessPagesToggle.IsOn;
         s.LiquidGlassEnabled = LiquidGlassToggle.IsOn;
 
-        // NumberBox yields NaN when the field is cleared; keep the old value then.
-        if (!double.IsNaN(PenWidthBox.Value)) s.DefaultPenWidth = (float)PenWidthBox.Value;
-        if (!double.IsNaN(HighWidthBox.Value)) s.DefaultHighlighterWidth = (float)HighWidthBox.Value;
-        if (!double.IsNaN(EraserWidthBox.Value)) s.DefaultEraserWidth = (float)EraserWidthBox.Value;
         s.DocumentsFolder = FolderBox.Text;
 
         s.AutosaveEnabled = AutosaveToggle.IsOn;
