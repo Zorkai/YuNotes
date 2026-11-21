@@ -16,7 +16,9 @@ namespace YuNotes.Rendering;
 // depends on PDFsharp's own family-name matching.
 public sealed class PdfFontResolver : IFontResolver
 {
-    private sealed record Face(string Path, int Index, uint Offset, bool IsCff);
+    // Embeddable: the font's license (OS/2 fsType) allows embedding subset
+    // outlines in a document.
+    private sealed record Face(string Path, int Index, uint Offset, bool IsCff, bool Embeddable);
 
     private static readonly object s_lock = new();
     private static List<Face>? s_faces;
@@ -73,7 +75,8 @@ public sealed class PdfFontResolver : IFontResolver
     /// <summary>
     /// PDFsharp family key for the installed face with this PostScript (or
     /// full) name, or null when it isn't installed as a file PDFsharp can embed
-    /// (CFF-outline OpenType, variable-font named instances, memory fonts).
+    /// (CFF-outline OpenType, variable-font named instances, memory fonts) or
+    /// whose license forbids embedding it.
     /// </summary>
     public static string? KeyFor(IEnumerable<string> names, bool simulateBold, bool simulateItalic)
     {
@@ -81,7 +84,7 @@ public sealed class PdfFontResolver : IFontResolver
         foreach (var name in names)
         {
             if (string.IsNullOrEmpty(name)) continue;
-            if (s_byName!.TryGetValue(name, out int id) && !s_faces![id].IsCff)
+            if (s_byName!.TryGetValue(name, out int id) && !s_faces![id].IsCff && s_faces[id].Embeddable)
                 return $"ynf:{id}:{(simulateBold ? 1 : 0)}{(simulateItalic ? 1 : 0)}";
         }
         return null;
@@ -152,6 +155,21 @@ public sealed class PdfFontResolver : IFontResolver
     private const uint TagOtto = 0x4F54544F;   // 'OTTO'
     private const uint TagName = 0x6E616D65;   // 'name'
 
+    // OS/2 fsType embedding permissions. Bits 1–3 are the usage level; when
+    // several are set the least restrictive applies, so a font is
+    // "Restricted License" only when bit 1 is the sole one. PDFsharp embeds a
+    // subset of the outlines, which fonts flagged "no subsetting" (bit 8) or
+    // "bitmap embedding only" (bit 9) don't allow either.
+    private const uint TagOs2 = 0x4F532F32;   // 'OS/2'
+
+    internal static bool IsEmbeddable(int fsType)
+    {
+        if ((fsType & 0x000E) == 0x0002) return false;   // Restricted License
+        if ((fsType & 0x0100) != 0) return false;        // No subsetting
+        if ((fsType & 0x0200) != 0) return false;        // Bitmap embedding only
+        return true;
+    }
+
     private static bool IsCollection(byte[] file) => file.Length >= 4 && U32(file, 0) == TagTtcf;
 
     private static void IndexFile(string path, List<Face> faces, Dictionary<string, int> byName)
@@ -176,18 +194,28 @@ public sealed class PdfFontResolver : IFontResolver
             int numTables = U16(dir, 4);
             if (numTables <= 0 || numTables > 512) continue;
             var records = ReadAt(fs, off + 12, numTables * 16);
-            uint nameOff = 0, nameLen = 0;
+            uint nameOff = 0, nameLen = 0, os2Off = 0, os2Len = 0;
             for (int t = 0; t < numTables; t++)
             {
-                if (U32(records, t * 16) != TagName) continue;
-                nameOff = U32(records, t * 16 + 8);
-                nameLen = U32(records, t * 16 + 12);
+                uint tag = U32(records, t * 16);
+                if (tag == TagName)
+                {
+                    nameOff = U32(records, t * 16 + 8);
+                    nameLen = U32(records, t * 16 + 12);
+                }
+                else if (tag == TagOs2)
+                {
+                    os2Off = U32(records, t * 16 + 8);
+                    os2Len = U32(records, t * 16 + 12);
+                }
             }
             if (nameLen == 0 || nameLen > 4 * 1024 * 1024) continue;
             var names = ReadNames(ReadAt(fs, nameOff, (int)nameLen));
+            // No OS/2 table (old Mac-style fonts): no restriction declared.
+            int fsType = os2Len >= 10 ? U16(ReadAt(fs, os2Off, 10), 8) : 0;
 
             int id = faces.Count;
-            faces.Add(new Face(path, i, off, version == TagOtto));
+            faces.Add(new Face(path, i, off, version == TagOtto, IsEmbeddable(fsType)));
             // First file wins: per-user fonts are indexed after system ones.
             foreach (var n in names) byName.TryAdd(n, id);
         }
