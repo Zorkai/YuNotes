@@ -84,6 +84,13 @@ public sealed class EraserTool : ITool
             case ShapeKind.Line:
                 return DistSqToSegment(p, new(s.X1, s.Y1), new(s.X2, s.Y2)) <= reach2;
 
+            case ShapeKind.Arrow:
+            case ShapeKind.Axes:
+            case ShapeKind.Grid:
+                foreach (var (a, b) in ShapeGeometry.Segments(s))
+                    if (DistSqToSegment(p, a, b) <= reach2) return true;
+                return false;
+
             case ShapeKind.Triangle:
             {
                 Vector2 a = new(s.X1, s.Y1), b = new(s.X2, s.Y2), c = new(s.X3, s.Y3);

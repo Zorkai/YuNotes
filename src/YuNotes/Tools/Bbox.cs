@@ -78,7 +78,7 @@ public readonly record struct Bbox(float X, float Y, float W, float H)
         }
         float w = Math.Max(1f, maxX - x);
         float h = Math.Max(1f, maxY - y);
-        var pad = s.StrokeWidth * 0.5f;
+        var pad = s.StrokeWidth * 0.5f + ShapeGeometry.Overhang(s);
         return new Bbox(x - pad, y - pad, w + pad * 2, h + pad * 2);
     }
 

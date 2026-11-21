@@ -132,6 +132,16 @@
                                                 </StackPanel>
                                             </ToggleButton>
                                         </Grid>
+                                        <!-- Saved pen setups. Tap to use, + saves the current
+                                             pen, right-click removes. Ctrl+1–5 picks one. -->
+                                        <StackPanel Spacing="6">
+                                            <TextBlock Text="Favorites" FontSize="{StaticResource FontSizeCaption}"
+                                                       Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                            <StackPanel x:Name="PenFavoritesPanel" Orientation="Horizontal" Spacing="6" />
+                                            <TextBlock Text="Ctrl+1–5 picks a favorite. Right-click one to remove it."
+                                                       FontSize="11" TextWrapping="Wrap"
+                                                       Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                        </StackPanel>
                                     </StackPanel>
                                 </Flyout>
                             </Button.Flyout>
@@ -219,13 +229,41 @@
                                         FlyoutPresenterStyle="{StaticResource GlassFlyoutPresenterStyle}">
                                     <StackPanel Width="356" Spacing="10">
                                         <TextBlock Text="Shape" Style="{StaticResource FlyoutHeaderStyle}" />
-                                        <Grid ColumnSpacing="8">
+                                        <Grid ColumnSpacing="8" RowSpacing="8">
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="*" />
                                                 <ColumnDefinition Width="*" />
                                             </Grid.ColumnDefinitions>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <ToggleButton x:Name="ShapeArrowItem" Grid.Row="1" Grid.Column="0"
+                                                          Style="{StaticResource OptionCardStyle}"
+                                                          ToolTipService.ToolTip="Arrow: the head is where you stop dragging">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xe941;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Arrow" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                            <ToggleButton x:Name="ShapeAxesItem" Grid.Row="1" Grid.Column="1"
+                                                          Style="{StaticResource OptionCardStyle}"
+                                                          ToolTipService.ToolTip="Coordinate axes with tick marks">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xe6e1;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Axes" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
+                                            <ToggleButton x:Name="ShapeGridItem" Grid.Row="1" Grid.Column="2"
+                                                          Style="{StaticResource OptionCardStyle}"
+                                                          ToolTipService.ToolTip="Grid or table; drag larger for more cells">
+                                                <StackPanel Spacing="6">
+                                                    <FontIcon Glyph="&#xe3ec;" FontSize="22" HorizontalAlignment="Center" />
+                                                    <TextBlock Text="Grid" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
+                                                </StackPanel>
+                                            </ToggleButton>
                                             <ToggleButton x:Name="ShapeRectItem" Grid.Column="0"
                                                           Style="{StaticResource OptionCardStyle}" IsChecked="True">
                                                 <StackPanel Spacing="6">
@@ -386,7 +424,7 @@
                 <ThemeShadow />
             </Border.Shadow>
             <StackPanel Orientation="Horizontal" Spacing="4" Padding="10,6" VerticalAlignment="Center">
-                <TextBox x:Name="SearchBox" PlaceholderText="Find text…" Width="200"
+                <TextBox x:Name="SearchBox" PlaceholderText="Find in note, handwriting too" Width="230"
                          VerticalAlignment="Center" BorderThickness="1" CornerRadius="6" Padding="6,4" />
                 <TextBlock x:Name="SearchCountLabel" VerticalAlignment="Center" MinWidth="64"
                            Foreground="{ThemeResource AppTextSecondaryBrush}" FontSize="12"
@@ -439,15 +477,27 @@
                                    VerticalAlignment="Center"
                                    FontSize="13"
                                    FontWeight="SemiBold" />
-                        <ToggleButton x:Name="PageEditModeBtn"
-                                      HorizontalAlignment="Right"
-                                      Padding="8,3"
-                                      CornerRadius="6"
-                                      Background="Transparent"
-                                      BorderThickness="1"
-                                      FontSize="12">
-                            <TextBlock Text="Edit" FontSize="12" />
-                        </ToggleButton>
+                        <StackPanel Orientation="Horizontal" Spacing="4" HorizontalAlignment="Right">
+                            <!-- Jump list of bookmarked pages; built when opened. -->
+                            <Button x:Name="BookmarksBtn" Width="28" Height="26" Padding="0"
+                                    CornerRadius="6" Background="Transparent" BorderThickness="1"
+                                    ToolTipService.ToolTip="Bookmarked pages"
+                                    AutomationProperties.Name="Bookmarked pages">
+                                <FontIcon Glyph="&#xe866;" FontSize="15" />
+                                <Button.Flyout>
+                                    <MenuFlyout x:Name="BookmarksFlyout" Placement="BottomEdgeAlignedRight"
+                                                ShouldConstrainToRootBounds="True" />
+                                </Button.Flyout>
+                            </Button>
+                            <ToggleButton x:Name="PageEditModeBtn"
+                                          Padding="8,3"
+                                          CornerRadius="6"
+                                          Background="Transparent"
+                                          BorderThickness="1"
+                                          FontSize="12">
+                                <TextBlock Text="Edit" FontSize="12" />
+                            </ToggleButton>
+                        </StackPanel>
                     </Grid>
                 </Border>
 

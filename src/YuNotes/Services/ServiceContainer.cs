@@ -10,6 +10,7 @@ public sealed class ServiceContainer
     public PngExportService PngExport { get; } = new();
     public TemplateService Templates { get; } = new();
     public HistoryService History { get; } = new();
+    public SearchIndex Search { get; } = new();
 
     public void Initialize()
     {

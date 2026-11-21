@@ -8,7 +8,9 @@ namespace YuNotes.Models;
 
 public enum StrokeKind { Pen, Highlighter }
 
-public enum ShapeKind { Rectangle, Ellipse, Line, Triangle }
+// Arrow, Axes and Grid are drawn as straight segments (see ShapeGeometry).
+// New kinds go at the end: the value is stored in saved notes.
+public enum ShapeKind { Rectangle, Ellipse, Line, Triangle, Arrow, Axes, Grid }
 
 public sealed class ShapeElement
 {
