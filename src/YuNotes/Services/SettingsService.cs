@@ -40,6 +40,19 @@ public sealed class SettingsService
         Save();
     }
 
+    public string Snapshot() => JsonSerializer.Serialize(Current);
+
+    // Puts back a Snapshot() by copying values into the existing Current object
+    // (other parts of the app hold a reference to it), then saves.
+    public void Restore(string snapshot)
+    {
+        var old = JsonSerializer.Deserialize<AppSettings>(snapshot);
+        if (old is null) return;
+        foreach (var p in typeof(AppSettings).GetProperties())
+            if (p.CanRead && p.CanWrite) p.SetValue(Current, p.GetValue(old));
+        Save();
+    }
+
     public void Save()
     {
         var json = JsonSerializer.Serialize(Current, new JsonSerializerOptions { WriteIndented = true });

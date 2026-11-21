@@ -57,6 +57,16 @@ public sealed class AppSettings
     public bool PressureEnabled { get; set; } = true;
     public double MinPressure { get; set; } = 0.05;     // drop samples below this raw pressure
     public double PressureMultiplier { get; set; } = 1.0;
+    // Response curve control points (see Input/PressureCurve). The default
+    // sits on the diagonal, which leaves pressure unchanged.
+    public double PressureCurveX1 { get; set; } = 1 / 3.0;
+    public double PressureCurveY1 { get; set; } = 1 / 3.0;
+    public double PressureCurveX2 { get; set; } = 2 / 3.0;
+    public double PressureCurveY2 { get; set; } = 2 / 3.0;
+
+    // Pen stroke smoothing, 0 (off) to 10. Steadies shaky lines at the cost of
+    // the ink trailing the pen tip slightly.
+    public int SmoothingLevel { get; set; } = 0;
 
     // Artifact workaround — drop the first N pointer-move events after a pen-down
     public bool IgnoreFirstEventsEnabled { get; set; } = false;
