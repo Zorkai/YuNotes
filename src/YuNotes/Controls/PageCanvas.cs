@@ -902,7 +902,8 @@ public sealed class PageCanvas : ContentControl
                                   clip: region,
                                   hiResBackground: extPreview ? null : _bgHiRes,
                                   hiResRect: !extPreview && _bgHiRes is not null ? _bgHiResRect : null,
-                                  skipElementIds: _hiddenElementIds);
+                                  skipElementIds: _hiddenElementIds,
+                                  fadedElementIds: _eraseHoverIds);
 
                 // Draw the slice of any neighbouring page's content that spills
                 // across the seam into this region, so a straddling element
@@ -1045,7 +1046,8 @@ public sealed class PageCanvas : ContentControl
                                   clip: viewRect,
                                   hiResBackground: extPreview ? null : _bgHiRes,
                                   hiResRect: !extPreview && _bgHiRes is not null ? _bgHiResRect : null,
-                                  skipElementIds: _hiddenElementIds);
+                                  skipElementIds: _hiddenElementIds,
+                                  fadedElementIds: _eraseHoverIds);
             }
             _freezeImage = new Image
             {
@@ -1697,6 +1699,16 @@ public sealed class PageCanvas : ContentControl
         }
         if (!show) { HideEraserCursor(); return; }
 
+        // Stroke mode, hovering (not erasing): fade what a press here would remove.
+        if (!Context.EraserPixelMode && _capturedPointerId != e.Pointer.PointerId
+            && PickTool(e) is EraserTool hoverEraser)
+        {
+            _eraseHoverScratch.Clear();
+            hoverEraser.CollectStrokeModeHits(Page, ToPageSpace(e), Context.EraserWidth, _eraseHoverScratch);
+            SetEraseHover(_eraseHoverScratch);
+        }
+        else SetEraseHover(null);
+
         if (_eraserCursor is null)
         {
             _eraserCursor = new Microsoft.UI.Xaml.Shapes.Ellipse
@@ -1722,6 +1734,36 @@ public sealed class PageCanvas : ContentControl
     private void HideEraserCursor()
     {
         if (_eraserCursor is not null) _eraserCursor.Visibility = Visibility.Collapsed;
+        SetEraseHover(null);
+    }
+
+    // Strokes/shapes currently drawn faded as "would be erased" (null = none).
+    private HashSet<string>? _eraseHoverIds;
+    private readonly HashSet<string> _eraseHoverScratch = new();
+
+    // Updates the faded set, repainting only the elements whose look changed.
+    private void SetEraseHover(ISet<string>? ids)
+    {
+        bool none = ids is null || ids.Count == 0;
+        if (none && _eraseHoverIds is null) return;
+        if (!none && _eraseHoverIds is not null && _eraseHoverIds.SetEquals(ids!)) return;
+
+        Bbox? dirty = null;
+        void Touch(string id)
+        {
+            Bbox b;
+            float pad;
+            if (Page.Strokes.FirstOrDefault(x => x.Id == id) is { } st) { b = Bbox.Of(st); pad = st.Width; }
+            else if (Page.Shapes.FirstOrDefault(x => x.Id == id) is { } sh) { b = Bbox.Of(sh); pad = sh.StrokeWidth; }
+            else return;
+            b = new Bbox(b.X - pad, b.Y - pad, b.W + pad * 2, b.H + pad * 2);
+            dirty = dirty is null ? b : Bbox.Union(dirty.Value, b);
+        }
+        if (_eraseHoverIds is not null) foreach (var id in _eraseHoverIds) if (none || !ids!.Contains(id)) Touch(id);
+        if (!none) foreach (var id in ids!) if (_eraseHoverIds?.Contains(id) != true) Touch(id);
+
+        _eraseHoverIds = none ? null : new HashSet<string>(ids!);
+        if (dirty is { } d) CommitStrokeRedraw(d);
     }
     private void OnPointerMovedCore(object sender, PointerRoutedEventArgs e)
     {
@@ -2390,6 +2432,57 @@ public sealed class PageCanvas : ContentControl
         Context.Mutated?.Invoke();
         if (SelectionBbox(out var b)) InvalidateSelectionRegion(b, 0);
         else _canvas.Invalidate();
+    }
+
+    // True when the selection holds anything with a line width (ink, shapes).
+    public bool SelectionHasResizableWidth =>
+        Context.SelectedStrokeIds.Count + Context.SelectedShapeIds.Count > 0;
+
+    // Width of the first selected pen stroke (or highlighter / shape when there
+    // is none), used to mark the active width dot on the selection bar.
+    public float? SelectionWidth()
+    {
+        bool allHl = SelectionIsAllHighlighter;
+        foreach (var id in Context.SelectedStrokeIds)
+            if (Page.Strokes.FirstOrDefault(s => s.Id == id) is { } s
+                && (allHl || s.Kind != StrokeKind.Highlighter)) return s.Width;
+        foreach (var id in Context.SelectedShapeIds)
+            if (Page.Shapes.FirstOrDefault(s => s.Id == id) is { } sh) return sh.StrokeWidth;
+        return null;
+    }
+
+    // Sets the line width of the selected ink and shapes in place. The bar
+    // offers pen widths unless everything selected is highlighter, so in a
+    // mixed selection highlighter strokes keep their (much wider) width rather
+    // than shrinking to a pen size. One undoable mutation, like Recolor.
+    public void SetSelectionWidth(float width)
+    {
+        bool allHl = SelectionIsAllHighlighter;
+        float oldMax = 0f;
+        bool changed = false;
+        foreach (var s in Page.Strokes.Where(s => Context.SelectedStrokeIds.Contains(s.Id)))
+        {
+            if (!allHl && s.Kind == StrokeKind.Highlighter) continue;
+            if (s.Width == width) continue;
+            oldMax = MathF.Max(oldMax, s.Width);
+            s.Width = width;
+            changed = true;
+        }
+        foreach (var sh in Page.Shapes.Where(s => Context.SelectedShapeIds.Contains(s.Id)))
+        {
+            if (allHl || sh.StrokeWidth == width) continue;
+            oldMax = MathF.Max(oldMax, sh.StrokeWidth);
+            sh.StrokeWidth = width;
+            changed = true;
+        }
+        if (!changed) return;
+
+        Context.Mutated?.Invoke();
+        // Pad by the wider of old/new so a thinning stroke's old edge repaints too.
+        if (SelectionBbox(out var b)) InvalidateSelectionRegion(b, MathF.Max(oldMax, width));
+        else _canvas.Invalidate();
+        // Selection chrome hugs the ink; refresh it for the new extent.
+        Context.SelectionChanged?.Invoke();
     }
 
     public void DuplicateSelection(float offsetX = 24, float offsetY = 24)

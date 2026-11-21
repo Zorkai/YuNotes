@@ -153,6 +153,23 @@ public sealed class EraserTool : ITool
         return !(neg && pos);
     }
 
+    // Ids of the strokes and shapes a stroke-mode erase at p would remove —
+    // the same tests EraseAt uses — for the hover preview that fades them.
+    public void CollectStrokeModeHits(NotePage page, Vector2 p, float width, ISet<string> into)
+    {
+        into.Clear();
+        var r = width * 0.5f;
+        var eraserBox = new Bbox(p.X - r, p.Y - r, r * 2, r * 2);
+        foreach (var s in page.Strokes)
+        {
+            if (s.Points.Count == 0) continue;
+            if (!eraserBox.Overlaps(BoxOf(s))) continue;
+            if (AnyPointInRadius(s, p, r * r)) into.Add(s.Id);
+        }
+        foreach (var sh in page.Shapes)
+            if (eraserBox.Overlaps(Bbox.Of(sh)) && ShapeHit(sh, p, r)) into.Add(sh.Id);
+    }
+
     private void EraseAt(EditorContext ctx, Vector2 p)
     {
         var r = ctx.EraserWidth * 0.5f;

@@ -1013,6 +1013,9 @@ public sealed partial class InkCanvasControl : UserControl
     public bool SelectionHasRecolorable => ActivePageCanvas?.SelectionHasRecolorable == true;
     public bool SelectionIsAllHighlighter => ActivePageCanvas?.SelectionIsAllHighlighter == true;
     public Windows.UI.Color? SelectionColor() => ActivePageCanvas?.SelectionColor();
+    public bool SelectionHasResizableWidth => ActivePageCanvas?.SelectionHasResizableWidth == true;
+    public float? SelectionWidth() => ActivePageCanvas?.SelectionWidth();
+    public void SetSelectionWidth(float width) => ActivePageCanvas?.SetSelectionWidth(width);
     public byte[]? RenderRegionOfCurrentPage(float x, float y, float w, float h)
         => ActivePageCanvas?.RenderRegionToPng(x, y, w, h);
 

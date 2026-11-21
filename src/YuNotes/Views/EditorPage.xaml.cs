@@ -165,6 +165,7 @@ public sealed partial class EditorPage : Page
         SelClearBtn.Click += (_, __) => { Canvas.ClearSelection(); UpdateSelectionUi(); };
         // Selection bar color: recolors the selected ink / shapes / text in place.
         SelColorPicker.ColorChanged += (_, c) => Canvas.RecolorSelection(c);
+        SelWidthPicker.WidthChanged += (_, w) => { Canvas.SetSelectionWidth((float)w); PositionSelectionActions(); };
 
         PagePanelBtn.Click += (_, __) => TogglePagePanel();
         PageEditModeBtn.Click += (_, __) => { _pagePanelEditMode = !_pagePanelEditMode; ClearPageSelection(); if (_pagePanelOpen) _ = RefreshPagePanelAsync(); };
@@ -213,6 +214,14 @@ public sealed partial class EditorPage : Page
                 case ToolKind.Pen:        _penWidth = (float)w; Canvas.Context.CurrentWidth = _penWidth; break;
                 case ToolKind.Highlighter: _highlighterWidth = (float)w; Canvas.Context.CurrentWidth = _highlighterWidth; break;
                 case ToolKind.Eraser:     _eraserWidth = (float)w; Canvas.Context.EraserWidth = _eraserWidth; break;
+            }
+            // Like the toolbar color: with ink selected, the pen/highlighter width
+            // also resizes the selection.
+            if (_selected is ToolKind.Pen or ToolKind.Highlighter
+                && Canvas.HasSelection && Canvas.SelectionHasResizableWidth)
+            {
+                Canvas.SetSelectionWidth((float)w);
+                SyncSelectionWidthPicker();
             }
         };
         SyncEraserMenu();
@@ -487,6 +496,7 @@ public sealed partial class EditorPage : Page
         // Color and width pickers follow the floating toolbar size
         ColorPicker.SetButtonSize(colorBtn);
         SelColorPicker.SetButtonSize(colorBtn);
+        SelWidthPicker.SetChipSize(chip, chipDot);
         WidthPicker.SetChipSize(chip, chipDot);
     }
 
@@ -2245,7 +2255,9 @@ public sealed partial class EditorPage : Page
     {
         bool show = Canvas.SelectionHasRecolorable;
         SelColorPicker.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
-        SelColorSep.Visibility = SelColorPicker.Visibility;
+        SyncSelectionWidthPicker();
+        SelColorSep.Visibility = show || SelWidthPicker.Visibility == Visibility.Visible
+            ? Visibility.Visible : Visibility.Collapsed;
         if (!show) return;
 
         var s = App.Services.Settings.Current;
@@ -2255,6 +2267,19 @@ public sealed partial class EditorPage : Page
         // Highlighter presets carry their alpha, so match them raw; pen presets
         // are opaque.
         SelColorPicker.SetPresets(presets, hl ? current : Color.FromArgb(255, current.R, current.G, current.B));
+    }
+
+    // Width dots on the selection bar: shown when ink or shapes are selected,
+    // with highlighter widths for an all-highlighter selection (pen widths
+    // otherwise) and the dot nearest the first item's width marked.
+    private void SyncSelectionWidthPicker()
+    {
+        bool show = Canvas.SelectionHasResizableWidth;
+        SelWidthPicker.Visibility = show ? Visibility.Visible : Visibility.Collapsed;
+        if (!show) return;
+        var presets = Canvas.SelectionIsAllHighlighter ? HighlighterWidths : PenWidths;
+        var current = Canvas.SelectionWidth() ?? presets[1];
+        SelWidthPicker.SetPresets(presets, NearestPreset(presets, current));
     }
 
     // Float the Duplicate/Delete/Clear bar just above the selected content (like the

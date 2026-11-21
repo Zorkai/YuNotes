@@ -102,7 +102,8 @@ public sealed class PageRenderer
                          float previewExtLeft = 0, float previewExtRight = 0,
                          Rect? clip = null,
                          CanvasBitmap? hiResBackground = null, Rect? hiResRect = null,
-                         System.Collections.Generic.ISet<string>? skipElementIds = null)
+                         System.Collections.Generic.ISet<string>? skipElementIds = null,
+                         System.Collections.Generic.ISet<string>? fadedElementIds = null)
     {
         // Elements are drawn shifted right during a left-extension preview, so
         // cull against the clip shifted the opposite way.
@@ -256,18 +257,22 @@ public sealed class PageRenderer
         {
             if (skipElementIds?.Contains(sh.Id) == true) continue;
             if (cullClip is { } cc2 && !ShapeIntersects(cc2, sh)) continue;
-            DrawShape(ds, sh);
+            if (fadedElementIds?.Contains(sh.Id) == true)
+            {
+                using (ds.CreateLayer(FadedOpacity)) DrawShape(ds, sh);
+            }
+            else DrawShape(ds, sh);
         }
 
         // Strokes (highlighters first so pen sits on top)
         foreach (var s in page.Strokes)
             if (s.Kind == StrokeKind.Highlighter && skipElementIds?.Contains(s.Id) != true
                 && (cullClip is not { } h || StrokeIntersects(h, s)))
-                DrawStroke(ds, s);
+                DrawStroke(ds, s, fadedElementIds?.Contains(s.Id) == true ? FadedOpacity : 1f);
         foreach (var s in page.Strokes)
             if (s.Kind == StrokeKind.Pen && skipElementIds?.Contains(s.Id) != true
                 && (cullClip is not { } pc || StrokeIntersects(pc, s)))
-                DrawStroke(ds, s);
+                DrawStroke(ds, s, fadedElementIds?.Contains(s.Id) == true ? FadedOpacity : 1f);
 
         // Text — skip the element currently being inline-edited
         foreach (var t in page.Texts)
@@ -486,7 +491,11 @@ public sealed class PageRenderer
         if (rotated) ds.Transform = savedTransform;
     }
 
-    public void DrawStroke(CanvasDrawingSession ds, Stroke s)
+    // Opacity of elements the stroke eraser would remove, while hovering.
+    public const float FadedOpacity = 0.3f;
+
+    // fade multiplies the stroke's own opacity (1 = normal).
+    public void DrawStroke(CanvasDrawingSession ds, Stroke s, float fade = 1f)
     {
         if (s.Points.Count == 0) return;
 
@@ -499,6 +508,7 @@ public sealed class PageRenderer
         float opacity = rawAlpha / 255f;
         if (s.Kind == StrokeKind.Highlighter)
             opacity = Math.Min(140f, rawAlpha == 255 ? 110f : rawAlpha) / 255f;
+        opacity *= fade;
 
         bool needsLayer = opacity < 0.99f;
         Color drawColor = needsLayer
