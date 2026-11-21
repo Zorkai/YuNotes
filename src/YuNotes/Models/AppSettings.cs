@@ -105,6 +105,10 @@ public sealed class AppSettings
     // Render
     public bool UseHighRefreshRate { get; set; } = true;
 
+    // Updates — check GitHub Releases at startup and install newer builds
+    // automatically (staged until YuNotes closes). See UpdateService.
+    public bool AutoUpdateEnabled { get; set; } = true;
+
     // Per-document last-viewed page index (keyed by file path), so reopening a
     // document returns to where you left off.
     public Dictionary<string, int> LastPageByDocument { get; set; } = new();

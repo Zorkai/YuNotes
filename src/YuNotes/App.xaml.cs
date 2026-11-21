@@ -53,6 +53,9 @@ public partial class App : Application
         // If Explorer launched us via a file association (.pdf / .yunote), open
         // that file in the editor on top of the home page.
         TryOpenActivationFile();
+
+        // Background update check (no-op when turned off in Settings).
+        _ = YuNotes.Services.UpdateService.CheckOnStartupAsync();
     }
 
     // When the app is started by opening an associated file, Windows delivers the

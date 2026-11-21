@@ -221,6 +221,17 @@ public sealed partial class SettingsPage : Page
         AutosaveToggle.Toggled += (_, _) => AutosaveDelayBox.IsEnabled = AutosaveToggle.IsOn;
         AutosaveDelayBox.ValueChanged += (_, _) => Mark();
 
+        // Updates
+        AutoUpdateToggle.Toggled += Mark;
+        CheckUpdatesBtn.Click += async (_, _) => await Services.UpdateService.CheckAndInstallAsync();
+        Loaded += (_, _) =>
+        {
+            Services.UpdateService.StatusChanged -= ShowUpdateStatus;
+            Services.UpdateService.StatusChanged += ShowUpdateStatus;
+            ShowUpdateStatus();
+        };
+        Unloaded += (_, _) => Services.UpdateService.StatusChanged -= ShowUpdateStatus;
+
         ToolVisExport.Checked   += Mark;
         ToolVisExport.Unchecked += Mark;
 
@@ -318,6 +329,23 @@ public sealed partial class SettingsPage : Page
         AutosaveToggle.IsOn = s.AutosaveEnabled;
         AutosaveDelayBox.Value = s.AutosaveDelaySeconds;
         AutosaveDelayBox.IsEnabled = s.AutosaveEnabled;
+
+        // Updates
+        AutoUpdateToggle.IsOn = s.AutoUpdateEnabled;
+    }
+
+    private void ShowUpdateStatus()
+    {
+        var state = Services.UpdateService.Current;
+        UpdateStatusText.Text  = Services.UpdateService.StatusText;
+        UpdateProgress.IsActive = state is Services.UpdateService.State.Checking
+                                        or Services.UpdateService.State.Downloading;
+        CheckUpdatesBtn.IsEnabled = Services.UpdateService.IsSupported && !UpdateProgress.IsActive
+                                    && state != Services.UpdateService.State.Ready;
+        var v = Services.UpdateService.InstalledVersion;
+        AppVersionText.Text = v is null ? "Development build"
+            : Services.UpdateService.IsSupported ? $"Version {v.Major}.{v.Minor}.{v.Build}"
+            : $"Version {v.Major}.{v.Minor}.{v.Build} · updates come from the Microsoft Store";
     }
 
     private static void PopulateToolList(
@@ -508,6 +536,8 @@ public sealed partial class SettingsPage : Page
         // NumberBox yields NaN if the field is cleared — fall back to the default.
         s.AutosaveDelaySeconds = double.IsNaN(AutosaveDelayBox.Value)
             ? 2.5 : Math.Clamp(AutosaveDelayBox.Value, 0.5, 120);
+
+        s.AutoUpdateEnabled = AutoUpdateToggle.IsOn;
 
         s.HiddenToolbarTools.Clear();
         s.ToolbarDrawingOrder.Clear();

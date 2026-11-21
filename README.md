@@ -25,7 +25,7 @@
 </div>
 
 - 🏬 **[Microsoft Store](https://apps.microsoft.com/detail/9MZZ8X385HB0)** — recommended: one-click install, signed by Microsoft, automatic updates.
-- 📦 **[GitHub Releases](../../releases)** — portable build: unzip and run `YuNotes.exe`, no installer required (signed with a developer certificate, so Windows asks you to trust it once).
+- 📦 **[GitHub Releases](../../releases)** — the latest build of `main`, published automatically on every push. Download `YuNotes.cer`, install it once to *Local Machine → Trusted People*, then open the `.msix`. From then on YuNotes updates itself: it checks for a new release at startup and installs it when you close the app (turn this off in **Settings → Updates**).
 
 > 💻 Requires **Windows 10 1809 (build 17763)** or later. Windows 11 recommended.
 

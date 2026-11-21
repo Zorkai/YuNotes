@@ -205,8 +205,15 @@ public sealed partial class HomePage : Page
         KeyboardAccelerators.Add(findKey);
         KeyboardAcceleratorPlacementMode = KeyboardAcceleratorPlacementMode.Hidden;
 
+        // Update notice: shown when the background updater has staged a new version.
+        // (Re)subscribed on every Loaded since a cached page unloads and reloads.
+        Unloaded += (_, __) => Services.UpdateService.StatusChanged -= ShowUpdateNotice;
+
         Loaded += (_, __) =>
         {
+            Services.UpdateService.StatusChanged -= ShowUpdateNotice;
+            Services.UpdateService.StatusChanged += ShowUpdateNotice;
+            ShowUpdateNotice();
             MainWindow.SetDragRegion(HeaderDragRegion);
             HeaderBar.Padding = new Thickness(4, 0, 12 + MainWindow.CaptionButtonInset, 0);
             ApplyNavSelection();
@@ -214,6 +221,13 @@ public sealed partial class HomePage : Page
             LoadFolderTree();
             Refresh();
         };
+    }
+
+    private void ShowUpdateNotice()
+    {
+        if (Services.UpdateService.Current != Services.UpdateService.State.Ready) return;
+        UpdateInfoBar.Message = Services.UpdateService.StatusText;
+        UpdateInfoBar.IsOpen  = true;
     }
 
     // ── Sidebar toggle ────────────────────────────────────────────────────────

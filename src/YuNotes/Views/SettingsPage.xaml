@@ -327,6 +327,25 @@
                     </StackPanel>
                 </Border>
 
+                <!-- ─── Updates ──────────────────────────────────────────────── -->
+                <Border Style="{StaticResource CardStyle}">
+                    <StackPanel Spacing="10">
+                        <TextBlock Text="Updates" Style="{StaticResource H2Style}" />
+                        <ToggleSwitch x:Name="AutoUpdateToggle" Header="Install updates automatically" />
+                        <TextBlock Text="YuNotes checks GitHub for a newer version when it starts. Updates download in the background and install when you close the app, so your open notes are never interrupted."
+                                   TextWrapping="Wrap" Foreground="{ThemeResource AppTextSecondaryBrush}" FontSize="12" />
+                        <StackPanel Orientation="Horizontal" Spacing="12">
+                            <Button x:Name="CheckUpdatesBtn" Content="Check for updates" />
+                            <ProgressRing x:Name="UpdateProgress" Width="18" Height="18"
+                                          IsActive="False" VerticalAlignment="Center" />
+                            <TextBlock x:Name="UpdateStatusText" VerticalAlignment="Center"
+                                       TextWrapping="Wrap" FontSize="13" />
+                        </StackPanel>
+                        <TextBlock x:Name="AppVersionText" FontSize="12"
+                                   Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                    </StackPanel>
+                </Border>
+
                 <!-- ─── Input Devices Diagnostics ─────────────────────────────── -->
                 <Border Style="{StaticResource CardStyle}">
                     <StackPanel Spacing="10">
