@@ -339,6 +339,11 @@
                                                      Keywords="shape recognition snap line ellipse rectangle">
                                     <ToggleSwitch x:Name="HoldToSnapToggle" OnContent="" OffContent="" MinWidth="0" />
                                 </controls:SettingRow>
+                                <controls:SettingRow Title="Handwriting language" SettingKey="hwlang"
+                                                     Description="Used to read your handwriting for search. Changing it reads your notes again. Add languages under Windows Settings › Time and language › Language."
+                                                     Keywords="handwriting language recognition search read german english">
+                                    <ComboBox x:Name="HwLangCombo" Width="200" />
+                                </controls:SettingRow>
                             </StackPanel>
                         </Border>
                     </StackPanel>

@@ -84,6 +84,9 @@ public sealed class AppSettings
     // the ink trailing the pen tip slightly.
     public int SmoothingLevel { get; set; } = 0;
 
+    // Handwriting language for search (a recognizer name); "" = Windows default.
+    public string HandwritingLanguage { get; set; } = "";
+
     // Artifact workaround — drop the first N pointer-move events after a pen-down
     public bool IgnoreFirstEventsEnabled { get; set; } = false;
     public int IgnoreFirstEventsCount { get; set; } = 1;
@@ -142,6 +145,8 @@ public sealed class AppSettings
     // Locations
     public string DocumentsFolder { get; set; } = "";
     public List<string> RecentDocuments { get; set; } = new();
+    // Notes pinned to the top of Home (file paths).
+    public List<string> PinnedNotes { get; set; } = new();
 
     // Folder registry — stable IDs survive renames; synced with filesystem on load
     public List<FolderInfo> Folders { get; set; } = new();

@@ -11,6 +11,7 @@ public sealed class ServiceContainer
     public TemplateService Templates { get; } = new();
     public HistoryService History { get; } = new();
     public SearchIndex Search { get; } = new();
+    public VersionHistory Versions { get; } = new();
 
     public void Initialize()
     {
