@@ -1265,7 +1265,7 @@ public sealed partial class HomePage : Page
     // thread so the drill-in transition plays over the editor shell.
     private static void OpenPath(string path)
     {
-        MainWindow.Navigate<EditorPage>(path, new DrillInNavigationTransitionInfo());
+        MainWindow.Navigate<EditorPage>(path, new SuppressNavigationTransitionInfo());
     }
 
     private async void RecentList_ItemClick(object sender, ItemClickEventArgs e)

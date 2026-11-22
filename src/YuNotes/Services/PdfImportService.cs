@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using PDFtoImage;
 using YuNotes.Models;
 using SkiaSharp;
@@ -22,12 +23,17 @@ public sealed class PdfImportService
         var bytes = File.ReadAllBytes(pdfPath);
         int pageCount = Conversion.GetPageCount(bytes);
         doc.Pages.Clear();
-        for (int i = 0; i < pageCount; i++)
+
+        var pages = new NotePage[pageCount];
+
+        // Parallelize page rendering across all available CPU cores to drastically
+        // speed up PDF importing and avoid single-threaded rasterization/compression bottlenecks.
+        Parallel.For(0, pageCount, new ParallelOptions { MaxDegreeOfParallelism = Environment.ProcessorCount }, i =>
         {
             using var bmp = Conversion.ToImage(bytes, page: (Index)i, options: new RenderOptions { Dpi = dpi });
             using var ms = new MemoryStream();
-            bmp.Encode(ms, SKEncodedImageFormat.Png, 95);
-            var page = new NotePage
+            bmp.Encode(ms, SKEncodedImageFormat.Jpeg, 90);
+            pages[i] = new NotePage
             {
                 Index = i,
                 Width  = bmp.Width  / scale,
@@ -35,7 +41,11 @@ public sealed class PdfImportService
                 BackgroundPng = ms.ToArray(),
                 SourcePageIndex = i   // remember which source PDF page this corresponds to
             };
-            doc.Pages.Add(page);
+        });
+
+        for (int i = 0; i < pageCount; i++)
+        {
+            doc.Pages.Add(pages[i]);
         }
         doc.Info.PageCount = doc.Pages.Count;
     }

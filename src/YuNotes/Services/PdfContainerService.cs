@@ -157,6 +157,16 @@ public sealed class PdfContainerService
         catch { return null; }
     }
 
+    public (byte[]? Data, byte[]? SourcePdf) ExtractDataAndSource(string pdfPath)
+    {
+        try
+        {
+            using var doc = PdfReader.Open(pdfPath, PdfDocumentOpenMode.Import);
+            return (FindEmbeddedFile(doc, EmbeddedName), FindEmbeddedFile(doc, EmbeddedSourceName));
+        }
+        catch { return (null, null); }
+    }
+
     public byte[]? ExtractData(string pdfPath)
     {
         try

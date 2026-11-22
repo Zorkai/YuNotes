@@ -126,7 +126,7 @@ public sealed class DocumentService
     // Otherwise rasterize the PDF pages so they show up as page backgrounds.
     public Document OpenPdfContainer(string pdfPath, PdfContainerService container, PdfImportService pdfImport)
     {
-        var blob = container.ExtractData(pdfPath);
+        var (blob, sourcePdf) = container.ExtractDataAndSource(pdfPath);
         if (blob is not null && blob.Length > 0)
         {
             var temp = Path.Combine(Path.GetTempPath(), $"yunotes-{Guid.NewGuid():N}.sqlite");
@@ -138,7 +138,7 @@ public sealed class DocumentService
                 if (string.IsNullOrEmpty(doc.Info.SourcePdfPath)) doc.Info.SourcePdfPath = pdfPath;
                 // Carry the pristine source PDF (if previously embedded) so the next save
                 // can overlay strokes on top of the vector content instead of flattening.
-                doc.SourcePdfBytes = container.ExtractSourcePdf(pdfPath);
+                doc.SourcePdfBytes = sourcePdf;
                 return doc;
             }
             finally { try { File.Delete(temp); } catch { } }
@@ -517,6 +517,7 @@ public sealed class DocumentService
             }
         }
 
+        var pagesById = new Dictionary<string, NotePage>();
         using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = forIndex
@@ -543,70 +544,83 @@ public sealed class DocumentService
                 if (!r.IsDBNull(8)) p.BackgroundContentWidth = r.GetDouble(8);
                 if (!r.IsDBNull(9)) p.Bookmark = r.GetString(9);
                 doc.Pages.Add(p);
+                pagesById[p.Id] = p;
             }
         }
 
-        foreach (var p in doc.Pages)
+        // Batch-load elements across all pages in single queries instead of
+        // 4 round-trips per page. On multi-page documents, this cuts database
+        // round-trips by >75%.
+        using (var cmd = conn.CreateCommand())
         {
-            // Per-element try/catch: a single corrupt row (truncated stroke blob,
-            // malformed JSON) should cost that one element, not abort the whole
-            // open and leave the user unable to reach the rest of their document.
-            using (var cmd = conn.CreateCommand())
+            cmd.CommandText = "SELECT page_id,id,data FROM stroke";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
             {
-                cmd.CommandText = "SELECT id,data FROM stroke WHERE page_id=$p";
-                cmd.Parameters.AddWithValue("$p", p.Id);
-                using var r = cmd.ExecuteReader();
-                while (r.Read())
+                var pageId = r.GetString(0);
+                if (pagesById.TryGetValue(pageId, out var p))
                 {
-                    try { p.Strokes.Add(Stroke.Deserialize((byte[])r["data"], r.GetString(0))); }
+                    try { p.Strokes.Add(Stroke.Deserialize((byte[])r["data"], r.GetString(1))); }
                     catch { }
                 }
             }
-            using (var cmd = conn.CreateCommand())
+        }
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT page_id,id,json FROM shape_element";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
             {
-                cmd.CommandText = "SELECT id,json FROM shape_element WHERE page_id=$p";
-                cmd.Parameters.AddWithValue("$p", p.Id);
-                using var r = cmd.ExecuteReader();
-                while (r.Read())
+                var pageId = r.GetString(0);
+                if (pagesById.TryGetValue(pageId, out var p))
                 {
                     try
                     {
-                        var sh = JsonSerializer.Deserialize<ShapeElement>(r.GetString(1));
+                        var sh = JsonSerializer.Deserialize<ShapeElement>(r.GetString(2));
                         if (sh is not null) p.Shapes.Add(sh);
                     }
                     catch { }
                 }
             }
-            using (var cmd = conn.CreateCommand())
+        }
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "SELECT page_id,id,json FROM text_element";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
             {
-                cmd.CommandText = "SELECT id,json FROM text_element WHERE page_id=$p";
-                cmd.Parameters.AddWithValue("$p", p.Id);
-                using var r = cmd.ExecuteReader();
-                while (r.Read())
+                var pageId = r.GetString(0);
+                if (pagesById.TryGetValue(pageId, out var p))
                 {
                     try
                     {
-                        var t = JsonSerializer.Deserialize<TextElement>(r.GetString(1));
+                        var t = JsonSerializer.Deserialize<TextElement>(r.GetString(2));
                         if (t is not null) p.Texts.Add(t);
                     }
                     catch { }
                 }
             }
-            if (forIndex) continue;
-            using (var cmd = conn.CreateCommand())
+        }
+
+        if (!forIndex)
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT page_id,id,x,y,w,h,png FROM image_element";
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
             {
-                cmd.CommandText = "SELECT id,x,y,w,h,png FROM image_element WHERE page_id=$p";
-                cmd.Parameters.AddWithValue("$p", p.Id);
-                using var r = cmd.ExecuteReader();
-                while (r.Read())
+                var pageId = r.GetString(0);
+                if (pagesById.TryGetValue(pageId, out var p))
                 {
                     try
                     {
                         p.Images.Add(new ImageElement
                         {
-                            Id = r.GetString(0),
-                            X = r.GetDouble(1), Y = r.GetDouble(2),
-                            Width = r.GetDouble(3), Height = r.GetDouble(4),
+                            Id = r.GetString(1),
+                            X = r.GetDouble(2), Y = r.GetDouble(3),
+                            Width = r.GetDouble(4), Height = r.GetDouble(5),
                             PngData = (byte[])r["png"]
                         });
                     }
