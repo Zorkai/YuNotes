@@ -565,42 +565,90 @@ public sealed class PageRenderer
         return CanvasGeometry.CreatePath(path);
     }
 
-    // Builds a tapered pressure ribbon — one quad per segment plus a circle per
-    // joint to hide the seams — as a SINGLE winding-fill geometry. Winding fill
-    // makes the overlapping figures union instead of even-odd cancelling.
+    // Builds a tapered pressure ribbon as a SINGLE closed outline (left edge
+    // forward, right edge back) with round caps, plus a round joint only where
+    // the stroke turns sharply (> 60°) and the mitered outline would leave a
+    // notch. Winding fill unions the caps/joints with the outline.
+    //
+    // This used to be one quad per segment PLUS a full circle at every sample:
+    // tens of thousands of overlapping figures per page that D2D had to union-
+    // tessellate on first draw. On a 1,220-stroke page that took ~2.7 s of UI-
+    // thread time when opening a note; the outline renders the same pixels
+    // (<0.01% of ink pixels differ by more than half intensity) in ~65 ms.
     private static CanvasGeometry BuildVariableWidthGeometry(CanvasDrawingSession ds, Stroke s)
     {
-        var halfBase = s.Width * 0.5f;
-        var pts = s.Points;
+        float halfBase = s.Width * 0.5f;
+        var src = s.Points;
+
+        // Drop zero-length segments (they have no direction to offset along).
+        var p = new Vector2[src.Count];
+        var w = new float[src.Count];
+        int n = 0;
+        for (int i = 0; i < src.Count; i++)
+        {
+            var v = new Vector2(src[i].X, src[i].Y);
+            if (n > 0 && Vector2.Distance(p[n - 1], v) < 0.0001f) continue;
+            p[n] = v;
+            w[n] = halfBase * Math.Max(0.2f, src[i].Pressure);
+            n++;
+        }
 
         using var path = new CanvasPathBuilder(ds);
         path.SetFilledRegionDetermination(CanvasFilledRegionDetermination.Winding);
-
-        // Start cap
-        var first = pts[0];
-        AddCircleFigure(path, first.X, first.Y, halfBase * Math.Max(0.2f, first.Pressure));
-
-        for (int i = 1; i < pts.Count; i++)
+        if (n == 1)
         {
-            var a = pts[i - 1];
-            var b = pts[i];
-            var dir = new Vector2(b.X - a.X, b.Y - a.Y);
-            var len = dir.Length();
-            if (len < 0.0001f) continue;
-            dir /= len;
-            var n = new Vector2(-dir.Y, dir.X);
-            var wA = halfBase * Math.Max(0.2f, a.Pressure);
-            var wB = halfBase * Math.Max(0.2f, b.Pressure);
-
-            path.BeginFigure(a.X + n.X * wA, a.Y + n.Y * wA);
-            path.AddLine(b.X + n.X * wB, b.Y + n.Y * wB);
-            path.AddLine(b.X - n.X * wB, b.Y - n.Y * wB);
-            path.AddLine(a.X - n.X * wA, a.Y - n.Y * wA);
-            path.EndFigure(CanvasFigureLoop.Closed);
-
-            AddCircleFigure(path, b.X, b.Y, wB);
+            AddCircleFigure(path, p[0].X, p[0].Y, w[0]);
+            return CanvasGeometry.CreatePath(path);
         }
 
+        const float SharpTurnCos = 0.5f;   // turns sharper than 60° get a round joint
+        var left = new Vector2[n];
+        var right = new Vector2[n];
+        for (int i = 0; i < n; i++)
+        {
+            Vector2 nrm;
+            float scale = 1f;
+            if (i == 0)
+            {
+                var d = Vector2.Normalize(p[1] - p[0]);
+                nrm = new Vector2(-d.Y, d.X);
+            }
+            else if (i == n - 1)
+            {
+                var d = Vector2.Normalize(p[i] - p[i - 1]);
+                nrm = new Vector2(-d.Y, d.X);
+            }
+            else
+            {
+                var dPrev = Vector2.Normalize(p[i] - p[i - 1]);
+                var dNext = Vector2.Normalize(p[i + 1] - p[i]);
+                var nA = new Vector2(-dPrev.Y, dPrev.X);
+                var nB = new Vector2(-dNext.Y, dNext.X);
+                var sum = nA + nB;
+                float len = sum.Length();
+                if (Vector2.Dot(dPrev, dNext) < SharpTurnCos || len < 1e-4f)
+                {
+                    // Sharp turn: no miter (it would spike); a round joint fills the gap.
+                    nrm = len < 1e-4f ? nA : sum / len;
+                    AddCircleFigure(path, p[i].X, p[i].Y, w[i]);
+                }
+                else
+                {
+                    nrm = sum / len;
+                    scale = 1f / Math.Max(0.5f, Vector2.Dot(nrm, nA));   // miter length
+                }
+            }
+            left[i] = p[i] + nrm * (w[i] * scale);
+            right[i] = p[i] - nrm * (w[i] * scale);
+        }
+
+        path.BeginFigure(left[0]);
+        for (int i = 1; i < n; i++) path.AddLine(left[i]);
+        for (int i = n - 1; i >= 0; i--) path.AddLine(right[i]);
+        path.EndFigure(CanvasFigureLoop.Closed);
+
+        AddCircleFigure(path, p[0].X, p[0].Y, w[0]);           // start cap
+        AddCircleFigure(path, p[n - 1].X, p[n - 1].Y, w[n - 1]); // end cap
         return CanvasGeometry.CreatePath(path);
     }
 

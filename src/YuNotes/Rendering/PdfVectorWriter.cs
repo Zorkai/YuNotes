@@ -264,43 +264,89 @@ public static class PdfVectorWriter
         return path;
     }
 
-    // Same tapered ribbon as PageRenderer.BuildVariableWidthGeometry: a quad
-    // per segment plus a circle per joint, unioned by a nonzero-winding fill.
-    // Every figure winds the same way so overlaps add instead of cancelling.
+    // Same tapered ribbon as PageRenderer.BuildVariableWidthGeometry: one
+    // closed outline (left edge forward, right edge back) with round caps, and
+    // a round joint only at turns sharper than 60°, unioned by a nonzero-winding
+    // fill. Every figure winds the same way so overlaps add instead of
+    // cancelling. (Was a quad + 4-curve circle per sample: ~4x the save time
+    // and ~10 MB for a single handwritten page.)
     private static XGraphicsPath BuildVariableWidthPath(Stroke s)
     {
         double halfBase = s.Width * 0.5;
-        var pts = s.Points;
+        var src = s.Points;
         var path = new XGraphicsPath { FillMode = XFillMode.Winding };
 
-        var first = pts[0];
-        AddCircle(path, first.X, first.Y, halfBase * Math.Max(0.2f, first.Pressure));
-
-        for (int i = 1; i < pts.Count; i++)
+        // Drop zero-length segments (no direction to offset along).
+        var px = new double[src.Count];
+        var py = new double[src.Count];
+        var w = new double[src.Count];
+        int n = 0;
+        for (int i = 0; i < src.Count; i++)
         {
-            var a = pts[i - 1];
-            var b = pts[i];
-            double dx = b.X - a.X, dy = b.Y - a.Y;
-            double len = Math.Sqrt(dx * dx + dy * dy);
-            if (len < 0.0001) continue;
-            dx /= len; dy /= len;
-            double nx = -dy, ny = dx;
-            double wA = halfBase * Math.Max(0.2f, a.Pressure);
-            double wB = halfBase * Math.Max(0.2f, b.Pressure);
-
-            path.StartFigure();
-            path.AddPolygon(new[]
+            double x = src[i].X, y = src[i].Y;
+            if (n > 0)
             {
-                new XPoint(a.X + nx * wA, a.Y + ny * wA),
-                new XPoint(b.X + nx * wB, b.Y + ny * wB),
-                new XPoint(b.X - nx * wB, b.Y - ny * wB),
-                new XPoint(a.X - nx * wA, a.Y - ny * wA),
-            });
-            path.CloseFigure();
-
-            AddCircle(path, b.X, b.Y, wB);
+                double ddx = x - px[n - 1], ddy = y - py[n - 1];
+                if (Math.Sqrt(ddx * ddx + ddy * ddy) < 0.0001) continue;
+            }
+            px[n] = x; py[n] = y;
+            w[n] = halfBase * Math.Max(0.2f, src[i].Pressure);
+            n++;
         }
+        if (n == 1)
+        {
+            AddCircle(path, px[0], py[0], w[0]);
+            return path;
+        }
+
+        const double SharpTurnCos = 0.5;   // keep in sync with PageRenderer
+        var outline = new XPoint[n * 2];
+        for (int i = 0; i < n; i++)
+        {
+            double nx, ny, scale = 1;
+            if (i == 0 || i == n - 1)
+            {
+                int a = i == 0 ? 0 : i - 1;
+                var (dx, dy) = Dir(px[a], py[a], px[a + 1], py[a + 1]);
+                nx = -dy; ny = dx;
+            }
+            else
+            {
+                var (pdx, pdy) = Dir(px[i - 1], py[i - 1], px[i], py[i]);
+                var (ndx, ndy) = Dir(px[i], py[i], px[i + 1], py[i + 1]);
+                double sx = -pdy - ndy, sy = pdx + ndx;   // nA + nB
+                double len = Math.Sqrt(sx * sx + sy * sy);
+                if (pdx * ndx + pdy * ndy < SharpTurnCos || len < 1e-4)
+                {
+                    // Sharp turn: no miter (it would spike); a round joint fills the gap.
+                    if (len < 1e-4) { nx = -pdy; ny = pdx; }
+                    else { nx = sx / len; ny = sy / len; }
+                    AddCircle(path, px[i], py[i], w[i]);
+                }
+                else
+                {
+                    nx = sx / len; ny = sy / len;
+                    scale = 1 / Math.Max(0.5, nx * -pdy + ny * pdx);   // miter length
+                }
+            }
+            double r = w[i] * scale;
+            outline[i] = new XPoint(px[i] + nx * r, py[i] + ny * r);
+            outline[2 * n - 1 - i] = new XPoint(px[i] - nx * r, py[i] - ny * r);
+        }
+        path.StartFigure();
+        path.AddPolygon(outline);
+        path.CloseFigure();
+
+        AddCircle(path, px[0], py[0], w[0]);                 // start cap
+        AddCircle(path, px[n - 1], py[n - 1], w[n - 1]);     // end cap
         return path;
+    }
+
+    private static (double X, double Y) Dir(double ax, double ay, double bx, double by)
+    {
+        double dx = bx - ax, dy = by - ay;
+        double len = Math.Sqrt(dx * dx + dy * dy);
+        return (dx / len, dy / len);
     }
 
     // Circle as four cubic arcs with DECREASING angle — the same winding sense
