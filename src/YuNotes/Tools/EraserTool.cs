@@ -57,6 +57,9 @@ public sealed class EraserTool : ITool
         return b;
     }
 
+    // True when the eraser circle touches the stroke's path — its points AND
+    // the lines between them, so a fast stroke with widely spaced points can't
+    // slip through the gaps.
     private static bool AnyPointInRadius(Stroke s, Vector2 p, float r2)
     {
         var pts = s.Points;
@@ -65,6 +68,8 @@ public sealed class EraserTool : ITool
             var dx = pts[i].X - p.X;
             var dy = pts[i].Y - p.Y;
             if (dx * dx + dy * dy <= r2) return true;
+            if (i > 0 && DistSqToSegment(p, new Vector2(pts[i - 1].X, pts[i - 1].Y), new Vector2(pts[i].X, pts[i].Y)) <= r2)
+                return true;
         }
         return false;
     }

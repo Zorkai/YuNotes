@@ -99,6 +99,46 @@ public static class HandwritingRecognizer
 
     public static bool IsAvailable => s_availableTask.GetAwaiter().GetResult();
 
+    // Installed handwriting languages, by recognizer name
+    // ("Microsoft English (US) Handwriting Recognizer").
+    public static Task<List<string>> GetLanguagesAsync() => Run(() =>
+    {
+        var names = new List<string>();
+        try
+        {
+            s_container ??= new InkRecognizerContainer();
+            foreach (var r in s_container.GetRecognizers()) { names.Add(r.Name); Release(r); }
+        }
+        catch { }
+        return names;
+    });
+
+    // "Microsoft English (US) Handwriting Recognizer" → "English (US)".
+    public static string ShortName(string recognizer) =>
+        recognizer.Replace("Microsoft ", "").Replace(" Handwriting Recognizer", "").Trim();
+
+    // Applies the language chosen in Settings (empty = Windows' default) to
+    // the current recognizer. Runs on the recognizer thread.
+    private static object? s_langContainer;
+    private static string? s_langApplied;
+    private static void ApplyLanguage()
+    {
+        var want = App.Services.Settings.Current.HandwritingLanguage ?? "";
+        if (s_container is null || (ReferenceEquals(s_langContainer, s_container) && s_langApplied == want)) return;
+        s_langContainer = s_container;
+        s_langApplied = want;
+        if (want.Length == 0) return;
+        try
+        {
+            foreach (var r in s_container.GetRecognizers())
+            {
+                if (r.Name == want) { s_container.SetDefaultRecognizer(r); }
+                else Release(r);
+            }
+        }
+        catch { }
+    }
+
     // Recognizes the pen strokes of one page. Highlighter strokes and dots are
     // skipped. Returns one box per recognized word.
     public static Task<List<TextBox>> RecognizeAsync(IReadOnlyList<Stroke> strokes)
@@ -174,6 +214,7 @@ public static class HandwritingRecognizer
                 catch { }
             }
             s_container ??= new InkRecognizerContainer();
+            ApplyLanguage();
             var words = s_container.RecognizeAsync(ink, InkRecognitionTarget.All).AsTask().GetAwaiter().GetResult();
             foreach (var w in words)
             {
@@ -288,6 +329,8 @@ public sealed class NoteIndexEntry
     public long Length { get; set; }
     public DateTime WriteUtc { get; set; }
     public string Title { get; set; } = "";
+    // Handwriting language the note was read with ("" = Windows default).
+    public string Language { get; set; } = "";
     public List<PageText> Pages { get; set; } = new();
 }
 
@@ -365,7 +408,8 @@ public sealed class SearchIndex
     }
 
     private static bool IsCurrent(NoteIndexEntry e, FileInfo fi) =>
-        e.Version == FormatVersion && e.Length == fi.Length && e.WriteUtc == fi.LastWriteTimeUtc;
+        e.Version == FormatVersion && e.Length == fi.Length && e.WriteUtc == fi.LastWriteTimeUtc
+        && (e.Language ?? "") == (App.Services.Settings.Current.HandwritingLanguage ?? "");
 
     // Brings the index up to date for these notes, one at a time in the
     // background. Notes that haven't changed since they were indexed are skipped.
@@ -426,6 +470,7 @@ public sealed class SearchIndex
             Path = path,
             Length = fi.Length,
             WriteUtc = fi.LastWriteTimeUtc,
+            Language = App.Services.Settings.Current.HandwritingLanguage ?? "",
             Title = doc?.Info.Title is { Length: > 0 } t ? t : System.IO.Path.GetFileNameWithoutExtension(path),
         };
 

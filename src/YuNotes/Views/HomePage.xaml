@@ -435,6 +435,13 @@
 
                     <!-- Matches inside notes (handwriting, PDF text, text boxes).
                          Shown while the search box has text. -->
+                    <StackPanel Grid.Row="0">
+                    <!-- Continue where you left off: recently opened notes + page. -->
+                    <StackPanel x:Name="ContinuePanel" Visibility="Collapsed" Margin="24,10,24,0" Spacing="6">
+                        <TextBlock Text="Continue where you left off" FontSize="13"
+                                   Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                        <StackPanel x:Name="ContinueList" Orientation="Horizontal" Spacing="10" />
+                    </StackPanel>
                     <Border x:Name="ContentResultsPanel" Visibility="Collapsed" Margin="24,12,24,0"
                             Background="{ThemeResource AppSurfaceBrush}"
                             BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1"
@@ -458,6 +465,7 @@
                             </ScrollViewer>
                         </StackPanel>
                     </Border>
+                    </StackPanel>
 
                     <!-- Empty state (hidden when notes exist) -->
                     <StackPanel x:Name="EmptyHint" Grid.Row="1"
@@ -533,6 +541,18 @@
                                                         <TextBlock Text="{Binding PageCount}" FontSize="11"
                                                                    Foreground="{ThemeResource AppTextSecondaryBrush}" />
                                                     </Border>
+                                                    <!-- Pin: always shown when pinned, otherwise on hover. -->
+                                                    <Button x:Name="PinBtn" Click="PinButton_Click" Tag="{Binding Path}"
+                                                            Opacity="{Binding PinOpacity}"
+                                                            HorizontalAlignment="Left" VerticalAlignment="Top"
+                                                            Width="28" Height="28" Padding="0" CornerRadius="14"
+                                                            BorderThickness="0" Background="{Binding PinBackground}"
+                                                            ToolTipService.ToolTip="{Binding PinTooltip}"
+                                                            AutomationProperties.Name="{Binding PinTooltip}">
+                                                        <FontIcon Glyph="&#xF10D;" FontSize="15"
+                                                                  FontFamily="{StaticResource MaterialIconsFamily}"
+                                                                  Foreground="{Binding PinForeground}" />
+                                                    </Button>
                                                 </Grid>
 
                                                 <StackPanel Grid.Row="1"

@@ -86,6 +86,7 @@ public sealed partial class EditorPage : Page
         AddPageBtn.Click += (_, __) => AddBlankPage();
         AddPdfPagesBtn.Click += async (_, __) => await AddPagesFromPdfAsync();
         ExportBtn.Click += async (_, __) => await ExportAsync();
+        VersionsBtn.Click += async (_, __) => await ShowVersionsAsync();
         ScreenshotBtn.Click += (_, __) => EnterScreenshotMode();
         ScreenshotOverlay.PointerPressed  += OnShotPointerPressed;
         ScreenshotOverlay.PointerMoved    += OnShotPointerMoved;
@@ -178,6 +179,21 @@ public sealed partial class EditorPage : Page
 
         PagePanelBtn.Click += (_, __) => TogglePagePanel();
         BookmarksFlyout.Opening += (_, __) => RebuildBookmarksFlyout();
+        SideBySideFlyout.Opening += (_, __) => RebuildSideBySideFlyout();
+        RefCloseBtn.Click += (_, __) => CloseReference();
+        RefOpenBtn.Click += async (_, __) => await OpenReferenceAsMainAsync();
+        RefSplitter.PointerPressed += (_, e) => { RefSplitter.CapturePointer(e.Pointer); _splitDragging = true; e.Handled = true; };
+        RefSplitter.PointerMoved += (_, e) =>
+        {
+            if (!_splitDragging || CanvasArea.ActualWidth < 100) return;
+            double f = 1 - e.GetCurrentPoint(CanvasArea).Position.X / CanvasArea.ActualWidth;
+            _refFraction = Math.Clamp(f, 0.2, 0.75);
+            ApplyReferenceWidths();
+        };
+        RefSplitter.PointerReleased += (_, e) => { _splitDragging = false; RefSplitter.ReleasePointerCapture(e.Pointer); };
+        RefCanvas.SizeChanged += (_, e) => { if (Math.Abs(e.NewSize.Width - e.PreviousSize.Width) > 4) FitReferenceZoom(); };
+        RefSplitter.PointerEntered += (_, __) => ProtectedCursor = Microsoft.UI.Input.InputSystemCursor.Create(Microsoft.UI.Input.InputSystemCursorShape.SizeWestEast);
+        RefSplitter.PointerExited += (_, __) => { if (!_splitDragging) ProtectedCursor = null; };
         PageEditModeBtn.Click += (_, __) => { _pagePanelEditMode = !_pagePanelEditMode; ClearPageSelection(); if (_pagePanelOpen) _ = RefreshPagePanelAsync(); };
         PageSelDeleteBtn.Click += async (_, __) => await DeleteSelectedPagesAsync();
         PageSelClearBtn.Click  += (_, __) => ClearPageSelection();
@@ -1871,6 +1887,215 @@ public sealed partial class EditorPage : Page
         catch (Exception ex) { await Notify("Export failed", ex.Message); }
     }
 
+    // ─── Side by side ────────────────────────────────────────────────────────────
+    // A second note shown read-only next to this one (e.g. the exercise sheet
+    // beside your solution). Scroll it with the wheel, touch or the scrollbars;
+    // "Open to edit" switches to it.
+
+    private string? _refPath;
+    private double _refFraction = 0.45;
+    private bool _splitDragging;
+
+    private void RebuildSideBySideFlyout()
+    {
+        SideBySideFlyout.Items.Clear();
+        var s = App.Services.Settings.Current;
+        var root = s.DocumentsFolder;
+        var all = new List<string>();
+        try
+        {
+            if (Directory.Exists(root))
+                all.AddRange(Directory.EnumerateFiles(root, "*.*", SearchOption.AllDirectories)
+                    .Where(p => p.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".yunote", StringComparison.OrdinalIgnoreCase))
+                    .Where(p => !p.Contains($"{System.IO.Path.DirectorySeparatorChar}_trash", StringComparison.OrdinalIgnoreCase)
+                             && !p.Contains($"{System.IO.Path.DirectorySeparatorChar}_archive", StringComparison.OrdinalIgnoreCase)));
+        }
+        catch { }
+        var current = _doc?.Info.FilePath;
+        // Recently opened first, then the rest by name.
+        var ordered = s.RecentDocuments.Where(all.Contains)
+            .Concat(all.Except(s.RecentDocuments).OrderBy(p => System.IO.Path.GetFileNameWithoutExtension(p), StringComparer.CurrentCultureIgnoreCase))
+            .Where(p => !string.Equals(p, current, StringComparison.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(25).ToList();
+
+        SideBySideFlyout.Items.Add(new MenuFlyoutItem { Text = "Show next to this note:", IsEnabled = false });
+        foreach (var p in ordered)
+        {
+            var folder = System.IO.Path.GetFileName(System.IO.Path.GetDirectoryName(p) ?? "");
+            bool inRoot = string.Equals(System.IO.Path.GetDirectoryName(p), root, StringComparison.OrdinalIgnoreCase);
+            var item = new MenuFlyoutItem
+            {
+                Text = System.IO.Path.GetFileNameWithoutExtension(p) + (inRoot ? "" : $"  ·  {folder}"),
+            };
+            if (string.Equals(p, _refPath, StringComparison.OrdinalIgnoreCase))
+                item.Icon = new FontIcon { Glyph = "" };
+            string path = p;
+            item.Click += async (_, __) => await OpenReferenceAsync(path);
+            SideBySideFlyout.Items.Add(item);
+        }
+        if (ordered.Count == 0)
+            SideBySideFlyout.Items.Add(new MenuFlyoutItem { Text = "No other notes yet", IsEnabled = false });
+        if (_refPath is not null)
+        {
+            SideBySideFlyout.Items.Add(new MenuFlyoutSeparator());
+            var close = new MenuFlyoutItem { Text = "Close side-by-side view" };
+            close.Click += (_, __) => CloseReference();
+            SideBySideFlyout.Items.Add(close);
+        }
+    }
+
+    private async Task OpenReferenceAsync(string path)
+    {
+        try
+        {
+            var doc = await Task.Run(() =>
+                string.Equals(System.IO.Path.GetExtension(path), ".pdf", StringComparison.OrdinalIgnoreCase)
+                    ? App.Services.Documents.OpenPdfContainer(path, App.Services.PdfContainer, App.Services.PdfImport)
+                    : App.Services.Documents.Open(path));
+            _refPath = path;
+            RefTitle.Text = doc.Info.Title;
+            RefCanvas.Bind(doc, App.Services.Settings.Current, new PageRenderer(App.Services.Templates));
+            RefCanvas.Context.EditingSuspended = true;   // read-only: no pen or mouse edits
+            RefPane.Visibility = Visibility.Visible;
+            RefSplitter.Visibility = Visibility.Visible;
+            ApplyReferenceWidths();
+            // The scroll view ignores zoom changes until the new pages are laid
+            // out, so fit a moment later (and again whenever the pane resizes).
+            var fit = DispatcherQueue.CreateTimer();
+            fit.Interval = TimeSpan.FromMilliseconds(350);
+            fit.IsRepeating = false;
+            fit.Tick += (_, __) => FitReferenceZoom();
+            fit.Start();
+        }
+        catch (Exception ex) { await Notify("Couldn't open that note", ex.Message); }
+    }
+
+    private void ApplyReferenceWidths()
+    {
+        bool open = _refPath is not null;
+        MainCol.Width = new GridLength(open ? 1 - _refFraction : 1, GridUnitType.Star);
+        RefCol.Width = open ? new GridLength(_refFraction, GridUnitType.Star) : new GridLength(0);
+        RefSplitCol.Width = new GridLength(open ? 8 : 0);
+    }
+
+    // Fit the reference note's page width to its pane once laid out.
+    private void FitReferenceZoom(int attempt = 0)
+    {
+        if (_refPath is null) return;
+        var page = RefCanvas.Document?.Pages.FirstOrDefault();
+        if (page is null) return;
+        if (RefCanvas.ActualWidth < 50)
+        {
+            if (attempt < 20) DispatcherQueue.TryEnqueue(() => FitReferenceZoom(attempt + 1));
+            return;
+        }
+        RefCanvas.SetZoom(Math.Clamp((RefCanvas.ActualWidth - 100) / page.Width, 0.25, 2.0));
+    }
+
+    private void CloseReference()
+    {
+        _refPath = null;
+        RefPane.Visibility = Visibility.Collapsed;
+        RefSplitter.Visibility = Visibility.Collapsed;
+        ApplyReferenceWidths();
+    }
+
+    // Swap: open the reference note in the editor (saving this one first).
+    private async Task OpenReferenceAsMainAsync()
+    {
+        if (_refPath is null) return;
+        var target = _refPath;
+        if (_doc?.IsDirty == true) await SaveAsync(toast: false);
+        MainWindow.GoBack();
+        MainWindow.Navigate<EditorPage>(target);
+    }
+
+    // ─── Earlier versions ────────────────────────────────────────────────────────
+    // Lists the copies VersionHistory kept and puts one back. The current note
+    // is saved and kept as a version first, so a restore can be undone the
+    // same way.
+    private async Task ShowVersionsAsync()
+    {
+        if (_doc is null || string.IsNullOrEmpty(_doc.Info.FilePath)) return;
+        var path = _doc.Info.FilePath;
+        var versions = await Task.Run(() => App.Services.Versions.List(path));
+        var res = Application.Current.Resources;
+
+        var list = new StackPanel { Spacing = 6, MinWidth = 360 };
+        var dlg = new ContentDialog
+        {
+            Title = "Earlier versions",
+            CloseButtonText = "Close",
+            XamlRoot = XamlRoot,
+            Content = new ScrollViewer { Content = list, MaxHeight = 420 },
+        };
+        list.Children.Add(new TextBlock
+        {
+            Text = "YuNotes keeps a copy of this note when you save, at most every 10 minutes (the newest 25).",
+            TextWrapping = TextWrapping.Wrap, FontSize = 12, Margin = new Thickness(0, 0, 0, 6),
+            Foreground = (Brush)res["AppTextSecondaryBrush"],
+        });
+        if (versions.Count == 0)
+            list.Children.Add(new TextBlock { Text = "No earlier versions yet.", Margin = new Thickness(0, 8, 0, 8) });
+
+        Services.VersionHistory.Version? chosen = null;
+        foreach (var v in versions)
+        {
+            var row = new Grid { ColumnSpacing = 12, Padding = new Thickness(10, 8, 8, 8), CornerRadius = new CornerRadius(8),
+                                 Background = (Brush)res["AppSurfaceVariantBrush"] };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center };
+            text.Children.Add(new TextBlock { Text = VersionDate(v.SavedAt), FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+            text.Children.Add(new TextBlock
+            {
+                Text = $"{v.SavedAt:dddd d MMM yyyy, HH:mm:ss} · {v.Size / 1024.0 / 1024.0:0.0} MB",
+                FontSize = 11, Foreground = (Brush)res["AppTextSecondaryBrush"],
+            });
+            var restore = new Button { Content = "Restore", CornerRadius = new CornerRadius(8), VerticalAlignment = VerticalAlignment.Center };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(restore, $"Restore version from {VersionDate(v.SavedAt)}");
+            restore.Click += (_, __) => { chosen = v; dlg.Hide(); };
+            Grid.SetColumn(restore, 1);
+            row.Children.Add(text);
+            row.Children.Add(restore);
+            list.Children.Add(row);
+        }
+
+        await dlg.ShowAsync();
+        if (chosen is null) return;
+
+        var confirm = new ContentDialog
+        {
+            Title = "Restore this version?",
+            Content = $"The note goes back to how it was {VersionDate(chosen.SavedAt).ToLowerInvariant()}. " +
+                      "Its current state is kept as a version too, so you can switch back.",
+            PrimaryButtonText = "Restore", CloseButtonText = "Cancel",
+            DefaultButton = ContentDialogButton.Primary, XamlRoot = XamlRoot,
+        };
+        if (await confirm.ShowAsync() != ContentDialogResult.Primary) return;
+
+        try
+        {
+            if (_doc.IsDirty) await SaveAsync(toast: false);
+            _doc.IsDirty = false;   // reopening below must not prompt or save over the restore
+            var version = chosen;
+            await Task.Run(() => App.Services.Versions.Restore(path, version));
+            // Reopen the note fresh from the restored file.
+            MainWindow.GoBack();
+            MainWindow.Navigate<EditorPage>(path);
+        }
+        catch (Exception ex) { await Notify("Restore failed", ex.Message); }
+    }
+
+    private static string VersionDate(DateTime local)
+    {
+        var days = (DateTime.Today - local.Date).Days;
+        if (days <= 0) return $"Today {local:HH:mm}";
+        if (days == 1) return $"Yesterday {local:HH:mm}";
+        return local.ToString(local.Year == DateTime.Today.Year ? "d MMM, HH:mm" : "d MMM yyyy, HH:mm");
+    }
+
     // "1-3, 5, 8-6" → [0,1,2,4,5,6,7] (sorted, unique, 0-based). Null if any
     // part is malformed or out of 1..count.
     private static List<int>? ParsePageRange(string text, int count)
@@ -2255,6 +2480,11 @@ public sealed partial class EditorPage : Page
         _autosaveTimer?.Stop();
         try
         {
+            // Keep the version on disk before overwriting it (throttled; see VersionHistory).
+            var versionPath = _doc.Info.FilePath;
+            if (!string.IsNullOrEmpty(versionPath))
+                await Task.Run(() => App.Services.Versions.SnapshotIfDue(versionPath));
+
             bool isPdf = string.Equals(System.IO.Path.GetExtension(_doc.Info.FilePath), ".pdf", StringComparison.OrdinalIgnoreCase);
 
             if (isPdf && autosave)

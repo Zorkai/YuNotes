@@ -207,10 +207,11 @@ public sealed partial class SettingsPage : Page
 
         WireChangeHandlers();
 
-        Loaded += (_, _) =>
+        Loaded += async (_, _) =>
         {
             MainWindow.SetDragRegion(HeaderDragRegion);
             HeaderGrid.Padding = new Thickness(12, 0, 12 + MainWindow.CaptionButtonInset, 0);
+            await FillHandwritingLanguagesAsync();
             LoadIntoUi();
             _committed = App.Services.Settings.Snapshot();
             SelectCategory(s_category);
@@ -365,6 +366,7 @@ public sealed partial class SettingsPage : Page
         ["autosavedelay"] = (s => $"{s.AutosaveDelaySeconds:0.##}", s => s.AutosaveDelaySeconds = D.AutosaveDelaySeconds),
         ["autoupdate"]    = (s => $"{s.AutoUpdateEnabled}", s => s.AutoUpdateEnabled = D.AutoUpdateEnabled),
         ["emulatetip"]    = (s => $"{s.EmulateTipOnButtonPress}", s => s.EmulateTipOnButtonPress = D.EmulateTipOnButtonPress),
+        ["hwlang"]        = (s => s.HandwritingLanguage ?? "", s => s.HandwritingLanguage = D.HandwritingLanguage),
     };
 
     private static string DefaultSig(string key) =>
@@ -551,6 +553,26 @@ public sealed partial class SettingsPage : Page
             Math.Abs(p.X1 - s.PressureCurveX1) < 0.01 && Math.Abs(p.Y1 - s.PressureCurveY1) < 0.01 &&
             Math.Abs(p.X2 - s.PressureCurveX2) < 0.01 && Math.Abs(p.Y2 - s.PressureCurveY2) < 0.01);
         CustomCurveText.Visibility = CurvePresets.SelectedIndex < 0 ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ─── Handwriting language ───────────────────────────────────────────────
+    // Lists the handwriting languages installed in Windows. Picking one makes
+    // search re-read notes with it (the index tracks the language per note).
+    private bool _hwLangFilled;
+
+    private async System.Threading.Tasks.Task FillHandwritingLanguagesAsync()
+    {
+        if (_hwLangFilled) return;
+        _hwLangFilled = true;
+        HwLangCombo.Items.Add(new ComboBoxItem { Content = "Windows default", Tag = "" });
+        foreach (var name in await Services.HandwritingRecognizer.GetLanguagesAsync())
+            HwLangCombo.Items.Add(new ComboBoxItem { Content = Services.HandwritingRecognizer.ShortName(name), Tag = name });
+        HwLangCombo.SelectionChanged += (s, _) =>
+        {
+            if (_loading || HwLangCombo.SelectedItem is not ComboBoxItem { Tag: string tag }) return;
+            App.Services.Settings.Current.HandwritingLanguage = tag;
+            OnChanged(s);
+        };
     }
 
     // ─── Named steps and choice chips ───────────────────────────────────────
@@ -832,6 +854,8 @@ public sealed partial class SettingsPage : Page
         PressureMultSlider.Value = Nearest(BoostSteps, s.PressureMultiplier);
         BindButtonCombo(BarrelCombo, s.BarrelButtonAction);
         HoldToSnapToggle.IsOn = s.HoldToSnapEnabled;
+        HwLangCombo.SelectedItem = HwLangCombo.Items.OfType<ComboBoxItem>()
+            .FirstOrDefault(i => (string)i.Tag == (s.HandwritingLanguage ?? "")) ?? HwLangCombo.Items.FirstOrDefault();
         EmulateTipToggle.IsOn = s.EmulateTipOnButtonPress;
 
         PalmToggle.IsOn = s.PalmRejectionEnabled;

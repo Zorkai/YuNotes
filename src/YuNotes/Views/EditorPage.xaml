@@ -22,7 +22,51 @@
         </Grid.ColumnDefinitions>
 
         <!-- Canvas (declared first so the floating toolbar overlays it) -->
-        <c:InkCanvasControl x:Name="Canvas" Grid.Row="1" Grid.Column="1" />
+        <!-- Canvas, plus an optional read-only reference note beside it
+             (side-by-side view). The splitter between them can be dragged. -->
+        <Grid x:Name="CanvasArea" Grid.Row="1" Grid.Column="1">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition x:Name="MainCol" Width="*" />
+                <ColumnDefinition x:Name="RefSplitCol" Width="0" />
+                <ColumnDefinition x:Name="RefCol" Width="0" />
+            </Grid.ColumnDefinitions>
+            <c:InkCanvasControl x:Name="Canvas" />
+            <Border x:Name="RefSplitter" Grid.Column="1" Background="{ThemeResource AppBorderBrush}"
+                    Visibility="Collapsed" ToolTipService.ToolTip="Drag to resize">
+                <Border Width="3" Height="40" CornerRadius="2" VerticalAlignment="Center"
+                        Background="{ThemeResource AppTextSecondaryBrush}" />
+            </Border>
+            <Grid x:Name="RefPane" Grid.Column="2" Visibility="Collapsed">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+                <c:InkCanvasControl x:Name="RefCanvas" />
+                <Border Grid.Row="1" Background="{ThemeResource AppSurfaceBrush}"
+                        BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="0,1,0,0" Padding="12,6">
+                    <Grid ColumnSpacing="8">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <FontIcon Glyph="&#xe8f4;" FontSize="16" VerticalAlignment="Center"
+                                  Foreground="{ThemeResource AppTextSecondaryBrush}"
+                                  ToolTipService.ToolTip="Read-only reference" />
+                        <TextBlock x:Name="RefTitle" Grid.Column="1" VerticalAlignment="Center"
+                                   FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
+                        <Button x:Name="RefOpenBtn" Grid.Column="2" Content="Open to edit" Padding="10,4" CornerRadius="8"
+                                ToolTipService.ToolTip="Open this note in the editor" />
+                        <Button x:Name="RefCloseBtn" Grid.Column="3" Padding="6,4" CornerRadius="8"
+                                ToolTipService.ToolTip="Close side-by-side view"
+                                AutomationProperties.Name="Close side-by-side view">
+                            <FontIcon Glyph="&#xe5cd;" FontSize="16" />
+                        </Button>
+                    </Grid>
+                </Border>
+            </Grid>
+        </Grid>
 
         <!-- Ghost-image layer for image placement cursor -->
         <Canvas x:Name="GhostLayer"
@@ -601,6 +645,12 @@
                                     ToolTipService.ToolTip="Export">
                                 <FontIcon Glyph="&#xf3b2;" FontSize="18" />
                             </Button>
+                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
+                            <Button x:Name="VersionsBtn" Style="{StaticResource TopBarSegButtonStyle}"
+                                    ToolTipService.ToolTip="Earlier versions"
+                                    AutomationProperties.Name="Earlier versions">
+                                <FontIcon Glyph="&#xe889;" FontSize="18" />
+                            </Button>
                         </StackPanel>
                     </Border>
                 </StackPanel>
@@ -660,6 +710,15 @@
                             <Border Style="{StaticResource TopBarSegDividerStyle}" />
                             <Button x:Name="SearchBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Find text (Ctrl+F)">
                                 <FontIcon Glyph="&#xe8b6;" FontSize="18" />
+                            </Button>
+                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
+                            <Button x:Name="SideBySideBtn" Style="{StaticResource TopBarSegButtonStyle}"
+                                    ToolTipService.ToolTip="Side by side: open another note next to this one"
+                                    AutomationProperties.Name="Side by side">
+                                <FontIcon Glyph="&#xe949;" FontSize="18" />
+                                <Button.Flyout>
+                                    <MenuFlyout x:Name="SideBySideFlyout" Placement="Bottom" ShouldConstrainToRootBounds="True" />
+                                </Button.Flyout>
                             </Button>
                         </StackPanel>
                     </Border>

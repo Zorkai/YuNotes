@@ -86,6 +86,28 @@ public sealed partial class HomePage : Page
         // "Untitled" notes can be told apart; empty otherwise.
         public string TitleHint { get; set; } = "";
         public string? FolderColor { get; set; }
+
+        // Pinned notes stay first and show a filled pin; others show the pin
+        // only while hovered (see Card_PointerEntered).
+        private bool _isPinned;
+        public bool IsPinned
+        {
+            get => _isPinned;
+            set
+            {
+                _isPinned = value;
+                foreach (var n in new[] { nameof(IsPinned), nameof(PinOpacity), nameof(PinBackground), nameof(PinForeground), nameof(PinTooltip) })
+                    PropertyChanged?.Invoke(this, new System.ComponentModel.PropertyChangedEventArgs(n));
+            }
+        }
+        public double PinOpacity => IsPinned ? 1 : 0;
+        public Brush PinBackground => IsPinned
+            ? (Brush)Application.Current.Resources["AppAccentBrush"]
+            : (Brush)Application.Current.Resources["AppSurfaceVariantBrush"];
+        public Brush PinForeground => IsPinned
+            ? new SolidColorBrush(Microsoft.UI.Colors.White)
+            : (Brush)Application.Current.Resources["AppTextPrimaryBrush"];
+        public string PinTooltip => IsPinned ? "Unpin" : "Pin to the top";
         public string FolderDisplay => string.IsNullOrEmpty(FolderName) ? "No folder" : FolderName;
         public string FolderGlyph => string.IsNullOrEmpty(FolderName) ? "" : "";
         public Brush FolderChipBrush => string.IsNullOrEmpty(FolderName)
@@ -515,6 +537,13 @@ public sealed partial class HomePage : Page
                 items.Sort((a, b) => sign * byDate(a, b));
                 break;
         }
+        // Pinned notes first, keeping the chosen order within each group.
+        if (items.Any(i => i.IsPinned))
+        {
+            var ordered = items.Where(i => i.IsPinned).Concat(items.Where(i => !i.IsPinned)).ToList();
+            items.Clear();
+            items.AddRange(ordered);
+        }
     }
 
     // Shows _allItems filtered by the search text (title or folder name). The
@@ -552,6 +581,7 @@ public sealed partial class HomePage : Page
             EmptyHint.Visibility   = _allItems.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
             UpdateContentResults();
         }
+        UpdateContinueRow();
     }
 
     private string _emptyTitle = "", _emptySubtitle = "";
@@ -589,7 +619,8 @@ public sealed partial class HomePage : Page
             FolderColor = folder?.Color,
             ModifiedAt  = info.ModifiedAt,
             Pages       = info.PageCount,
-            IsPdf       = !string.IsNullOrEmpty(info.SourcePdfPath)
+            IsPdf       = !string.IsNullOrEmpty(info.SourcePdfPath),
+            IsPinned    = IsPinnedPath(info.FilePath),
         };
         _ = LoadThumbnailAsync(item, info.FilePath);
         return item;
@@ -1258,6 +1289,7 @@ public sealed partial class HomePage : Page
         el.CenterPoint = new System.Numerics.Vector3((float)el.ActualWidth / 2f, (float)el.ActualHeight / 2f, 0);
         el.Scale = new System.Numerics.Vector3(1.03f, 1.03f, 1f);
         el.Translation = new System.Numerics.Vector3(0, 0, 16);
+        if (el.FindName("PinBtn") is Button pin) pin.Opacity = 1;
     }
 
     private void Card_PointerExited(object sender, PointerRoutedEventArgs e)
@@ -1265,6 +1297,69 @@ public sealed partial class HomePage : Page
         if (sender is not FrameworkElement el) return;
         el.Scale = System.Numerics.Vector3.One;
         el.Translation = System.Numerics.Vector3.Zero;
+        if (el.FindName("PinBtn") is Button pin && el.DataContext is RecentItem item) pin.Opacity = item.PinOpacity;
+    }
+
+    // ── Pinned notes ──────────────────────────────────────────────────────────
+
+    private void PinButton_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string path }) return;
+        var pins = App.Services.Settings.Current.PinnedNotes;
+        bool pin = !pins.Contains(path, StringComparer.OrdinalIgnoreCase);
+        if (pin) pins.Add(path); else pins.RemoveAll(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        App.Services.Settings.Save();
+        Refresh();
+    }
+
+    private static bool IsPinnedPath(string path) =>
+        App.Services.Settings.Current.PinnedNotes.Contains(path, StringComparer.OrdinalIgnoreCase);
+
+    // ── Continue where you left off ───────────────────────────────────────────
+    // Up to three recently opened notes with the page you were on; opening one
+    // returns to that page (the editor restores it).
+    private void UpdateContinueRow()
+    {
+        ContinueList.Children.Clear();
+        bool show = _activeSection == NavSection.AllNotes && SearchBox.Text.Trim().Length == 0;
+        var s = App.Services.Settings.Current;
+        var res = Application.Current.Resources;
+        foreach (var path in s.RecentDocuments)
+        {
+            if (ContinueList.Children.Count >= 3 || !show) break;
+            var item = _allItems.FirstOrDefault(i => string.Equals(i.Path, path, StringComparison.OrdinalIgnoreCase));
+            if (item is null) continue;
+            int page = s.LastPageByDocument.TryGetValue(path, out var p) ? p + 1 : 1;
+
+            var thumb = new Image { Width = 34, Height = 46, Stretch = Stretch.Uniform };
+            thumb.SetBinding(Image.SourceProperty, new Microsoft.UI.Xaml.Data.Binding { Path = new PropertyPath("Thumbnail"), Source = item });
+            var text = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Spacing = 1 };
+            text.Children.Add(new TextBlock { Text = item.Title, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, FontSize = 13, TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 170 });
+            text.Children.Add(new TextBlock
+            {
+                Text = $"Page {page}" + (item.Pages > 1 ? $" of {item.Pages}" : "") + $" · {item.Subtitle}",
+                FontSize = 11, Foreground = (Brush)res["AppTextSecondaryBrush"], TextTrimming = TextTrimming.CharacterEllipsis, MaxWidth = 170,
+            });
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+            row.Children.Add(new Border
+            {
+                Child = thumb, Background = new SolidColorBrush(Microsoft.UI.Colors.White), CornerRadius = new CornerRadius(3),
+                BorderBrush = (Brush)res["AppBorderBrush"], BorderThickness = new Thickness(1),
+            });
+            row.Children.Add(text);
+
+            var btn = new Button
+            {
+                Content = row, Padding = new Thickness(8, 6, 14, 6), CornerRadius = new CornerRadius(10),
+                Background = (Brush)res["AppSurfaceBrush"], BorderBrush = (Brush)res["AppBorderBrush"], BorderThickness = new Thickness(1),
+            };
+            ToolTipService.SetToolTip(btn, $"Continue {item.Title} on page {page}");
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(btn, $"Continue {item.Title} on page {page}");
+            string target = item.Path;
+            btn.Click += (_, __) => { TouchRecent(target); OpenPath(target); };
+            ContinueList.Children.Add(btn);
+        }
+        ContinuePanel.Visibility = ContinueList.Children.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private static string UniquePath(string folder, string title, string ext)
