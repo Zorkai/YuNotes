@@ -10,7 +10,9 @@ public enum StrokeKind { Pen, Highlighter }
 
 // Arrow, Axes and Grid are drawn as straight segments (see ShapeGeometry).
 // New kinds go at the end: the value is stored in saved notes.
-public enum ShapeKind { Rectangle, Ellipse, Line, Triangle, Arrow, Axes, Grid }
+// Tape: an opaque study strip that hides what is under it until tapped
+// (revealed state is per session, see EditorContext.RevealedTapeIds).
+public enum ShapeKind { Rectangle, Ellipse, Line, Triangle, Arrow, Axes, Grid, Tape }
 
 public sealed class ShapeElement
 {

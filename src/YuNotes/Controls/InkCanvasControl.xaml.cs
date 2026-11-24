@@ -267,6 +267,9 @@ public sealed partial class InkCanvasControl : UserControl
     {
         Document = doc;
         _renderer = renderer;
+        // Every tape strip starts covered when a note is opened.
+        Context.RevealedTapeIds.Clear();
+        renderer.IsTapeRevealed = id => Context.RevealedTapeIds.Contains(id);
         SeamlessPages = settings.SeamlessPages;
         _palm = new PalmRejection(settings);
         _router = new PenButtonRouter(settings);
@@ -957,6 +960,53 @@ public sealed partial class InkCanvasControl : UserControl
         return ms.ToArray();
     }
 
+    // Index of the page over the viewport centre (-1 with no document).
+    public int ActivePageIndex => ActivePage is { } p ? _pageCanvases.FindIndex(pc => ReferenceEquals(pc.Page, p)) : -1;
+
+    public int TapeCount => Document?.Pages.Sum(p => p.Shapes.Count(s => s.Kind == ShapeKind.Tape)) ?? 0;
+
+    // Covers (false) or reveals (true) every tape strip in the note.
+    public void SetAllTapeRevealed(bool revealed)
+    {
+        Context.RevealedTapeIds.Clear();
+        if (revealed && Document is not null)
+            foreach (var p in Document.Pages)
+                foreach (var s in p.Shapes)
+                    if (s.Kind == ShapeKind.Tape) Context.RevealedTapeIds.Add(s.Id);
+        InvalidateAll();
+    }
+
+    // Removes every laser trail on every page at once.
+    public void ClearLaser()
+    {
+        foreach (var pc in _pageCanvases) pc.ClearLaser();
+    }
+
+    // Presentation: zooms so the whole page fits the viewport and centres it.
+    public void FitPageToViewport(int pageIndex)
+    {
+        if (pageIndex < 0 || pageIndex >= _pageCanvases.Count) return;
+        var pc = _pageCanvases[pageIndex];
+        double vpW = Scroller.ViewportWidth, vpH = Scroller.ViewportHeight;
+        if (vpW < 1 || vpH < 1 || pc.ActualHeight < 1) return;
+        try
+        {
+            float oldZoom = Scroller.ZoomFactor <= 0 ? 1f : Scroller.ZoomFactor;
+            const double margin = 24;
+            float zoom = (float)Math.Clamp(
+                Math.Min(vpW / (pc.ActualWidth + margin), vpH / (pc.ActualHeight + margin)),
+                Scroller.MinZoomFactor, Scroller.MaxZoomFactor);
+            // Page top-left in unzoomed content coordinates.
+            var pt = pc.TransformToVisual(Scroller).TransformPoint(new Windows.Foundation.Point(0, 0));
+            double cx = (Scroller.HorizontalOffset + pt.X) / oldZoom;
+            double cy = (Scroller.VerticalOffset + pt.Y) / oldZoom;
+            double h = (cx + pc.ActualWidth / 2) * zoom - vpW / 2;
+            double v = (cy + pc.ActualHeight / 2) * zoom - vpH / 2;
+            Scroller.ChangeView(Math.Max(0, h), Math.Max(0, v), zoom, disableAnimation: true);
+        }
+        catch (Exception ex) { App.LogError(ex, "FitPageToViewport"); }
+    }
+
     public void SetZoom(double zoom)
     {
         var newZoom = (float)zoom;
@@ -1221,6 +1271,110 @@ public sealed partial class InkCanvasControl : UserControl
     }
 
     /// <summary>Renders the bounding box of the current selection as a PNG.</summary>
+    // ── Stickers ──────────────────────────────────────────────────────────────
+
+    // Copies the current selection out as sticker content: fresh copies of the
+    // selected elements, shifted so the selection's bounding box starts at 0,0.
+    public Services.StickerContent? CopySelectionAsSticker()
+    {
+        var pc = ActivePageCanvas;
+        if (pc is null || !HasSelection || !pc.SelectionBbox(out var b)) return null;
+        var page = pc.Page;
+        float dx = -b.X, dy = -b.Y;
+        var c = new Services.StickerContent { Width = Math.Max(1, b.W), Height = Math.Max(1, b.H) };
+        foreach (var s in page.Strokes.Where(s => Context.SelectedStrokeIds.Contains(s.Id)))
+        {
+            var k = new Stroke { Kind = s.Kind, Color = s.Color, Width = s.Width, PressureMode = s.PressureMode };
+            foreach (var p in s.Points) k.Points.Add(new InkPoint(p.X + dx, p.Y + dy, p.Pressure));
+            c.Strokes.Add(k);
+        }
+        foreach (var sh in page.Shapes.Where(s => Context.SelectedShapeIds.Contains(s.Id)))
+            c.Shapes.Add(new ShapeElement
+            {
+                Kind = sh.Kind, Color = sh.Color, StrokeWidth = sh.StrokeWidth, Filled = sh.Filled, Rotation = sh.Rotation,
+                X1 = sh.X1 + dx, Y1 = sh.Y1 + dy, X2 = sh.X2 + dx, Y2 = sh.Y2 + dy,
+                X3 = sh.Kind == ShapeKind.Triangle ? sh.X3 + dx : sh.X3,
+                Y3 = sh.Kind == ShapeKind.Triangle ? sh.Y3 + dy : sh.Y3,
+            });
+        foreach (var t in page.Texts.Where(t => Context.SelectedTextIds.Contains(t.Id)))
+            c.Texts.Add(new TextElement
+            {
+                X = t.X + dx, Y = t.Y + dy, Width = t.Width, Height = t.Height, Rotation = t.Rotation, Text = t.Text,
+                FontSize = t.FontSize, Color = t.Color, FontFamily = t.FontFamily, Bold = t.Bold, Italic = t.Italic,
+            });
+        foreach (var im in page.Images.Where(i => Context.SelectedImageIds.Contains(i.Id)))
+            c.Images.Add(new ImageElement
+            {
+                X = im.X + dx, Y = im.Y + dy, Width = im.Width, Height = im.Height, Rotation = im.Rotation, PngData = im.PngData,
+            });
+        return c.IsEmpty ? null : c;
+    }
+
+    // Drops a sticker onto the page in view, centred in the viewport and kept
+    // on the sheet, then selects it so it can be moved or resized right away.
+    // The sticker's elements are copied with new ids, so placing the same
+    // sticker twice gives two independent copies.
+    public bool InsertSticker(Services.StickerContent sticker)
+    {
+        var pc = ActivePageCanvas;
+        if (pc is null || sticker.IsEmpty) return false;
+        var page = pc.Page;
+
+        Windows.Foundation.Point c;
+        try { c = this.TransformToVisual(pc).TransformPoint(new Windows.Foundation.Point(ActualWidth / 2, ActualHeight / 2)); }
+        catch { c = new Windows.Foundation.Point(page.Width / 2, page.Height / 2); }
+        // Top-left so the sticker is centred on the viewport, clamped so it stays
+        // on the page (a sticker wider than the page starts at its left edge).
+        double ox = Math.Clamp(c.X - sticker.Width / 2, 0, Math.Max(0, page.Width - sticker.Width));
+        double oy = Math.Clamp(c.Y - sticker.Height / 2, 0, Math.Max(0, page.Height - sticker.Height));
+        float fx = (float)ox, fy = (float)oy;
+
+        Context.SelectedStrokeIds.Clear(); Context.SelectedShapeIds.Clear();
+        Context.SelectedTextIds.Clear();   Context.SelectedImageIds.Clear();
+        foreach (var s in sticker.Strokes)
+        {
+            var k = new Stroke { Kind = s.Kind, Color = s.Color, Width = s.Width, PressureMode = s.PressureMode };
+            foreach (var p in s.Points) k.Points.Add(new InkPoint(p.X + fx, p.Y + fy, p.Pressure));
+            page.Strokes.Add(k);
+            Context.SelectedStrokeIds.Add(k.Id);
+        }
+        foreach (var sh in sticker.Shapes)
+        {
+            var k = new ShapeElement
+            {
+                Kind = sh.Kind, Color = sh.Color, StrokeWidth = sh.StrokeWidth, Filled = sh.Filled, Rotation = sh.Rotation,
+                X1 = sh.X1 + fx, Y1 = sh.Y1 + fy, X2 = sh.X2 + fx, Y2 = sh.Y2 + fy,
+                X3 = sh.Kind == ShapeKind.Triangle ? sh.X3 + fx : sh.X3,
+                Y3 = sh.Kind == ShapeKind.Triangle ? sh.Y3 + fy : sh.Y3,
+            };
+            page.Shapes.Add(k);
+            Context.SelectedShapeIds.Add(k.Id);
+        }
+        foreach (var t in sticker.Texts)
+        {
+            var k = new TextElement
+            {
+                X = t.X + ox, Y = t.Y + oy, Width = t.Width, Height = t.Height, Rotation = t.Rotation, Text = t.Text,
+                FontSize = t.FontSize, Color = t.Color, FontFamily = t.FontFamily, Bold = t.Bold, Italic = t.Italic,
+            };
+            page.Texts.Add(k);
+            Context.SelectedTextIds.Add(k.Id);
+        }
+        foreach (var im in sticker.Images)
+        {
+            var k = new ImageElement { X = im.X + ox, Y = im.Y + oy, Width = im.Width, Height = im.Height, Rotation = im.Rotation, PngData = im.PngData };
+            page.Images.Add(k);
+            Context.SelectedImageIds.Add(k.Id);
+        }
+        Context.CurrentPage = page;
+        pc.InvalidateContentBounds();
+        Context.Mutated?.Invoke();
+        Context.SelectionChanged?.Invoke();
+        Context.ToolRequested?.Invoke(ToolKind.Lasso);
+        Context.Invalidate?.Invoke();
+        return true;
+    }
+
     public byte[]? RenderSelectionRegionToPng()
     {
         var pc = ActivePageCanvas;

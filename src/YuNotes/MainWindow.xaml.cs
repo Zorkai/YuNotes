@@ -169,6 +169,15 @@ public sealed partial class MainWindow : Window
         src.SetRegionRects(Microsoft.UI.Input.NonClientRegionKind.Passthrough, rects);
     }
 
+    // Presentation mode: full screen hides the taskbar and caption buttons;
+    // switching back to the overlapped presenter restores the previous size
+    // and maximized state.
+    public static void SetFullScreen(bool on)
+    {
+        if (App.MainWindow is not MainWindow mw) return;
+        mw._appWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
+    }
+
     // Width in DIPs the caption buttons occupy at the window's top-right. Pages
     // pad their top bars by this so content doesn't sit under min/max/close.
     public static double CaptionButtonInset

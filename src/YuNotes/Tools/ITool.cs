@@ -3,7 +3,7 @@ using YuNotes.Models;
 
 namespace YuNotes.Tools;
 
-public enum ToolKind { Pen, Highlighter, Eraser, Text, Image, Lasso, RectSelect, Pan, Shape, ExtendPage }
+public enum ToolKind { Pen, Highlighter, Eraser, Text, Image, Lasso, RectSelect, Pan, Shape, ExtendPage, Laser, Tape }
 
 public interface ITool
 {

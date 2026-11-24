@@ -402,6 +402,8 @@ public static class PdfVectorWriter
             case ShapeKind.Line:
                 if (s.StrokeWidth > 0) gfx.DrawLine(pen, s.X1, s.Y1, s.X2, s.Y2);
                 break;
+            case ShapeKind.Tape:
+                break;   // a study aid on screen only: exported pages show what's under it
             case ShapeKind.Arrow:
             case ShapeKind.Axes:
             case ShapeKind.Grid:

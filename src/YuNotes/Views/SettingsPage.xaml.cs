@@ -72,6 +72,8 @@ public sealed partial class SettingsPage : Page
         ("Image",       "Image",         ""),
         ("Shape",       "Shape",         ""),
         ("Select",      "Select",        ""),
+        ("Tape",        "Tape (hide and reveal)", "\uf1fc"),
+        ("Laser",       "Laser pointer", ""),
     };
 
     private static readonly (string Key, string Label, string Glyph)[] ActionToolDefs =
@@ -94,6 +96,12 @@ public sealed partial class SettingsPage : Page
         ("Duplicate selection",      new[] { "Ctrl", "D" }),
         ("Delete selection",         new[] { "Delete" }),
         ("Clear selection",          new[] { "Esc" }),
+        ("Open a note in a new tab",  new[] { "Ctrl", "T" }),
+        ("Close tab",                new[] { "Ctrl", "W" }),
+        ("Next / previous tab",      new[] { "Ctrl", "Tab" }),
+        ("Open in a new tab from Home", new[] { "Ctrl", "Click" }),
+        ("Present full screen",      new[] { "F5" }),
+        ("Next / previous page while presenting", new[] { "→", "←" }),
         ("Pan the page",             new[] { "Middle mouse button" }),
         ("Switch tool while held",   new[] { "Pen barrel button" }),
     };

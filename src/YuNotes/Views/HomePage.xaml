@@ -85,6 +85,40 @@
                     <Rectangle Height="1" Fill="{ThemeResource AppBorderBrush}"
                                Margin="4,8,4,4" />
 
+                    <!-- Smart folders: saved searches across every folder. -->
+                    <StackPanel x:Name="SmartSection" Spacing="2">
+                        <Grid Margin="10,0,4,0">
+                            <TextBlock Text="Smart folders" FontSize="12" VerticalAlignment="Center"
+                                       Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                            <Button x:Name="NewSmartFolderBtn"
+                                    HorizontalAlignment="Right"
+                                    Background="Transparent" BorderThickness="0"
+                                    CornerRadius="6" Padding="6,4"
+                                    ToolTipService.ToolTip="New smart folder"
+                                    AutomationProperties.Name="New smart folder">
+                                <FontIcon Glyph="&#xE145;" FontSize="18"
+                                          FontFamily="{StaticResource MaterialIconsFamily}"
+                                          Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                            </Button>
+                        </Grid>
+                        <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="SmartList" Spacing="1" />
+                        </ScrollViewer>
+                        <Rectangle Height="1" Fill="{ThemeResource AppBorderBrush}"
+                                   Margin="4,8,4,4" />
+                    </StackPanel>
+
+                    <!-- Tags: a filter across every folder. Hidden until a note has a tag. -->
+                    <StackPanel x:Name="TagSection" Visibility="Collapsed" Spacing="2">
+                        <TextBlock Text="Tags" FontSize="12" Margin="10,2,0,2"
+                                   Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                        <ScrollViewer MaxHeight="200" VerticalScrollBarVisibility="Auto">
+                            <StackPanel x:Name="TagList" Spacing="1" />
+                        </ScrollViewer>
+                        <Rectangle Height="1" Fill="{ThemeResource AppBorderBrush}"
+                                   Margin="4,8,4,4" />
+                    </StackPanel>
+
                 </StackPanel>
 
                 <!-- Folder section — always visible -->
@@ -339,6 +373,16 @@
                                 <TextBlock Text="Move to" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
+                        <Button x:Name="TagsBtn"
+                                Padding="12,8" CornerRadius="8"
+                                Background="Transparent" BorderThickness="0" IsEnabled="False"
+                                ToolTipService.ToolTip="Add or remove tags">
+                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                <FontIcon Glyph="&#xe9ef;" FontSize="18"
+                                          FontFamily="{StaticResource MaterialIconsFamily}" />
+                                <TextBlock Text="Tags" VerticalAlignment="Center" FontSize="14" />
+                            </StackPanel>
+                        </Button>
                         <Button x:Name="ArchiveBtn"
                                 Padding="12,8" CornerRadius="8"
                                 Background="Transparent" BorderThickness="0" IsEnabled="False">
@@ -590,6 +634,11 @@
                                                                        Foreground="{Binding FolderTextBrush}" />
                                                         </StackPanel>
                                                     </Border>
+                                                    <TextBlock Text="{Binding TagsText}" FontSize="11" Margin="1,2,0,0"
+                                                               TextTrimming="CharacterEllipsis"
+                                                               Foreground="{ThemeResource AppAccentBrush}"
+                                                               Visibility="{Binding TagsVisibility}"
+                                                               ToolTipService.ToolTip="{Binding TagsText}" />
                                                 </StackPanel>
                                             </Grid>
                                         </Border>

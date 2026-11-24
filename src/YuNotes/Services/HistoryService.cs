@@ -13,8 +13,8 @@ namespace YuNotes.Services;
 public sealed class HistoryService
 {
     private const int MaxStack = 60;
-    private readonly Stack<DocSnapshot> _undo = new();
-    private readonly Stack<DocSnapshot> _redo = new();
+    private Stack<DocSnapshot> _undo = new();
+    private Stack<DocSnapshot> _redo = new();
     private DocSnapshot? _current;
     private Document? _doc;
 
@@ -27,8 +27,50 @@ public sealed class HistoryService
     // caller must then rebuild the page views, not just repaint them.
     public bool LastStepChangedPageSet { get; private set; }
 
+    // Undo stacks of notes open in other tabs, parked while another note is
+    // being edited so switching tabs keeps each note's own history.
+    private sealed record Parked(Stack<DocSnapshot> Undo, Stack<DocSnapshot> Redo, DocSnapshot? Current);
+    private readonly Dictionary<Document, Parked> _parked = new(ReferenceEqualityComparer.Instance);
+
+    // Makes `doc` the active document, picking up its parked history if it had
+    // one (tab switch), otherwise starting fresh like Bind.
+    public void Switch(Document doc)
+    {
+        if (ReferenceEquals(_doc, doc)) { StateChanged?.Invoke(); return; }
+        if (_doc is not null) _parked[_doc] = new Parked(_undo, _redo, _current);
+        if (_parked.Remove(doc, out var p))
+        {
+            _doc = doc;
+            _undo = p.Undo;
+            _redo = p.Redo;
+            _current = p.Current ?? DocSnapshot.From(doc);
+            StateChanged?.Invoke();
+        }
+        else
+        {
+            _undo = new();
+            _redo = new();
+            Bind(doc);
+        }
+    }
+
+    // Drops a closed tab's history (and the active one's, if it is that doc).
+    public void Forget(Document doc)
+    {
+        _parked.Remove(doc);
+        if (ReferenceEquals(_doc, doc))
+        {
+            _doc = null;
+            _current = null;
+            _undo = new();
+            _redo = new();
+            StateChanged?.Invoke();
+        }
+    }
+
     public void Bind(Document doc)
     {
+        _parked.Remove(doc);
         _doc = doc;
         _undo.Clear();
         _redo.Clear();

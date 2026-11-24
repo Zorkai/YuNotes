@@ -109,6 +109,19 @@ $msix = Get-ChildItem -Path $outDir -Recurse -Filter *.msix |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $msix) { throw "Build succeeded but no .msix was produced under $outDir." }
 
+# ── 3. Keep only the newest few builds ───────────────────────────────────────
+# Every version bump leaves a ~150 MB YuNotes_<ver>_x64_Test folder behind, and
+# this folder lives inside the (OneDrive-synced) repo. Older ones are never used
+# again: install.ps1 and make-release.ps1 always pick the newest .msix.
+$keepBuilds = 3
+Get-ChildItem -Path $outDir -Directory -Filter "YuNotes_*_x64*" |
+    Sort-Object LastWriteTime -Descending |
+    Select-Object -Skip $keepBuilds |
+    ForEach-Object {
+        Write-Host "  removing old build $($_.Name)" -ForegroundColor DarkGray
+        Remove-Item -LiteralPath $_.FullName -Recurse -Force
+    }
+
 Write-Host ""
 Write-Host "MSIX ready:" -ForegroundColor Green
 Write-Host "  $($msix.FullName)"

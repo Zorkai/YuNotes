@@ -16,6 +16,10 @@ public sealed class EditorContext
     public float CurrentWidth { get; set; } = 2.5f;
     public float EraserWidth { get; set; } = 20f;
     public bool EraserPixelMode { get; set; } = false;
+    public LaserMode LaserMode { get; set; } = LaserMode.Trail;
+    // Tape strips the user has tapped open in this session. Not saved, not
+    // undoable: a note always reopens with every tape covered.
+    public HashSet<string> RevealedTapeIds { get; } = new();
 
     public List<string> SelectedStrokeIds { get; } = new();
     public List<string> SelectedShapeIds { get; } = new();

@@ -107,6 +107,7 @@ public sealed class EraserTool : ITool
 
             case ShapeKind.Rectangle:
             case ShapeKind.Ellipse:
+            case ShapeKind.Tape:
             {
                 float x = MathF.Min(s.X1, s.X2), y = MathF.Min(s.Y1, s.Y2);
                 float hw = MathF.Abs(s.X2 - s.X1) * 0.5f, hh = MathF.Abs(s.Y2 - s.Y1) * 0.5f;
@@ -121,12 +122,12 @@ public sealed class EraserTool : ITool
                     q = new Vector2(q.X * cos - q.Y * sin, q.X * sin + q.Y * cos);
                 }
 
-                if (s.Kind == ShapeKind.Rectangle)
+                if (s.Kind is ShapeKind.Rectangle or ShapeKind.Tape)
                 {
                     float ax = MathF.Abs(q.X), ay = MathF.Abs(q.Y);
                     bool inside = ax <= hw && ay <= hh;
-                    if (inside)
-                        return s.Filled || MathF.Min(hw - ax, hh - ay) <= reach;
+                    if (inside)   // tape is always solid: erasing anywhere on it removes it
+                        return s.Filled || s.Kind == ShapeKind.Tape || MathF.Min(hw - ax, hh - ay) <= reach;
                     float dx = MathF.Max(ax - hw, 0f), dy = MathF.Max(ay - hh, 0f);
                     return dx * dx + dy * dy <= reach2;
                 }

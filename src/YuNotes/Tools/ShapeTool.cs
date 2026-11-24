@@ -23,7 +23,8 @@ public sealed class ShapeTool : ITool
         {
             Kind = ShapeKind,
             Color = ctx.CurrentColor,
-            StrokeWidth = ctx.CurrentWidth,
+            StrokeWidth = ShapeKind == ShapeKind.Tape ? 0f : ctx.CurrentWidth,
+            Filled = ShapeKind == ShapeKind.Tape,
             X1 = p.X, Y1 = p.Y,
             X2 = p.X, Y2 = p.Y
         };
@@ -61,7 +62,10 @@ public sealed class ShapeTool : ITool
         {
             _active.X2 = p.X;
             _active.Y2 = p.Y;
-            meaningful = Math.Abs(_active.X2 - _active.X1) > 2 || Math.Abs(_active.Y2 - _active.Y1) > 2;
+            meaningful = ShapeKind == ShapeKind.Tape
+                // Tape must be big enough to tap: a sliver could never be found again.
+                ? Math.Abs(_active.X2 - _active.X1) >= 8 && Math.Abs(_active.Y2 - _active.Y1) >= 8
+                : Math.Abs(_active.X2 - _active.X1) > 2 || Math.Abs(_active.Y2 - _active.Y1) > 2;
         }
 
         if (meaningful)

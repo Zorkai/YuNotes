@@ -36,27 +36,53 @@
 ## ✨ Features
 
 **✍️ Inking**
-- Pen, highlighter, eraser — stroke erase or pixel erase
-- Pressure-sensitive rendering via Win2D bezier smoothing
-- Pen button bindings — map barrel / eraser tip / top button to any tool
+- Pen, highlighter and eraser: erase whole strokes or only what you touch, with a preview of what will be erased
+- Pressure-sensitive ink with an adjustable pressure curve and line smoothing
+- Pen favorites: save pen color/width combos and switch with **Ctrl+1–5**
+- Shapes: rectangle, ellipse, line, triangle, arrow, axes and grid, or draw freehand and hold to snap it into a clean shape
+- Ruler: drag and rotate it, and the pen snaps to its edge
+- Laser pointer with **Dot** and **Trail** modes; the ink never touches the note
+- Tape for studying: cover answers or key terms, tap a strip to reveal it and tap again to hide it (or cover / reveal everything at once); notes reopen fully covered, and exports show what's under the tape
+- Pen button bindings: map barrel, eraser tip and top button to any tool
 
 **🎯 Selection & editing**
-- Lasso and rectangle select
-- Type text or paste images directly onto the canvas
-- Screenshot tool — region capture straight into the current page
+- Lasso and rectangle select; move, resize, rotate, duplicate, recolor and change line width of the selection
+- Type text or paste images straight onto the page
+- Stickers: save a lasso selection (a diagram, a stamp, a signature) and drop an editable copy into any note
+- Screenshot tool: capture a region and copy, save or insert it into the page
+- Undo and redo for ink, page changes and templates
 
 **📄 Documents**
-- Import PDFs as note backgrounds, export back to PDF or PNG
-- Page templates — blank, grid, dots, lined, Cornell
-- `.yunote` files are SQLite — every stroke stays editable after close and reopen
+- Import PDFs as note backgrounds, select and copy their text, and add pages from other PDFs
+- Export to PDF (ink as vectors, text boxes as real selectable text) or PNG, for all pages or a page range
+- Share a note as a PDF or as images through the Windows share window (Mail, Teams, Nearby sharing, …)
+- Page templates: blank, grid, dots, lined, Cornell, with adjustable spacing
+- Widen a page to the left or right (it snaps to match neighbouring widened pages), or keep scrolling past the end to add a page
+- Page sorter: reorder, delete and jump between pages; bookmark pages
+- Autosave and version history: go back to an earlier version of a note
+- `.yunote` files are SQLite, so every stroke stays editable after you close and reopen
 
-**🧭 Navigation**
-- Pinch-to-zoom and bottom-bar zoom slider
-- Home screen with recent documents sorted by last modified
+**🔎 Finding things**
+- Find in note (**Ctrl+F**) searches your handwriting, PDF text and text boxes
+- Search from Home looks inside every note, not just titles
+- Tags: tag notes from Home, filter by tag across folders from the sidebar, or search `#tag`
+- Smart folders: saved searches such as "tagged #exam, edited in the last 7 days" that gather matching notes from every folder
 
-**🖐️ Input**
-- Configurable palm rejection with adjustable grace window
-- Touch and pen are handled independently — your hand never draws
+**🗂️ Organizing**
+- Home screen with folders (with colors), pinned notes, a "continue where you left off" row, and sorting by date, name or folder
+- Trash and Archive, with restore
+- Tabs: keep several notes open in one window (**Ctrl+T**, **Ctrl+W**, **Ctrl+Tab**, or Ctrl+click a note on Home); each tab keeps its own undo history
+- Side by side: open a second note read-only next to the one you're editing
+
+**🎤 Presenting**
+- Presentation mode (**F5**): full screen, page fitted to the screen, laser pointer ready; arrow keys step pages and **Esc** exits
+
+**🖐️ Input & look**
+- Configurable palm rejection; touch pans and zooms, your hand never draws
+- Pinch-to-zoom and an optional zoom slider
+- Floating toolbar you can dock to any edge or drag anywhere, resize, and reorder or hide tools in
+- Light, dark or system theme with a liquid-glass toolbar
+- Automatic updates for GitHub installs (can be turned off in Settings)
 
 ![Editor](https://i.imgur.com/pRc8cRL.png)
 ---
@@ -74,13 +100,19 @@
 
 ### ▶️ Run
 
+Open `YuNotes.sln` in Visual Studio and press **F5**. Visual Studio deploys YuNotes as a package, which it needs to find its icon font.
+
+From the command line, build an unpackaged copy into its own folder and run that:
+
 ```powershell
-dotnet restore
-dotnet build -c Debug
-dotnet run --project src/YuNotes/YuNotes.csproj
+dotnet build src/YuNotes/YuNotes.csproj -c Debug -p:WindowsPackageType=None -p:OutDir="$PWD\src\YuNotes\bin\x64\DevUnpackaged"
 ```
 
-Or open `YuNotes.sln` in Visual Studio and press **F5**.
+```powershell
+.\src\YuNotes\bin\x64\DevUnpackaged\YuNotes.exe
+```
+
+> ⚠️ Plain `dotnet run` starts the packaged app without its package, so every toolbar icon shows as an empty box.
 
 ### 🚀 First run
 
@@ -96,13 +128,13 @@ Or open `YuNotes.sln` in Visual Studio and press **F5**.
 
 ```
 src/YuNotes/
-├── Views/        HomePage · EditorPage · SettingsPage
-├── Controls/     InkCanvasControl · PageCanvas · ColorPicker · WidthPicker
-├── Models/       Document · Page · Stroke · TextElement · ImageElement
-├── Services/     DocumentService (SQLite) · PDF/PNG/Screenshot services
-├── Rendering/    Win2D renderers — template backgrounds, stroke drawing
-├── Input/        PalmRejection · PenButtonRouter
-├── Tools/        ITool + Pen · Highlighter · Eraser · Text · Image · Lasso · Rect
+├── Views/        HomePage · EditorPage (split into partial files by area) · SettingsPage
+├── Controls/     InkCanvasControl · PageCanvas · ColorPicker · WidthPicker · LiquidGlassBackdrop
+├── Models/       Document · Stroke · ShapeGeometry · AppSettings
+├── Services/     DocumentService (SQLite) · PDF import/export · SearchIndex · VersionHistory · NoteTags · UpdateService
+├── Rendering/    Win2D page renderer · PDF vector writer
+├── Input/        PalmRejection · PenButtonRouter · PressureCurve
+├── Tools/        ITool + Pen · Highlighter · Eraser · Text · Image · Lasso · Rect · Shape · Laser
 └── Themes/       Fluent colors & styles
 ```
 

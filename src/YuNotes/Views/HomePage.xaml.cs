@@ -108,6 +108,10 @@ public sealed partial class HomePage : Page
             ? new SolidColorBrush(Microsoft.UI.Colors.White)
             : (Brush)Application.Current.Resources["AppTextPrimaryBrush"];
         public string PinTooltip => IsPinned ? "Unpin" : "Pin to the top";
+        public IReadOnlyList<string> Tags { get; set; } = Array.Empty<string>();
+        public string TagsText => string.Join("  ", Tags.Select(t => "#" + t));
+        public Microsoft.UI.Xaml.Visibility TagsVisibility =>
+            Tags.Count > 0 ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
         public string FolderDisplay => string.IsNullOrEmpty(FolderName) ? "No folder" : FolderName;
         public string FolderGlyph => string.IsNullOrEmpty(FolderName) ? "" : "";
         public Brush FolderChipBrush => string.IsNullOrEmpty(FolderName)
@@ -132,6 +136,8 @@ public sealed partial class HomePage : Page
     private bool _selectMode;
     private bool _sidebarOpen = true;
     private string? _selectedFolderPath;
+    // Tag filter (All notes narrowed to one tag, across every folder); null = off.
+    private string? _activeTag;
 
     // Folder currently under the drag cursor (set during DragOver, consumed in Drop).
     private string? _dragTargetPath;
@@ -180,6 +186,7 @@ public sealed partial class HomePage : Page
             SelectionCountLabel.Text = $"{n} selected";
             DeleteBtn.IsEnabled    = n > 0;
             MoveToFolderBtn.IsEnabled = n > 0;
+            TagsBtn.IsEnabled      = n > 0;
             RestoreBtn.IsEnabled   = n > 0;
             ArchiveBtn.IsEnabled   = n > 0;
             UnarchiveBtn.IsEnabled = n > 0;
@@ -197,6 +204,8 @@ public sealed partial class HomePage : Page
 
         // Selection — move to folder
         MoveToFolderBtn.Click += async (_, __) => await MoveToFolderAsync();
+        TagsBtn.Click         += async (_, __) => await EditTagsForSelectedAsync();
+        InitSmartFolders();
 
         // Sort bar
         SortByDateBtn.Click   += (_, __) => SetSort(SortOrder.Date);
@@ -252,157 +261,6 @@ public sealed partial class HomePage : Page
         };
     }
 
-    // ── Search inside notes ───────────────────────────────────────────────────
-    // Every note's handwriting, PDF text and text boxes are indexed in the
-    // background (only notes that changed since last time). Matches show in a
-    // panel above the grid while the search box has text.
-
-    private int _contentHitCount;
-
-    private void StartIndexing()
-    {
-        var s = App.Services.Settings.Current;
-        var paths = GetAllNotePaths(s.DocumentsFolder)
-            .Concat(s.RecentDocuments.Where(File.Exists))
-            .ToList();
-        _ = App.Services.Search.EnsureIndexedAsync(paths);
-        UpdateContentResults();
-    }
-
-    private void OnIndexUpdated() => DispatcherQueue.TryEnqueue(UpdateContentResults);
-
-    private void UpdateContentResults()
-    {
-        var q = SearchBox.Text.Trim();
-        var index = App.Services.Search;
-        if (q.Length < 2)
-        {
-            ContentResultsPanel.Visibility = Visibility.Collapsed;
-            ContentResultsList.Children.Clear();
-            _contentHitCount = 0;
-            return;
-        }
-
-        var hits = index.Search(q, 40);
-        _contentHitCount = hits.Count;
-        var terms = q.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
-        ContentResultsList.Children.Clear();
-        foreach (var h in hits) ContentResultsList.Children.Add(BuildResultRow(h, terms, q));
-
-        bool busy = index.Pending > 0;
-        IndexingRing.IsActive = busy;
-        IndexingRing.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
-        ContentResultsStatus.Text =
-            busy ? $"Reading handwriting… {index.Pending} note{(index.Pending == 1 ? "" : "s")} left"
-            : !index.HandwritingAvailable ? "Handwriting search needs a handwriting language in Windows settings"
-            : hits.Count == 0 ? "No matches inside notes"
-            : $"{hits.Count} match{(hits.Count == 1 ? "" : "es")}";
-        ContentResultsList.Visibility = hits.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        ContentResultsPanel.Visibility = Visibility.Visible;
-        UpdateEmptyHintForSearch();
-    }
-
-    private FrameworkElement BuildResultRow(Services.NoteSearchHit hit, string[] terms, string query)
-    {
-        var res = Application.Current.Resources;
-        var muted = (Brush)res["AppTextSecondaryBrush"];
-        var (glyph, sourceName) = hit.Match.Source switch
-        {
-            Services.TextSource.Handwriting => ("", "handwriting"),
-            Services.TextSource.Pdf => ("", "the PDF's text"),
-            _ => ("", "a text box"),
-        };
-
-        var head = new TextBlock { TextTrimming = TextTrimming.CharacterEllipsis };
-        head.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = hit.Title, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
-        var folder = GetFolderLabel(hit.Path);
-        head.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
-        {
-            Text = $"   Page {hit.Match.PageIndex + 1}" + (folder.Length > 0 ? $" · {folder}" : ""),
-            Foreground = muted, FontSize = 12,
-        });
-
-        var snippet = new TextBlock { FontSize = 12, Foreground = muted, TextTrimming = TextTrimming.CharacterEllipsis };
-        AddHighlighted(snippet, hit.Match.Snippet, terms);
-
-        var grid = new Grid { ColumnSpacing = 12 };
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        var icon = new FontIcon
-        {
-            Glyph = glyph, FontSize = 18, VerticalAlignment = VerticalAlignment.Center,
-            FontFamily = (FontFamily)res["MaterialIconsFamily"],
-            Foreground = (Brush)res["AppAccentBrush"],
-        };
-        var text = new StackPanel { Spacing = 1 };
-        text.Children.Add(head);
-        text.Children.Add(snippet);
-        Grid.SetColumn(text, 1);
-        grid.Children.Add(icon);
-        grid.Children.Add(text);
-
-        var btn = new Button
-        {
-            Content = grid,
-            HorizontalAlignment = HorizontalAlignment.Stretch,
-            HorizontalContentAlignment = HorizontalAlignment.Stretch,
-            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
-            BorderThickness = new Thickness(0),
-            Padding = new Thickness(10, 7, 10, 7),
-            CornerRadius = new CornerRadius(8),
-        };
-        ToolTipService.SetToolTip(btn, $"Found in {sourceName}. Opens the note at this page.");
-        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(btn,
-            $"{hit.Title}, page {hit.Match.PageIndex + 1}: {hit.Match.Snippet}");
-        btn.Click += (_, __) =>
-        {
-            TouchRecent(hit.Path);
-            MainWindow.Navigate<EditorPage>(new EditorOpenRequest(hit.Path, hit.Match.PageIndex, query),
-                                            new DrillInNavigationTransitionInfo());
-        };
-        return btn;
-    }
-
-    // Bold, accent-colored runs wherever a search term appears in the snippet.
-    private static void AddHighlighted(TextBlock tb, string text, string[] terms)
-    {
-        var accent = (Brush)Application.Current.Resources["AppTextPrimaryBrush"];
-        int i = 0;
-        while (i < text.Length)
-        {
-            int best = -1, len = 0;
-            foreach (var t in terms)
-            {
-                int at = text.IndexOf(t, i, StringComparison.CurrentCultureIgnoreCase);
-                if (at >= 0 && (best < 0 || at < best)) { best = at; len = t.Length; }
-            }
-            if (best < 0) { tb.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = text[i..] }); break; }
-            if (best > i) tb.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run { Text = text[i..best] });
-            tb.Inlines.Add(new Microsoft.UI.Xaml.Documents.Run
-            {
-                Text = text.Substring(best, len),
-                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                Foreground = accent,
-            });
-            i = best + len;
-        }
-    }
-
-    private void UpdateEmptyHintForSearch()
-    {
-        if (SearchBox.Text.Trim().Length == 0) return;
-        var shown = RecentList.ItemsSource as System.Collections.ICollection;
-        EmptyHint.Visibility = (shown?.Count ?? 0) == 0 && _contentHitCount == 0
-            ? Visibility.Visible : Visibility.Collapsed;
-    }
-
-    private void ShowUpdateNotice()
-    {
-        if (Services.UpdateService.Current != Services.UpdateService.State.Ready) return;
-        UpdateInfoBar.Message = Services.UpdateService.StatusText;
-        UpdateInfoBar.IsOpen  = true;
-    }
-
     // ── Sidebar toggle ────────────────────────────────────────────────────────
 
     private void ToggleSidebar()
@@ -417,6 +275,8 @@ public sealed partial class HomePage : Page
     {
         _activeSection = section;
         _selectedFolderPath = null;
+        _activeTag = null;
+        _activeSmartId = null;
         ApplyNavSelection();
         SectionTitle.Text = section switch
         {
@@ -432,6 +292,8 @@ public sealed partial class HomePage : Page
     {
         _activeSection = NavSection.Folders;
         _selectedFolderPath = folderPath;
+        _activeTag = null;
+        _activeSmartId = null;
         ApplyNavSelection();
         SectionTitle.Text = Path.GetFileName(folderPath);
         // Rebuild so IsSelected (and therefore the glyph) reflects the new selection.
@@ -460,14 +322,15 @@ public sealed partial class HomePage : Page
         var accent = (Brush)Application.Current.Resources["AppSurfaceVariantBrush"];
         var none   = new SolidColorBrush(Microsoft.UI.Colors.Transparent);
 
-        AllNotesNavBtn.Background = _activeSection == NavSection.AllNotes ? accent : none;
+        bool allNotes = _activeSection == NavSection.AllNotes && _activeTag is null && _activeSmartId is null;
+        AllNotesNavBtn.Background = allNotes ? accent : none;
         TrashNavBtn.Background    = _activeSection == NavSection.Trash    ? accent : none;
         ArchiveNavBtn.Background  = _activeSection == NavSection.Archive  ? accent : none;
 
-        AllNotesIcon.Foreground  = _activeSection == NavSection.AllNotes
+        AllNotesIcon.Foreground  = allNotes
             ? (Brush)Application.Current.Resources["AppTextPrimaryBrush"]
             : (Brush)Application.Current.Resources["AppTextSecondaryBrush"];
-        AllNotesLabel.FontWeight = _activeSection == NavSection.AllNotes
+        AllNotesLabel.FontWeight = allNotes
             ? new Windows.UI.Text.FontWeight { Weight = 600 }
             : new Windows.UI.Text.FontWeight { Weight = 400 };
     }
@@ -551,7 +414,7 @@ public sealed partial class HomePage : Page
     private void ApplyFilter()
     {
         var q = SearchBox.Text.Trim();
-        bool hasNewCard = _activeSection == NavSection.AllNotes ||
+        bool hasNewCard = (_activeSection == NavSection.AllNotes && _activeTag is null && _activeSmartId is null) ||
                           (_activeSection == NavSection.Folders && _selectedFolderPath is not null);
         List<RecentItem> shown;
         if (q.Length == 0)
@@ -561,9 +424,13 @@ public sealed partial class HomePage : Page
         }
         else
         {
-            shown = _allItems.Where(i =>
-                i.Title.Contains(q, StringComparison.CurrentCultureIgnoreCase) ||
-                i.FolderName.Contains(q, StringComparison.CurrentCultureIgnoreCase)).ToList();
+            // "#exa" matches tags starting with "exa"; plain text also matches tags.
+            var tagQuery = q.StartsWith('#') ? Services.NoteTags.Normalize(q) : null;
+            shown = _allItems.Where(i => tagQuery is not null
+                ? i.Tags.Any(t => t.StartsWith(tagQuery, StringComparison.OrdinalIgnoreCase))
+                : i.Title.Contains(q, StringComparison.CurrentCultureIgnoreCase) ||
+                  i.FolderName.Contains(q, StringComparison.CurrentCultureIgnoreCase) ||
+                  i.Tags.Any(t => t.Contains(q, StringComparison.CurrentCultureIgnoreCase))).ToList();
         }
         RecentList.ItemsSource = shown;
 
@@ -621,6 +488,7 @@ public sealed partial class HomePage : Page
             Pages       = info.PageCount,
             IsPdf       = !string.IsNullOrEmpty(info.SourcePdfPath),
             IsPinned    = IsPinnedPath(info.FilePath),
+            Tags        = Services.NoteTags.Get(info.FilePath),
         };
         _ = LoadThumbnailAsync(item, info.FilePath);
         return item;
@@ -700,6 +568,7 @@ public sealed partial class HomePage : Page
             SelectionCountLabel.Text      = "0 selected";
             DeleteBtn.IsEnabled           = false;
             MoveToFolderBtn.IsEnabled     = false;
+            TagsBtn.IsEnabled             = false;
             RestoreBtn.IsEnabled          = false;
             ArchiveBtn.IsEnabled          = false;
             UnarchiveBtn.IsEnabled        = false;
@@ -709,6 +578,7 @@ public sealed partial class HomePage : Page
             RestoreBtn.Visibility      = inTrash   ? Visibility.Visible : Visibility.Collapsed;
             UnarchiveBtn.Visibility    = inArchive ? Visibility.Visible : Visibility.Collapsed;
             MoveToFolderBtn.Visibility = (inTrash || inArchive) ? Visibility.Collapsed : Visibility.Visible;
+            TagsBtn.Visibility         = (inTrash || inArchive) ? Visibility.Collapsed : Visibility.Visible;
             ArchiveBtn.Visibility      = (inTrash || inArchive) ? Visibility.Collapsed : Visibility.Visible;
             DeleteBtnLabel.Text        = (inTrash || inArchive) ? "Delete permanently" : "Move to Trash";
         }
@@ -730,267 +600,6 @@ public sealed partial class HomePage : Page
             HeaderSelect.Visibility       = Visibility.Collapsed;
         }
     }
-
-    // ── Delete / Trash ────────────────────────────────────────────────────────
-
-    private async Task DeleteOrTrashSelectedAsync()
-    {
-        var picked = RecentList.SelectedItems.OfType<RecentItem>().Where(r => !r.IsNewCard).ToList();
-        if (picked.Count == 0) return;
-
-        if (_activeSection is NavSection.Trash or NavSection.Archive)
-            await DeletePermanentlyAsync(picked);
-        else
-            await MoveToTrashAsync(picked);
-    }
-
-    private async Task MoveToTrashAsync(IList<RecentItem> items)
-    {
-        var noun = items.Count == 1 ? "note" : "notes";
-        var dlg  = new ContentDialog
-        {
-            Title             = $"Move {items.Count} {noun} to Trash?",
-            Content           = "You can restore them from the Trash section.",
-            PrimaryButtonText = "Move to Trash",
-            CloseButtonText   = "Cancel",
-            DefaultButton     = ContentDialogButton.Close,
-            XamlRoot          = this.XamlRoot
-        };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
-
-        Directory.CreateDirectory(TrashFolder);
-        var recent = App.Services.Settings.Current.RecentDocuments;
-        var errors = new List<string>();
-        foreach (var item in items)
-        {
-            try
-            {
-                var dest = UniqueTrashPath(item.Path);
-                File.Move(item.Path, dest);
-                recent.Remove(item.Path);
-            }
-            catch (Exception ex) { errors.Add($"{item.Title}: {ex.Message}"); }
-        }
-        App.Services.Settings.Save();
-        SetSelectMode(false);
-        Refresh();
-        if (errors.Count > 0)
-            await ShowDialogAsync("Some files couldn't be moved to Trash", string.Join("\n", errors));
-    }
-
-    private async Task RestoreSelectedAsync()
-    {
-        var picked = RecentList.SelectedItems.OfType<RecentItem>().Where(r => !r.IsNewCard).ToList();
-        if (picked.Count > 0) await RestoreFromTrashAsync(picked);
-    }
-
-    private async Task RestoreFromTrashAsync(IEnumerable<RecentItem> items)
-    {
-        var rootFolder = App.Services.Settings.Current.DocumentsFolder;
-        var recent     = App.Services.Settings.Current.RecentDocuments;
-        var errors     = new List<string>();
-        foreach (var item in items)
-        {
-            try
-            {
-                var dest = Path.Combine(rootFolder, Path.GetFileName(item.Path));
-                if (File.Exists(dest))
-                    dest = Path.Combine(rootFolder,
-                               Path.GetFileNameWithoutExtension(item.Path) +
-                               $"_{DateTime.Now:yyyyMMddHHmmss}" +
-                               Path.GetExtension(item.Path));
-                File.Move(item.Path, dest);
-                if (!recent.Contains(dest)) recent.Insert(0, dest);
-            }
-            catch (Exception ex) { errors.Add($"{item.Title}: {ex.Message}"); }
-        }
-        App.Services.Settings.Save();
-        SetSelectMode(false);
-        Refresh();
-        if (errors.Count > 0)
-            await ShowDialogAsync("Some files couldn't be restored", string.Join("\n", errors));
-    }
-
-    private async Task DeletePermanentlyAsync(IEnumerable<RecentItem> items)
-    {
-        var list = items.ToList();
-        var noun = list.Count == 1 ? "note" : "notes";
-        var dlg  = new ContentDialog
-        {
-            Title             = $"Permanently delete {list.Count} {noun}?",
-            Content           = "This cannot be undone.",
-            PrimaryButtonText = "Delete permanently",
-            CloseButtonText   = "Cancel",
-            DefaultButton     = ContentDialogButton.Close,
-            XamlRoot          = this.XamlRoot
-        };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
-
-        var recent = App.Services.Settings.Current.RecentDocuments;
-        var errors = new List<string>();
-        foreach (var item in list)
-        {
-            try
-            {
-                App.Services.Documents.Delete(item.Path);
-                recent.Remove(item.Path);
-            }
-            catch (Exception ex) { errors.Add($"{item.Title}: {ex.Message}"); }
-        }
-        App.Services.Settings.Save();
-        SetSelectMode(false);
-        Refresh();
-        if (errors.Count > 0)
-            await ShowDialogAsync("Some files couldn't be deleted", string.Join("\n", errors));
-    }
-
-    private string UniqueTrashPath(string sourcePath)
-    {
-        Directory.CreateDirectory(TrashFolder);
-        var dest = Path.Combine(TrashFolder, Path.GetFileName(sourcePath));
-        if (!File.Exists(dest)) return dest;
-        return Path.Combine(TrashFolder,
-            Path.GetFileNameWithoutExtension(sourcePath) +
-            $"_{DateTime.Now:yyyyMMddHHmmss}" +
-            Path.GetExtension(sourcePath));
-    }
-
-    // ── Archive / Unarchive ─────────────────────────────────────────────────────
-
-    private async Task ArchiveSelectedAsync()
-    {
-        var picked = RecentList.SelectedItems.OfType<RecentItem>().Where(r => !r.IsNewCard).ToList();
-        if (picked.Count == 0) return;
-
-        var recent = App.Services.Settings.Current.RecentDocuments;
-        var errors = new List<string>();
-        foreach (var item in picked)
-        {
-            try
-            {
-                File.Move(item.Path, ArchiveDestFor(item.Path));
-                recent.Remove(item.Path);
-            }
-            catch (Exception ex) { errors.Add($"{item.Title}: {ex.Message}"); }
-        }
-        App.Services.Settings.Save();
-        SetSelectMode(false);
-        Refresh();
-        if (errors.Count > 0)
-            await ShowDialogAsync("Some notes couldn't be archived", string.Join("\n", errors));
-    }
-
-    private async Task UnarchiveSelectedAsync()
-    {
-        var picked = RecentList.SelectedItems.OfType<RecentItem>().Where(r => !r.IsNewCard).ToList();
-        if (picked.Count > 0) await UnarchiveAsync(picked);
-    }
-
-    private async Task UnarchiveAsync(IEnumerable<RecentItem> items)
-    {
-        var recent = App.Services.Settings.Current.RecentDocuments;
-        var errors = new List<string>();
-        foreach (var item in items)
-        {
-            try
-            {
-                var dest = UnarchiveDestFor(item.Path);
-                File.Move(item.Path, dest);
-                if (!recent.Contains(dest)) recent.Insert(0, dest);
-            }
-            catch (Exception ex) { errors.Add($"{item.Title}: {ex.Message}"); }
-        }
-        App.Services.Settings.Save();
-        SetSelectMode(false);
-        LoadFolderTree();   // folders recreated by restoring their notes reappear
-        Refresh();
-        if (errors.Count > 0)
-            await ShowDialogAsync("Some notes couldn't be unarchived", string.Join("\n", errors));
-    }
-
-    private async Task ArchiveFolderAsync(string folderPath)
-    {
-        var name      = Path.GetFileName(folderPath);
-        bool hasNotes = Directory.Exists(folderPath) && GetAllNotePaths(folderPath).Any();
-        var msg = hasNotes
-            ? $"Archive \"{name}\" and all its notes? You can unarchive them later from the Archive section."
-            : $"Archive the folder \"{name}\"?";
-
-        var dlg = new ContentDialog
-        {
-            Title = "Archive folder", Content = msg,
-            PrimaryButtonText = "Archive", CloseButtonText = "Cancel",
-            XamlRoot = this.XamlRoot
-        };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
-
-        try
-        {
-            // Move the whole folder in one go (a same-volume rename), preserving its
-            // structure under _archive. This avoids a recursive delete, which can fail
-            // with "access denied" on OneDrive-synced folders.
-            var rel  = RelativePathUnder(App.Services.Settings.Current.DocumentsFolder, folderPath);
-            var dest = Path.Combine(ArchiveFolder, rel);
-            if (Directory.Exists(dest) || File.Exists(dest))
-                dest += $"_{DateTime.Now:yyyyMMddHHmmss}";
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            Directory.Move(folderPath, dest);
-
-            var prefix = folderPath + Path.DirectorySeparatorChar;
-
-            // Drop recent entries and registry rows for the folder and its descendants.
-            App.Services.Settings.Current.RecentDocuments.RemoveAll(p =>
-                p.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(p, folderPath, StringComparison.OrdinalIgnoreCase));
-            App.Services.Settings.Current.Folders.RemoveAll(f =>
-                f.Path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(f.Path, folderPath, StringComparison.OrdinalIgnoreCase));
-            App.Services.Settings.Save();
-
-            if (string.Equals(_selectedFolderPath, folderPath, StringComparison.OrdinalIgnoreCase) ||
-                _selectedFolderPath?.StartsWith(prefix, StringComparison.OrdinalIgnoreCase) == true)
-            {
-                _selectedFolderPath = null;
-                SectionTitle.Text   = "Folders";
-            }
-            LoadFolderTree();
-            Refresh();
-        }
-        catch (Exception ex) { await ShowDialogAsync("Could not archive folder", ex.Message); }
-    }
-
-    // Destination inside _archive that mirrors the note's path relative to the
-    // documents root, so unarchiving can restore the original folder structure.
-    private string ArchiveDestFor(string sourcePath)
-    {
-        var rel  = RelativePathUnder(App.Services.Settings.Current.DocumentsFolder, sourcePath);
-        var dest = Path.Combine(ArchiveFolder, rel);
-        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-        return File.Exists(dest) ? UniqueSibling(dest) : dest;
-    }
-
-    // Destination back under the documents root, mirroring the archived path.
-    private string UnarchiveDestFor(string archivedPath)
-    {
-        var rel  = RelativePathUnder(ArchiveFolder, archivedPath);
-        var dest = Path.Combine(App.Services.Settings.Current.DocumentsFolder, rel);
-        Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-        return File.Exists(dest) ? UniqueSibling(dest) : dest;
-    }
-
-    private static string RelativePathUnder(string root, string fullPath)
-    {
-        var prefix = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
-        return fullPath.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
-            ? fullPath[prefix.Length..]
-            : Path.GetFileName(fullPath);
-    }
-
-    private static string UniqueSibling(string path)
-        => Path.Combine(Path.GetDirectoryName(path)!,
-               Path.GetFileNameWithoutExtension(path) +
-               $"_{DateTime.Now:yyyyMMddHHmmss}" +
-               Path.GetExtension(path));
 
     // ── Refresh / load notes ──────────────────────────────────────────────────
 
@@ -1022,6 +631,8 @@ public sealed partial class HomePage : Page
     private void Refresh()
     {
         UpdateFolderCounts();
+        RebuildTagList();
+        RebuildSmartFolderList();
 
         // ── Trash ─────────────────────────────────────────────────────────────
         if (_activeSection == NavSection.Trash)
@@ -1075,6 +686,28 @@ public sealed partial class HomePage : Page
         }
 
         // ── All notes ─────────────────────────────────────────────────────────
+        var items = BuildAllNoteItems();
+        _allLiveItems = items;
+        RebuildSmartFolderList();
+        if (ActiveSmartFolder is { } smart)
+        {
+            items = items.Where(i => MatchesSmartFolder(smart, i)).ToList();
+            ShowItems(items, $"Nothing in \u201c{smart.Name}\u201d yet", smart.Describe());
+            return;
+        }
+        if (_activeTag is { } tag)
+        {
+            items = items.Where(i => i.Tags.Contains(tag, StringComparer.OrdinalIgnoreCase)).ToList();
+            ShowItems(items, $"No notes tagged #{tag}", "Select notes and choose Tags to add this tag.");
+            return;
+        }
+        ShowItems(items, "No notes", "Tap New note to add one.");
+    }
+
+    // Every live note: everything under the notes folder (subfolders included,
+    // Trash and Archive left out) plus recently opened notes that live elsewhere.
+    private List<RecentItem> BuildAllNoteItems()
+    {
         var folder = App.Services.Settings.Current.DocumentsFolder;
         var seen   = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var infos  = new List<DocumentInfo>();
@@ -1108,8 +741,7 @@ public sealed partial class HomePage : Page
             App.Services.Settings.Save();
         }
 
-        var items = infos.Select(d => MakeItem(d, folder)).ToList();
-        ShowItems(items, "No notes", "Tap New note to add one.");
+        return infos.Select(d => MakeItem(d, folder)).ToList();
     }
 
     // Returns the folder path relative to DocumentsFolder (e.g. "Work / Project A"),
@@ -1275,7 +907,12 @@ public sealed partial class HomePage : Page
         {
             if (r.IsNewCard) { await NewNoteAsync(); return; }
             TouchRecent(r.Path);
-            OpenPath(r.Path);
+            // Ctrl+click opens the note in a new editor tab.
+            var ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control);
+            if (ctrl.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
+                MainWindow.Navigate<EditorPage>(new EditorTabRequest(r.Path), new SuppressNavigationTransitionInfo());
+            else
+                OpenPath(r.Path);
         }
     }
 
@@ -1369,567 +1006,6 @@ public sealed partial class HomePage : Page
         int i    = 1;
         while (File.Exists(p)) p = Path.Combine(folder, $"{safe} ({i++}){ext}");
         return p;
-    }
-
-    // ── Folder tree ───────────────────────────────────────────────────────────
-
-    private static bool IsSystemFolder(string path)
-        => Path.GetFileName(path)?.StartsWith("_") == true;
-
-    private void LoadFolderTree()
-    {
-        FolderTree.RootNodes.Clear();
-
-        var rootFolder = App.Services.Settings.Current.DocumentsFolder;
-        if (!Directory.Exists(rootFolder)) return;
-
-        // Keep the registry in sync with the actual filesystem before building the tree.
-        SyncFolderRegistry(rootFolder, parentId: null);
-        App.Services.Settings.Save();
-
-        foreach (var dir in Directory.GetDirectories(rootFolder)
-                                     .Where(d => !IsSystemFolder(d))
-                                     .OrderBy(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase))
-        {
-            FolderTree.RootNodes.Add(BuildFolderNode(dir));
-        }
-
-        // Re-apply selection highlight if a folder is already selected.
-        if (_selectedFolderPath is not null)
-            SelectTreeNode(FolderTree.RootNodes, _selectedFolderPath);
-    }
-
-    private TreeViewNode BuildFolderNode(string dirPath)
-    {
-        var name = Path.GetFileName(dirPath)!;
-        var info = App.Services.Settings.Current.Folders
-            .FirstOrDefault(f => string.Equals(f.Path, dirPath, StringComparison.OrdinalIgnoreCase));
-
-        var item = new FolderTreeItem
-        {
-            Id         = info?.Id ?? Guid.NewGuid().ToString("N"),
-            Name       = name,
-            Path       = dirPath,
-            IsSelected = string.Equals(dirPath, _selectedFolderPath, StringComparison.OrdinalIgnoreCase),
-            ColorBrush = new SolidColorBrush(FolderColors.Parse(info?.Color)),
-            NoteCount  = CountNotes(dirPath)
-        };
-        var node = new TreeViewNode { Content = item, IsExpanded = true };
-
-        foreach (var sub in Directory.GetDirectories(dirPath)
-                                     .Where(d => !IsSystemFolder(d))
-                                     .OrderBy(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase))
-        {
-            node.Children.Add(BuildFolderNode(sub));
-        }
-        return node;
-    }
-
-    // Adds any filesystem folders missing from the registry; removes stale entries.
-    private static void SyncFolderRegistry(string parentDir, string? parentId)
-    {
-        var settings = App.Services.Settings.Current;
-        foreach (var dir in Directory.GetDirectories(parentDir).Where(d => !IsSystemFolder(d)))
-        {
-            var existing = settings.Folders.FirstOrDefault(f =>
-                string.Equals(f.Path, dir, StringComparison.OrdinalIgnoreCase));
-            if (existing is null)
-            {
-                existing = new FolderInfo
-                {
-                    Name     = Path.GetFileName(dir)!,
-                    Path     = dir,
-                    ParentId = parentId,
-                    Color    = FolderColors.NextFor(settings.Folders)
-                };
-                settings.Folders.Add(existing);
-            }
-            // Folders saved before colors existed get one now.
-            existing.Color ??= FolderColors.NextFor(settings.Folders);
-            SyncFolderRegistry(dir, existing.Id);
-        }
-        // Prune entries whose directories no longer exist under this parent.
-        settings.Folders.RemoveAll(f =>
-            !Directory.Exists(f.Path) &&
-            (parentId is null
-                ? Path.GetDirectoryName(f.Path)?.Equals(parentDir, StringComparison.OrdinalIgnoreCase) == true
-                : f.ParentId == parentId));
-    }
-
-    private void FolderTree_ItemInvoked(TreeView sender, TreeViewItemInvokedEventArgs e)
-    {
-        if (e.InvokedItem is TreeViewNode node && node.Content is FolderTreeItem item)
-            SelectFolder(item.Path);
-    }
-
-    private void FolderTree_RightTapped(object sender, RightTappedRoutedEventArgs e)
-    {
-        DependencyObject? d = e.OriginalSource as DependencyObject;
-        while (d is not null && d is not TreeViewItem) d = VisualTreeHelper.GetParent(d);
-        if (d is not TreeViewItem tvi) return;
-
-        // The container's DataContext may be the TreeViewNode or its FolderTreeItem
-        // content depending on TreeView mode — handle both.
-        FolderTreeItem? item = tvi.DataContext switch
-        {
-            TreeViewNode { Content: FolderTreeItem fi } => fi,
-            FolderTreeItem fi => fi,
-            _ => null
-        };
-        if (item is null) return;
-
-        BuildFolderMenu(item).ShowAt(tvi, new FlyoutShowOptions { Position = e.GetPosition(tvi) });
-        e.Handled = true;
-    }
-
-    // Per-row "⋯" button — a discoverable alternative to right-clicking.
-    private void FolderMoreBtn_Click(object sender, RoutedEventArgs e)
-    {
-        if (sender is not FrameworkElement fe) return;
-        var item = fe.DataContext switch
-        {
-            TreeViewNode { Content: FolderTreeItem fi } => fi,
-            FolderTreeItem fi => fi,
-            _ => null
-        };
-        if (item is null) return;
-        BuildFolderMenu(item).ShowAt(fe);
-    }
-
-    private MenuFlyout BuildFolderMenu(FolderTreeItem item)
-    {
-        var flyout   = new MenuFlyout { ShouldConstrainToRootBounds = true };
-        var newSub   = new MenuFlyoutItem { Text = "New subfolder" };
-        newSub.Click += async (_, __) => await CreateFolderAsync(item.Path);
-        var rename   = new MenuFlyoutItem { Text = "Rename" };
-        rename.Click += async (_, __) => await RenameFolderAsync(item.Path);
-        var archive  = new MenuFlyoutItem { Text = "Archive folder" };
-        archive.Click += async (_, __) => await ArchiveFolderAsync(item.Path);
-        var deleteFi = new MenuFlyoutItem { Text = "Delete folder" };
-        deleteFi.Foreground = new SolidColorBrush(Windows.UI.Color.FromArgb(255, 224, 58, 58));
-        deleteFi.Click += async (_, __) => await DeleteFolderAsync(item.Path);
-        var colorMenu = new MenuFlyoutSubItem { Text = "Color" };
-        var current = App.Services.Settings.Current.Folders.FirstOrDefault(f =>
-            string.Equals(f.Path, item.Path, StringComparison.OrdinalIgnoreCase));
-        foreach (var (cname, hex) in FolderColors.Palette)
-        {
-            var ci = new MenuFlyoutItem
-            {
-                Text = string.Equals(current?.Color, hex, StringComparison.OrdinalIgnoreCase) ? $"{cname}  ✓" : cname,
-                Icon = new FontIcon
-                {
-                    Glyph = "●",
-                    FontFamily = new FontFamily("Segoe UI"),
-                    Foreground = new SolidColorBrush(FolderColors.Parse(hex))
-                }
-            };
-            ci.Click += (_, __) => SetFolderColor(item.Path, hex);
-            colorMenu.Items.Add(ci);
-        }
-        flyout.Items.Add(newSub);
-        flyout.Items.Add(new MenuFlyoutSeparator());
-        flyout.Items.Add(rename);
-        flyout.Items.Add(colorMenu);
-        flyout.Items.Add(archive);
-        flyout.Items.Add(new MenuFlyoutSeparator());
-        flyout.Items.Add(deleteFi);
-        return flyout;
-    }
-
-    private void SetFolderColor(string folderPath, string hex)
-    {
-        var settings = App.Services.Settings.Current;
-        var info = settings.Folders.FirstOrDefault(f =>
-            string.Equals(f.Path, folderPath, StringComparison.OrdinalIgnoreCase));
-        if (info is null) return;
-        info.Color = hex;
-        App.Services.Settings.Save();
-        LoadFolderTree();
-        Refresh();
-    }
-
-    private static int CountNotes(string dirPath)
-    {
-        try { return GetAllNotePaths(dirPath).Count(); }
-        catch { return 0; }
-    }
-
-    // Recomputes the sidebar note counts after notes move around.
-    private void UpdateFolderCounts()
-    {
-        void Walk(IList<TreeViewNode> nodes)
-        {
-            foreach (var n in nodes)
-            {
-                if (n.Content is FolderTreeItem fi) fi.NoteCount = CountNotes(fi.Path);
-                Walk(n.Children);
-            }
-        }
-        Walk(FolderTree.RootNodes);
-    }
-
-    // Folder rows show their note count; on hover it gives way to the ⋯ button.
-    private void FolderRow_PointerEntered(object sender, PointerRoutedEventArgs e) => SetFolderRowHover(sender, true);
-    private void FolderRow_PointerExited(object sender, PointerRoutedEventArgs e)  => SetFolderRowHover(sender, false);
-
-    private static void SetFolderRowHover(object sender, bool hover)
-    {
-        if (sender is not Grid g) return;
-        foreach (var child in g.Children)
-        {
-            if (child is Button b) b.Opacity = hover ? 1 : 0;
-            else if (child is TextBlock t && Grid.GetColumn(t) == 1) t.Opacity = hover ? 0 : 1;
-        }
-    }
-
-    // ── Drag-drop from notes grid onto folder tree ────────────────────────────
-
-    private void RecentList_DragItemsStarting(object sender, DragItemsStartingEventArgs e)
-    {
-        var paths = e.Items.OfType<RecentItem>().Select(r => r.Path);
-        e.Data.SetText(string.Join("\n", paths));
-        e.Data.RequestedOperation = DataPackageOperation.Move;
-    }
-
-    private void FolderTree_DragOver(object sender, DragEventArgs e)
-    {
-        if (!e.DataView.Contains(StandardDataFormats.Text))
-        {
-            e.AcceptedOperation = DataPackageOperation.None;
-            return;
-        }
-        var item = HitTestFolderTree(e.GetPosition(FolderTree));
-        if (item is not null)
-        {
-            _dragTargetPath = item.Path;
-            e.AcceptedOperation = DataPackageOperation.Move;
-            e.DragUIOverride.Caption          = $"Move to \"{item.Name}\"";
-            e.DragUIOverride.IsCaptionVisible  = true;
-            e.DragUIOverride.IsContentVisible  = false;
-        }
-        else
-        {
-            _dragTargetPath     = null;
-            e.AcceptedOperation = DataPackageOperation.None;
-        }
-        e.Handled = true;
-    }
-
-    private async void FolderTree_Drop(object sender, DragEventArgs e)
-    {
-        var targetPath = _dragTargetPath;
-        _dragTargetPath = null;
-        if (targetPath is null) return;
-        if (!e.DataView.Contains(StandardDataFormats.Text)) return;
-
-        var text  = await e.DataView.GetTextAsync();
-        var paths = text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
-        var recent = App.Services.Settings.Current.RecentDocuments;
-        var errors = new List<string>();
-        foreach (var src in paths)
-        {
-            if (string.Equals(Path.GetDirectoryName(src), targetPath, StringComparison.OrdinalIgnoreCase))
-                continue;   // already in target
-            try
-            {
-                var dest = Path.Combine(targetPath, Path.GetFileName(src));
-                if (File.Exists(dest) && !string.Equals(src, dest, StringComparison.OrdinalIgnoreCase))
-                    dest = Path.Combine(targetPath,
-                        Path.GetFileNameWithoutExtension(src) +
-                        $"_{DateTime.Now:yyyyMMddHHmmss}" +
-                        Path.GetExtension(src));
-                File.Move(src, dest);
-                recent.Remove(src);
-                if (!recent.Contains(dest)) recent.Insert(0, dest);
-            }
-            catch (Exception ex) { errors.Add($"{Path.GetFileName(src)}: {ex.Message}"); }
-        }
-        App.Services.Settings.Save();
-        Refresh();
-        if (errors.Count > 0)
-            await ShowDialogAsync("Some files couldn't be moved", string.Join("\n", errors));
-    }
-
-    // Returns the FolderTreeItem under the given TreeView-local point, or null.
-    private FolderTreeItem? HitTestFolderTree(Point localPoint)
-    {
-        try
-        {
-            var windowPoint = FolderTree.TransformToVisual(null).TransformPoint(localPoint);
-            var elements    = VisualTreeHelper.FindElementsInHostCoordinates(windowPoint, FolderTree);
-            foreach (var el in elements)
-            {
-                DependencyObject? d = el as DependencyObject;
-                while (d is not null && d != FolderTree)
-                {
-                    if (d is TreeViewItem tvi &&
-                        tvi.DataContext is TreeViewNode node &&
-                        node.Content is FolderTreeItem item)
-                        return item;
-                    d = VisualTreeHelper.GetParent(d);
-                }
-            }
-        }
-        catch { }
-        return null;
-    }
-
-    // ── Folder CRUD ───────────────────────────────────────────────────────────
-
-    private async Task CreateFolderAsync(string? parentPath = null)
-    {
-        var box = new TextBox { PlaceholderText = "Folder name", Width = 260 };
-        var dlg = new ContentDialog
-        {
-            Title = "New folder", Content = box,
-            PrimaryButtonText = "Create", CloseButtonText = "Cancel",
-            XamlRoot = this.XamlRoot
-        };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
-
-        var name = box.Text?.Trim();
-        if (string.IsNullOrEmpty(name)) return;
-
-        // Create inside selected subfolder if invoked from its context menu,
-        // otherwise inside the currently selected folder (or root).
-        var parent = parentPath
-            ?? (_activeSection == NavSection.Folders && _selectedFolderPath is not null
-                ? _selectedFolderPath
-                : App.Services.Settings.Current.DocumentsFolder);
-
-        var safeName = string.Join("_", name.Split(Path.GetInvalidFileNameChars()));
-        var dirPath  = Path.Combine(parent, safeName);
-        try
-        {
-            Directory.CreateDirectory(dirPath);
-
-            var parentInfo = App.Services.Settings.Current.Folders
-                .FirstOrDefault(f => string.Equals(f.Path, parent, StringComparison.OrdinalIgnoreCase));
-            App.Services.Settings.Current.Folders.Add(new FolderInfo
-            {
-                Name     = name,
-                Path     = dirPath,
-                ParentId = parentInfo?.Id,
-                Color    = FolderColors.NextFor(App.Services.Settings.Current.Folders)
-            });
-            App.Services.Settings.Save();
-
-            LoadFolderTree();
-        }
-        catch (Exception ex) { await ShowDialogAsync("Could not create folder", ex.Message); }
-    }
-
-    private async Task RenameFolderAsync(string folderPath)
-    {
-        var box = new TextBox { Text = Path.GetFileName(folderPath), Width = 260 };
-        var dlg = new ContentDialog
-        {
-            Title = "Rename folder", Content = box,
-            PrimaryButtonText = "Rename", CloseButtonText = "Cancel",
-            XamlRoot = this.XamlRoot
-        };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
-
-        var newName = box.Text?.Trim();
-        if (string.IsNullOrEmpty(newName) || newName == Path.GetFileName(folderPath)) return;
-
-        var newPath = Path.Combine(Path.GetDirectoryName(folderPath)!,
-                                   string.Join("_", newName.Split(Path.GetInvalidFileNameChars())));
-        try
-        {
-            Directory.Move(folderPath, newPath);
-
-            // Update FolderInfo registry
-            var info = App.Services.Settings.Current.Folders
-                .FirstOrDefault(f => string.Equals(f.Path, folderPath, StringComparison.OrdinalIgnoreCase));
-            if (info is not null) { info.Name = newName; info.Path = newPath; }
-
-            // Also patch RecentDocuments paths (they store full file paths)
-            var recent = App.Services.Settings.Current.RecentDocuments;
-            var prefix = folderPath + Path.DirectorySeparatorChar;
-            for (int i = 0; i < recent.Count; i++)
-                if (recent[i].StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
-                    recent[i] = Path.Combine(newPath, recent[i][prefix.Length..]);
-
-            App.Services.Settings.Save();
-
-            if (string.Equals(_selectedFolderPath, folderPath, StringComparison.OrdinalIgnoreCase))
-            {
-                _selectedFolderPath = newPath;
-                SectionTitle.Text   = newName;
-            }
-            LoadFolderTree();
-            Refresh();
-        }
-        catch (Exception ex) { await ShowDialogAsync("Could not rename folder", ex.Message); }
-    }
-
-    private async Task DeleteFolderAsync(string folderPath)
-    {
-        var name     = Path.GetFileName(folderPath);
-        bool hasNotes = Directory.Exists(folderPath) &&
-                        GetAllNotePaths(folderPath).Any();
-
-        var msg = hasNotes
-            ? $"\"{name}\" contains notes. Move the folder and all its notes to Trash?"
-            : $"Move the folder \"{name}\" to Trash?";
-
-        var dlg = new ContentDialog
-        {
-            Title = "Delete folder", Content = msg,
-            PrimaryButtonText = "Move to Trash", CloseButtonText = "Cancel",
-            DefaultButton = ContentDialogButton.Close,
-            XamlRoot = this.XamlRoot
-        };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
-
-        try
-        {
-            // Move each note in the folder to trash first, then delete the empty directory.
-            Directory.CreateDirectory(TrashFolder);
-            var recent = App.Services.Settings.Current.RecentDocuments;
-            foreach (var notePath in GetAllNotePaths(folderPath).ToList())
-            {
-                var dest = UniqueTrashPath(notePath);
-                File.Move(notePath, dest);
-                recent.Remove(notePath);
-            }
-
-            // Remove the folder from disk. The tree is rebuilt by scanning the filesystem, so
-            // the directory MUST actually leave the documents root or it reappears on refresh.
-            RemoveFolderTree(folderPath);
-
-            // Clean up registry
-            App.Services.Settings.Current.Folders.RemoveAll(f =>
-                f.Path.StartsWith(folderPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(f.Path, folderPath, StringComparison.OrdinalIgnoreCase));
-
-            App.Services.Settings.Save();
-
-            if (string.Equals(_selectedFolderPath, folderPath, StringComparison.OrdinalIgnoreCase) ||
-                _selectedFolderPath?.StartsWith(folderPath + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) == true)
-            {
-                _selectedFolderPath = null;
-                SectionTitle.Text   = "Folders";
-            }
-            LoadFolderTree();
-            Refresh();
-        }
-        catch (Exception ex) { await ShowDialogAsync("Could not delete folder", ex.Message); }
-    }
-
-    /// <summary>
-    /// Removes a folder directory from the documents root. Because the folder tree is rebuilt
-    /// by scanning the filesystem, the directory must genuinely leave the root. Tries a normal
-    /// recursive delete (first clearing the read-only attributes that OneDrive-synced files
-    /// often carry, which otherwise make Directory.Delete throw); if that still fails, moves the
-    /// directory into the hidden "_trash" folder (excluded from the tree) as a guaranteed fallback.
-    /// </summary>
-    private void RemoveFolderTree(string folderPath)
-    {
-        if (!Directory.Exists(folderPath)) return;
-        try
-        {
-            foreach (var f in Directory.EnumerateFiles(folderPath, "*", SearchOption.AllDirectories))
-            {
-                try { File.SetAttributes(f, FileAttributes.Normal); } catch { }
-            }
-            Directory.Delete(folderPath, recursive: true);
-        }
-        catch
-        {
-            try
-            {
-                Directory.CreateDirectory(TrashFolder);
-                var dest = Path.Combine(TrashFolder, "_folder_" + Path.GetFileName(folderPath));
-                if (Directory.Exists(dest)) dest += "_" + DateTime.Now.ToString("yyyyMMddHHmmss");
-                Directory.Move(folderPath, dest);
-            }
-            catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"Folder cleanup failed: {ex.Message}"); }
-        }
-    }
-
-    // ── Move to folder ────────────────────────────────────────────────────────
-
-    private async Task MoveToFolderAsync()
-    {
-        var picked = RecentList.SelectedItems.OfType<RecentItem>().Where(r => !r.IsNewCard).ToList();
-        if (picked.Count == 0) return;
-
-        var rootFolder = App.Services.Settings.Current.DocumentsFolder;
-        var allFolders = new List<(string Path, int Depth)>();
-        CollectFoldersRecursive(rootFolder, 0, allFolders);
-
-        if (allFolders.Count == 0)
-        {
-            await ShowDialogAsync("No folders",
-                "Create a folder first using the Folders section in the sidebar.");
-            return;
-        }
-
-        var list = new ListView { SelectionMode = ListViewSelectionMode.Single, MaxHeight = 300 };
-        foreach (var (dir, depth) in allFolders)
-        {
-            var indent = depth > 0 ? new string(' ', depth * 3) : "";
-            var sp     = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8,
-                                          Padding = new Thickness(0, 4, 0, 4) };
-            if (depth > 0)
-                sp.Children.Add(new TextBlock { Text = indent,
-                    FontFamily = new Microsoft.UI.Xaml.Media.FontFamily("Consolas"), FontSize = 11 });
-            sp.Children.Add(new FontIcon { Glyph = "", FontSize = 15, FontFamily = (Microsoft.UI.Xaml.Media.FontFamily)Application.Current.Resources["MaterialIconsFamily"] });
-            sp.Children.Add(new TextBlock { Text = Path.GetFileName(dir),
-                                            VerticalAlignment = VerticalAlignment.Center });
-            list.Items.Add(new ListViewItem { Content = sp, Tag = dir });
-        }
-        list.SelectedIndex = 0;
-
-        var noun = picked.Count == 1 ? "note" : "notes";
-        var dlg  = new ContentDialog
-        {
-            Title             = $"Move {picked.Count} {noun} to folder",
-            Content           = list,
-            PrimaryButtonText = "Move",
-            CloseButtonText   = "Cancel",
-            XamlRoot          = this.XamlRoot
-        };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
-        if (list.SelectedItem is not ListViewItem selected || selected.Tag is not string targetFolder) return;
-
-        var errors = new List<string>();
-        var recent = App.Services.Settings.Current.RecentDocuments;
-        foreach (var item in picked)
-        {
-            try
-            {
-                var dest = Path.Combine(targetFolder, Path.GetFileName(item.Path));
-                if (File.Exists(dest) && !string.Equals(item.Path, dest, StringComparison.OrdinalIgnoreCase))
-                    dest = Path.Combine(targetFolder,
-                               Path.GetFileNameWithoutExtension(item.Path) +
-                               $"_{DateTime.Now:yyyyMMddHHmmss}" +
-                               Path.GetExtension(item.Path));
-                File.Move(item.Path, dest);
-                recent.Remove(item.Path);
-                if (!recent.Contains(dest)) recent.Insert(0, dest);
-            }
-            catch (Exception ex) { errors.Add($"{item.Title}: {ex.Message}"); }
-        }
-        App.Services.Settings.Save();
-        SetSelectMode(false);
-        Refresh();
-
-        if (errors.Count > 0)
-            await ShowDialogAsync("Some files couldn't be moved", string.Join("\n", errors));
-    }
-
-    private static void CollectFoldersRecursive(string parent, int depth, List<(string, int)> result)
-    {
-        foreach (var dir in Directory.GetDirectories(parent)
-                                     .Where(d => !IsSystemFolder(d))
-                                     .OrderBy(d => Path.GetFileName(d), StringComparer.OrdinalIgnoreCase))
-        {
-            result.Add((dir, depth));
-            CollectFoldersRecursive(dir, depth + 1, result);
-        }
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────

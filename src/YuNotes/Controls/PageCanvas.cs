@@ -256,10 +256,11 @@ public sealed class PageCanvas : ContentControl
         };
         // Eraser range preview: leave the page → hide; press/lift → re-evaluate
         // (e.g. the eraser button was released mid-hover).
-        PointerExited += (_, e) => { if (_capturedPointerId != e.Pointer.PointerId) HideEraserCursor(); };
+        PointerExited += (_, e) => { if (_capturedPointerId != e.Pointer.PointerId) { HideEraserCursor(); HideLaserDot(); } };
         AddHandler(PointerPressedEvent, new PointerEventHandler((_, e) => UpdateEraserCursor(e)), handledEventsToo: true);
         AddHandler(PointerReleasedEvent, new PointerEventHandler((_, e) => UpdateEraserCursor(e)), handledEventsToo: true);
         DoubleTapped += OnDoubleTapped;
+        Tapped += OnTapped;
         SetupExtensionHandles();
     }
 
@@ -302,6 +303,8 @@ public sealed class PageCanvas : ContentControl
     private double _extendCurrentAmount;  // total desired extension (from 0), set during drag
     private double _extendExisting;       // extension on the dragged side at drag start
     private uint? _extendDragPtrId;
+    private double _extendScreenScale = 1;  // screen px per page px at drag start (zoom)
+    private string? _extendSnapLabel;       // "Matches page 3" while snapped to a neighbour
     private const double ExtHandleWidth = 44.0;
     private const double ExtHandleHeight = 100.0;
     // Non-zero while drag preview is active — revert to 0 on commit or cancel.
@@ -530,6 +533,16 @@ public sealed class PageCanvas : ContentControl
 
         UIElement elem = s.Kind switch
         {
+            // Tape: the strip's color, see-through while it's being dragged out.
+            ShapeKind.Tape => new Rectangle
+            {
+                Fill = new SolidColorBrush(Color.FromArgb(150, s.Color.R, s.Color.G, s.Color.B)),
+                Stroke = brush,
+                StrokeThickness = 1.5,
+                StrokeDashArray = dash,
+                RadiusX = 4, RadiusY = 4,
+                IsHitTestVisible = false
+            },
             ShapeKind.Rectangle => new Rectangle
             {
                 Stroke = brush,
@@ -1632,7 +1645,7 @@ public sealed class PageCanvas : ContentControl
         if (Context.EditingSuspended) return;
         // A new press while a previous gesture is still marked in progress means
         // that gesture was interrupted without a release — finish it first.
-        if (_panning || _selectingText || _drag != DragMode.None || _activeTool is not null)
+        if (_panning || _selectingText || _lasering || _tapeGesture || _drag != DragMode.None || _activeTool is not null)
             ResetInputState();
         Focus(FocusState.Pointer);
         var p = ToPageSpace(e);
@@ -1641,6 +1654,32 @@ public sealed class PageCanvas : ContentControl
         _penEventsSinceDown = 0;
 
         var tool = PickTool(e);
+
+        // Tape: a press on a strip is a tap that reveals or covers it (see
+        // TapeTapTarget for which tools this applies to). Decided on release,
+        // so a drag that starts on tape can still pan with the hand tool.
+        if (TapeTapTarget(tool, p, e) is { } tape)
+        {
+            _tapeGesture = true;
+            _tapeTap = tape;
+            _tapeTapStart = p;
+            _tapeTapPans = tool is PanTool;
+            CapturePointer(e.Pointer);
+            _capturedPointerId = e.Pointer.PointerId;
+            e.Handled = true;
+            return;
+        }
+
+        // Laser pointer: points, never edits — so it skips selection handling
+        // and leaves any committed selection alone.
+        if (tool is LaserTool)
+        {
+            BeginLaser(p);
+            CapturePointer(e.Pointer);
+            _capturedPointerId = e.Pointer.PointerId;
+            e.Handled = true;
+            return;
+        }
 
         // Hand tool: left-mouse drag selects PDF text (browser-style); everything else
         // (touch / pen / middle-click) pans the parent ScrollViewer.
@@ -1749,6 +1788,7 @@ public sealed class PageCanvas : ContentControl
         try
         {
             UpdateEraserCursor(e);
+            UpdateLaserDot(e);
             OnPointerMovedCore(sender, e);
         }
         catch (Exception ex) { App.LogError(ex, "OnPointerMoved"); }
@@ -1806,6 +1846,286 @@ public sealed class PageCanvas : ContentControl
         Canvas.SetLeft(_eraserCursor, p.X - d / 2);
         Canvas.SetTop(_eraserCursor, p.Y - d / 2);
         _eraserCursor.Visibility = Visibility.Visible;
+    }
+
+    // ── Tape (hide and reveal) ─────────────────────────────────────────────────
+    //
+    // Tape strips are ShapeElements of kind Tape. Tapping one flips it between
+    // covered and revealed; that state lives in Context.RevealedTapeIds only,
+    // so it never dirties the note or adds an undo step. Finger taps work with
+    // any tool (touch never draws); pen and mouse taps are routed here by
+    // TapeTapTarget.
+
+    private bool _tapeGesture;           // a pen/mouse press that started on tape
+    private ShapeElement? _tapeTap;      // the strip it will toggle (null = lapsed)
+    private Vector2 _tapeTapStart;
+    private bool _tapeTapPans;           // hand tool: a drag turns into a pan
+    private const float TapeTapSlop = 8f;
+
+    // Topmost tape strip under p (rotation-aware), or null.
+    private ShapeElement? TapeAt(Vector2 p)
+    {
+        for (int i = Page.Shapes.Count - 1; i >= 0; i--)
+        {
+            var s = Page.Shapes[i];
+            if (s.Kind != ShapeKind.Tape) continue;
+            float x = MathF.Min(s.X1, s.X2), y = MathF.Min(s.Y1, s.Y2);
+            float hw = MathF.Abs(s.X2 - s.X1) * 0.5f, hh = MathF.Abs(s.Y2 - s.Y1) * 0.5f;
+            var q = p - new Vector2(x + hw, y + hh);
+            if (s.Rotation != 0f && float.IsFinite(s.Rotation))
+            {
+                float a = -s.Rotation * MathF.PI / 180f, cos = MathF.Cos(a), sin = MathF.Sin(a);
+                q = new Vector2(q.X * cos - q.Y * sin, q.X * sin + q.Y * cos);
+            }
+            if (MathF.Abs(q.X) <= hw && MathF.Abs(q.Y) <= hh) return s;
+        }
+        return null;
+    }
+
+    // Which pen/mouse presses on tape count as a reveal/cover tap:
+    //  - select tools and the eraser never (so tape can be selected, moved,
+    //    resized, recolored and erased like any shape);
+    //  - the tape tool and the hand tool: any strip, covered or revealed;
+    //  - every other tool (pen, highlighter, text, shapes, laser…): only a
+    //    covered strip, so you can still write on top of revealed content.
+    // Presses on a live selection's box or handles keep their usual meaning.
+    private ShapeElement? TapeTapTarget(ITool? tool, Vector2 p, PointerRoutedEventArgs e)
+    {
+        if (tool is LassoTool or RectSelectTool or EraserTool or null) return null;
+        if (e.Pointer.PointerDeviceType == Microsoft.UI.Input.PointerDeviceType.Mouse
+            && e.GetCurrentPoint(this).Properties.IsMiddleButtonPressed) return null;
+        if (HasCommittedSelection() && (PointInSelectionBounds(p) || HitTestHandles(p, out _) != DragMode.None)) return null;
+        var tape = TapeAt(p);
+        if (tape is null) return null;
+        bool anyStrip = tool is PanTool || tool is ShapeTool { ShapeKind: ShapeKind.Tape };
+        return anyStrip || !Context.RevealedTapeIds.Contains(tape.Id) ? tape : null;
+    }
+
+    private void OnTapped(object sender, TappedRoutedEventArgs e)
+    {
+        try
+        {
+            if (e.PointerDeviceType != Microsoft.UI.Input.PointerDeviceType.Touch) return;   // pen/mouse: press path
+            var pos = e.GetPosition(this);
+            if (TapeAt(new Vector2((float)pos.X, (float)pos.Y)) is { } tape)
+            {
+                ToggleTape(tape);
+                e.Handled = true;
+            }
+        }
+        catch (Exception ex) { App.LogError(ex, "OnTapped"); }
+    }
+
+    public void ToggleTape(ShapeElement tape)
+    {
+        if (!Context.RevealedTapeIds.Remove(tape.Id)) Context.RevealedTapeIds.Add(tape.Id);
+        var b = Bbox.Of(tape);
+        CommitStrokeRedraw(new Bbox(b.X - 4, b.Y - 4, b.W + 8, b.H + 8));
+    }
+
+    // ── Laser pointer ─────────────────────────────────────────────────────────
+    //
+    // Each press draws a glowing trail into the XAML overlay (never the
+    // document). Trails stay while the presenter keeps pointing; a short pause
+    // after the last lift fades them all out together. Pressing again during
+    // the pause or the fade brings the earlier trails back, so a circle and an
+    // arrow drawn one after the other stay on screen as one gesture.
+    //
+    // Dot mode (Context.LaserMode) instead shows a large glowing dot with a
+    // short comet tail of the last fraction of a second, and removes both the
+    // moment the pen lifts — pointing only, nothing lingers.
+
+    private bool _lasering;
+    private bool _laserDotMode;                    // mode of the gesture in flight
+    private readonly List<Canvas> _laserTrails = new();
+    private Polyline[]? _laserLines;               // lines of the trail being drawn
+    private Canvas? _laserDotTail;                 // dot mode: the comet tail
+    private readonly Queue<long> _laserTailTimes = new();
+    private const long LaserTailMs = 140;
+    private Ellipse? _laserDot;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _laserHoldTimer;
+    private Storyboard? _laserFade;
+    private static readonly TimeSpan LaserHold = TimeSpan.FromMilliseconds(1100);
+    private static readonly TimeSpan LaserFadeTime = TimeSpan.FromMilliseconds(600);
+    private const int LaserMaxPoints = 1500;
+
+    private void BeginLaser(Vector2 p)
+    {
+        _laserDotMode = Context.LaserMode == LaserMode.Dot;
+        if (!_laserDotMode)
+        {
+            _laserHoldTimer?.Stop();
+            if (_laserFade is not null) { _laserFade.Stop(); _laserFade = null; }   // revives fading trails
+        }
+
+        var c = Context.CurrentColor;
+        static Polyline Line(byte a, Color rgb, double thickness) => new()
+        {
+            Stroke = new SolidColorBrush(Color.FromArgb(a, rgb.R, rgb.G, rgb.B)),
+            StrokeThickness = thickness,
+            StrokeLineJoin = PenLineJoin.Round,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            IsHitTestVisible = false,
+        };
+        // Wide soft glow, solid core, bright centre: reads as light on any paper.
+        _laserLines = new[]
+        {
+            Line(60, c, 16),
+            Line(255, c, 5),
+            Line(210, Colors.White, 1.6),
+        };
+        var trail = new Canvas { IsHitTestVisible = false };
+        foreach (var l in _laserLines) trail.Children.Add(l);
+        Canvas.SetZIndex(trail, 9000);
+        _overlay.Children.Add(trail);
+        if (_laserDotMode)
+        {
+            // The tail is thinner than a trail and owned by this gesture only.
+            _laserLines[0].StrokeThickness = 12;
+            _laserLines[1].StrokeThickness = 4;
+            _laserDotTail = trail;
+            _laserTailTimes.Clear();
+        }
+        else _laserTrails.Add(trail);
+        _lasering = true;
+        // Two points so a tap without movement still shows a round dot.
+        AddLaserPoint(p);
+        AddLaserPoint(p);
+    }
+
+    private void AddLaserPoint(Vector2 p)
+    {
+        if (_laserLines is null) return;
+        var pt = new Windows.Foundation.Point(p.X, p.Y);
+        foreach (var l in _laserLines)
+        {
+            l.Points.Add(pt);
+            if (l.Points.Count > LaserMaxPoints) l.Points.RemoveAt(0);
+        }
+        if (_laserDotMode)
+        {
+            // Keep only the last LaserTailMs of movement (at least the tip).
+            long now = Environment.TickCount64;
+            _laserTailTimes.Enqueue(now);
+            while (_laserTailTimes.Count > 2 && now - _laserTailTimes.Peek() > LaserTailMs)
+            {
+                _laserTailTimes.Dequeue();
+                foreach (var l in _laserLines) if (l.Points.Count > 2) l.Points.RemoveAt(0);
+            }
+        }
+        UpdateLaserDot(p, true);
+    }
+
+    private void EndLaser()
+    {
+        _lasering = false;
+        _laserLines = null;
+        if (_laserDotMode)
+        {
+            // Dot mode: nothing stays behind once the pen lifts.
+            if (_laserDotTail is not null) _overlay.Children.Remove(_laserDotTail);
+            _laserDotTail = null;
+            _laserTailTimes.Clear();
+            HideLaserDot();
+            return;
+        }
+        if (_laserHoldTimer is null)
+        {
+            _laserHoldTimer = DispatcherQueue.CreateTimer();
+            _laserHoldTimer.IsRepeating = false;
+            _laserHoldTimer.Interval = LaserHold;
+            _laserHoldTimer.Tick += (_, __) => FadeLaserTrails();
+        }
+        _laserHoldTimer.Stop();
+        _laserHoldTimer.Start();
+    }
+
+    private void FadeLaserTrails()
+    {
+        if (_lasering || _laserTrails.Count == 0) return;
+        var trails = _laserTrails.ToList();
+        var sb = new Storyboard();
+        foreach (var t in trails)
+        {
+            var anim = new DoubleAnimation
+            {
+                To = 0,
+                Duration = new Duration(LaserFadeTime),
+                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn },
+            };
+            Storyboard.SetTarget(anim, t);
+            Storyboard.SetTargetProperty(anim, "Opacity");
+            sb.Children.Add(anim);
+        }
+        sb.Completed += (_, __) =>
+        {
+            if (_laserFade != sb) return;   // revived by a new press
+            _laserFade = null;
+            foreach (var t in trails) { _overlay.Children.Remove(t); _laserTrails.Remove(t); }
+        };
+        _laserFade = sb;
+        sb.Begin();
+    }
+
+    // Removes every trail at once (leaving the tool or presentation mode).
+    public void ClearLaser()
+    {
+        _laserHoldTimer?.Stop();
+        if (_laserFade is not null) { _laserFade.Stop(); _laserFade = null; }
+        foreach (var t in _laserTrails) _overlay.Children.Remove(t);
+        _laserTrails.Clear();
+        if (_laserDotTail is not null) _overlay.Children.Remove(_laserDotTail);
+        _laserDotTail = null;
+        _laserTailTimes.Clear();
+        _laserLines = null;
+        _lasering = false;
+        HideLaserDot();
+    }
+
+    // Hover dot: shows where the laser will land before pressing.
+    private void UpdateLaserDot(PointerRoutedEventArgs e)
+    {
+        if (_lasering) return;   // the trail moves the dot itself
+        bool show = e.Pointer.PointerDeviceType != Microsoft.UI.Input.PointerDeviceType.Touch
+                    && !Context.EditingSuspended
+                    && _capturedPointerId is null
+                    && PickTool(e) is LaserTool;
+        if (!show) { HideLaserDot(); return; }
+        UpdateLaserDot(ToPageSpace(e), true);
+    }
+
+    private void UpdateLaserDot(Vector2 p, bool show)
+    {
+        if (!show) { HideLaserDot(); return; }
+        var c = Context.CurrentColor;
+        if (_laserDot is null)
+        {
+            _laserDot = new Ellipse { Width = 12, Height = 12, StrokeThickness = 4, IsHitTestVisible = false };
+            Canvas.SetZIndex(_laserDot, 9500);
+            _overlay.Children.Add(_laserDot);
+        }
+        if (_laserDot.Fill is not SolidColorBrush fb || fb.Color.R != c.R || fb.Color.G != c.G || fb.Color.B != c.B)
+        {
+            _laserDot.Fill = new SolidColorBrush(Color.FromArgb(255, c.R, c.G, c.B));
+            _laserDot.Stroke = new SolidColorBrush(Color.FromArgb(80, c.R, c.G, c.B));
+        }
+        // Pressing in dot mode grows the dot into the pointer itself.
+        double d = _lasering && _laserDotMode ? 22 : 12;
+        if (_laserDot.Width != d)
+        {
+            _laserDot.Width = d;
+            _laserDot.Height = d;
+            _laserDot.StrokeThickness = d > 12 ? 7 : 4;
+        }
+        Canvas.SetLeft(_laserDot, p.X - d / 2);
+        Canvas.SetTop(_laserDot, p.Y - d / 2);
+        _laserDot.Visibility = Visibility.Visible;
+    }
+
+    private void HideLaserDot()
+    {
+        if (_laserDot is not null) _laserDot.Visibility = Visibility.Collapsed;
     }
 
     private void HideEraserCursor()
@@ -1868,6 +2188,31 @@ public sealed class PageCanvas : ContentControl
         {
             // Ghost-only update — no main-canvas invalidate until release.
             ContinueDrag(p);
+            return;
+        }
+        if (_tapeGesture)
+        {
+            // Moved too far for a tap: the hand tool turns it into a pan;
+            // any other tool just lets the tap lapse.
+            if (_tapeTap is not null && Vector2.DistanceSquared(p, _tapeTapStart) > TapeTapSlop * TapeTapSlop)
+            {
+                _tapeTap = null;
+                if (_tapeTapPans)
+                {
+                    _tapeGesture = false;
+                    _panning = true;
+                    _panLastScreen = e.GetCurrentPoint(null).Position;
+                }
+            }
+            return;
+        }
+        if (_lasering)
+        {
+            var pts = e.GetIntermediatePoints(this);
+            if (pts is { Count: > 1 })
+                for (int i = pts.Count - 1; i >= 0; i--)
+                    AddLaserPoint(new Vector2((float)pts[i].Position.X, (float)pts[i].Position.Y));
+            else AddLaserPoint(p);
             return;
         }
         if (_activeTool is null) return;
@@ -1963,6 +2308,19 @@ public sealed class PageCanvas : ContentControl
             _selectingText = false;
             skipFullRedraw = true;
         }
+        else if (_lasering)
+        {
+            // Overlay-only: the document never changed.
+            EndLaser();
+            skipFullRedraw = true;
+        }
+        else if (_tapeGesture)
+        {
+            if (_tapeTap is { } t) ToggleTape(t);
+            _tapeGesture = false;
+            _tapeTap = null;
+            skipFullRedraw = true;   // ToggleTape repaints just the strip
+        }
         else if (_drag != DragMode.None)
         {
             // Applies the transform to the model once and repaints only the
@@ -2020,6 +2378,9 @@ public sealed class PageCanvas : ContentControl
                 }
             }
             _selectingText = false;
+            _tapeGesture = false;
+            _tapeTap = null;
+            if (_lasering) EndLaser();
             if (_drag != DragMode.None) EndDrag();
             if (_activeTool is { } tool)
             {
@@ -2031,6 +2392,7 @@ public sealed class PageCanvas : ContentControl
             }
             _capturedPointerId = null;
             HideEraserCursor();
+            HideLaserDot();
         }
         catch (Exception ex) { App.LogError(ex, "ResetInputState"); }
     }
@@ -3197,11 +3559,18 @@ public sealed class PageCanvas : ContentControl
                 // page shows through; otherwise paint white as the flattened background.
                 if (!overlayOnly) ds.Clear(Colors.White);
                 if (scale != 1f) ds.Transform = Matrix3x2.CreateScale(scale);
-                Renderer.DrawPage(ds, device, Page, PageTemplate, bg, images, overlayOnly: overlayOnly);
-                // Bake cross-page bleed into the export so a stroke straddling the
-                // seam shows on both pages in external PDF viewers, matching the
-                // on-screen rendering.
-                DrawNeighborBleedForExport(ds, device);
+                // Tape is a study aid on screen: exported images show what's under it
+                // (the vector PDF writer leaves it out the same way).
+                Renderer.HideTape = true;
+                try
+                {
+                    Renderer.DrawPage(ds, device, Page, PageTemplate, bg, images, overlayOnly: overlayOnly);
+                    // Bake cross-page bleed into the export so a stroke straddling the
+                    // seam shows on both pages in external PDF viewers, matching the
+                    // on-screen rendering.
+                    DrawNeighborBleedForExport(ds, device);
+                }
+                finally { Renderer.HideTape = false; }
             }
             using var ms = new MemoryStream();
             target.SaveAsync(ms.AsRandomAccessStream(), CanvasBitmapFileFormat.Png)
@@ -3269,6 +3638,7 @@ public sealed class PageCanvas : ContentControl
         _leftExtHandle.PointerMoved    += OnExtHandleMoved;
         _leftExtHandle.PointerReleased += OnExtHandleReleased;
         _leftExtHandle.PointerCaptureLost += (_, __) => CancelExtensionDrag();
+        _leftExtHandle.DoubleTapped += OnExtHandleDoubleTapped;
 
         _rightExtHandle = new Border
         {
@@ -3295,6 +3665,7 @@ public sealed class PageCanvas : ContentControl
         _rightExtHandle.PointerMoved    += OnExtHandleMoved;
         _rightExtHandle.PointerReleased += OnExtHandleReleased;
         _rightExtHandle.PointerCaptureLost += (_, __) => CancelExtensionDrag();
+        _rightExtHandle.DoubleTapped += OnExtHandleDoubleTapped;
 
         _extTooltip = new TextBlock
         {
@@ -3331,12 +3702,22 @@ public sealed class PageCanvas : ContentControl
 
         // Record how much extension already exists for this side so the user can
         // drag inward to reduce it (all the way back to 0 = original page size).
-        _extendExisting = _extendSide == ExtendSide.Right
-            ? (Page.BackgroundContentWidth > 0
-                ? Math.Max(0, Page.Width - Page.BackgroundLeft - Page.BackgroundContentWidth)
-                : 0)
-            : Page.BackgroundLeft;
+        _extendExisting = SideExtension(Page, _extendSide);
 
+        // Drag deltas arrive in screen pixels; convert them to page pixels so the
+        // edge stays under the finger at any zoom.
+        _extendScreenScale = 1;
+        try
+        {
+            var t = TransformToVisual(null);
+            var a = t.TransformPoint(new Windows.Foundation.Point(0, 0));
+            var b = t.TransformPoint(new Windows.Foundation.Point(100, 0));
+            double sc = (b.X - a.X) / 100.0;
+            if (sc > 0.01 && double.IsFinite(sc)) _extendScreenScale = sc;
+        }
+        catch { }
+
+        _extendSnapLabel = null;
         _extendCurrentAmount = _extendExisting;
         _extendDragging = true;
         _extendDragPtrId = e.Pointer.PointerId;
@@ -3356,11 +3737,24 @@ public sealed class PageCanvas : ContentControl
             : _extendDragStartScreenX - screenX;
 
         // Total desired extension = existing + drag delta, clamped to [0, ∞).
-        double totalDesired = Math.Max(0, _extendExisting + screenDelta);
+        double totalDesired = Math.Max(0, _extendExisting + screenDelta / _extendScreenScale);
 
-        // Snap the total to the preset snap points.
-        double pdfW = Page.BackgroundContentWidth > 0 ? Page.BackgroundContentWidth : Page.Width;
-        double snappedTotal = SnapExtension(totalDesired, pdfW);
+        // Neighbouring extended pages win over the preset snap points, so pages
+        // extended one after another line up. Their pull is measured in screen
+        // pixels, so it feels the same at every zoom level.
+        double snappedTotal;
+        var match = NearestNeighbourSnap(_extendSide, totalDesired, NeighbourSnapRadiusPx / _extendScreenScale);
+        if (match is { } m)
+        {
+            snappedTotal = m.Amount;
+            _extendSnapLabel = m.Label;
+        }
+        else
+        {
+            double pdfW = Page.BackgroundContentWidth > 0 ? Page.BackgroundContentWidth : Page.Width;
+            snappedTotal = SnapExtension(totalDesired, pdfW);
+            _extendSnapLabel = null;
+        }
         _extendCurrentAmount = snappedTotal;
 
         // Preview delta: positive = canvas grows, negative = canvas shows reduction overlay.
@@ -3382,9 +3776,103 @@ public sealed class PageCanvas : ContentControl
         _extendCurrentAmount = 0;
         if (_extTooltipBorder is not null) _extTooltipBorder.Opacity = 0;
         SetHandleOpacity(_extendModeActive ? 0.85 : 0.0);
-        if (amount > 0)
+        // Commit any real change, including dragging all the way back to the
+        // original size (0). A tap that moved nothing records no undo step.
+        if (Math.Abs(amount - _extendExisting) > 0.5)
             ExtensionDragCompleted?.Invoke(this, (side, amount));
+        _extendSnapLabel = null;
         e.Handled = true;
+    }
+
+    // Double-tap a handle: match the nearest extended page above (or, failing
+    // that, below) on that side in one go.
+    private void OnExtHandleDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (!_extendModeActive || _extendDragging) return;
+        var side = ReferenceEquals(sender, _leftExtHandle) ? ExtendSide.Left : ExtendSide.Right;
+        var targets = NeighbourSnapTargets(side);
+        if (targets.Count == 0) return;
+        double amount = targets[0].Amount;
+        if (Math.Abs(amount - SideExtension(Page, side)) > 0.5)
+            ExtensionDragCompleted?.Invoke(this, (side, amount));
+    }
+
+    // ── Snapping to neighbouring extended pages ───────────────────────────────
+
+    private const double NeighbourSnapRadiusPx = 28;   // screen pixels
+
+    private static double SideExtension(NotePage p, ExtendSide side) => side == ExtendSide.Right
+        ? (p.BackgroundContentWidth > 0 ? Math.Max(0, p.Width - p.BackgroundLeft - p.BackgroundContentWidth) : 0)
+        : p.BackgroundLeft;
+
+    // Width of the page before any extension.
+    private static double ContentWidth(NotePage p) =>
+        p.BackgroundContentWidth > 0 ? p.BackgroundContentWidth : p.Width - p.BackgroundLeft;
+
+    private static bool IsExtended(NotePage p) =>
+        SideExtension(p, ExtendSide.Left) > 0.5 || SideExtension(p, ExtendSide.Right) > 0.5;
+
+    private int PageNumber()
+    {
+        int n = 1;
+        for (var c = PrevPageCanvas; c is not null; c = c.PrevPageCanvas) n++;
+        return n;
+    }
+
+    // Snap targets from the nearest page above that offers one for this side,
+    // then the nearest below (plain pages in between are skipped, so a run of
+    // pages can be matched even with a plain page between them). For each one:
+    //  - the same extension on this side, which lines up both content and
+    //    edges when the pages have the same original width;
+    //  - when original widths differ (mixed PDF page sizes), the extension
+    //    that makes this page as wide as that one, so the centred pages' edges
+    //    line up instead.
+    // Duplicates and zero are skipped (0 is already a preset snap point).
+    private List<(double Amount, string Label)> NeighbourSnapTargets(ExtendSide side)
+    {
+        var result = new List<(double Amount, string Label)>();
+        int self = PageNumber();
+        double otherSide = Page.Width - SideExtension(Page, side);   // width without this side's extension
+
+        void Add(double amount, string label)
+        {
+            if (amount < 0.5 || !double.IsFinite(amount)) return;
+            if (result.Any(r => Math.Abs(r.Amount - amount) < 1)) return;
+            result.Add((amount, label));
+        }
+        void From(PageCanvas? start, bool up)
+        {
+            int dist = 1;
+            for (var c = start; c is not null; c = up ? c.PrevPageCanvas : c.NextPageCanvas, dist++)
+            {
+                var n = c.Page;
+                if (!IsExtended(n)) continue;
+                int num = up ? self - dist : self + dist;
+                int before = result.Count;
+                Add(SideExtension(n, side), $"Matches page {num}");
+                if (Math.Abs(ContentWidth(n) - ContentWidth(Page)) > 1)
+                    Add(n.Width - otherSide, $"Lines up with page {num}");
+                // A page extended only on the other side gives nothing to match
+                // here; keep looking further out.
+                if (result.Count > before) return;
+            }
+        }
+        From(PrevPageCanvas, up: true);
+        From(NextPageCanvas, up: false);
+        return result;
+    }
+
+    private (double Amount, string Label)? NearestNeighbourSnap(ExtendSide side, double desired, double radius)
+    {
+        (double Amount, string Label)? best = null;
+        double bestDist = radius;
+        foreach (var t in NeighbourSnapTargets(side))
+        {
+            double d = Math.Abs(t.Amount - desired);
+            if (d <= bestDist) { bestDist = d; best = t; }
+        }
+        return best;
     }
 
     private void CancelExtensionDrag()
@@ -3393,6 +3881,7 @@ public sealed class PageCanvas : ContentControl
         _extendDragging = false;
         _extendDragPtrId = null;
         _extendCurrentAmount = 0;
+        _extendSnapLabel = null;
         if (_extTooltipBorder is not null) _extTooltipBorder.Opacity = 0;
         SetHandleOpacity(_extendModeActive ? 0.85 : 0.0);
     }
@@ -3448,7 +3937,9 @@ public sealed class PageCanvas : ContentControl
         double pdfW = Page.BackgroundContentWidth > 0 ? Page.BackgroundContentWidth : Page.Width;
         int pct = pdfW > 0 ? (int)Math.Round(amount / pdfW * 100) : 0;
         string dir = _extendSide == ExtendSide.Left ? "←" : "→";
-        _extTooltip.Text = amount <= 0 ? $"{dir} Original size" : $"{dir} {(int)amount}px ({pct}%)";
+        _extTooltip.Text = amount <= 0 ? $"{dir} Original size"
+            : _extendSnapLabel is { } label ? $"{dir} {label} · {(int)amount}px"
+            : $"{dir} {(int)amount}px ({pct}%)";
         _extTooltipBorder.Opacity = _extendDragging ? 1 : 0;
 
         // Position tooltip near the dragged handle edge.

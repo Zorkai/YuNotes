@@ -9,6 +9,9 @@ public enum PenButtonAction
 }
 
 public enum ToolbarPosition { Top, Bottom, Left, Right }
+// Dot: a pointer that shows only while pressed (short tail, gone on lift).
+// Trail: a line that stays while you point and fades after you stop.
+public enum LaserMode { Dot, Trail }
 public enum ToolbarSize { Small = 0, Normal = 1, Large = 2 }
 
 // App-wide color theme. System follows the OS light/dark setting; Light/Dark
@@ -98,6 +101,7 @@ public sealed class AppSettings
     public bool PenPressureMode { get; set; } = false;
     public bool EraserPixelMode { get; set; } = false;
     public bool SelectRectMode { get; set; } = false;
+    public LaserMode LaserMode { get; set; } = LaserMode.Trail;
 
     // Appearance — app-wide light/dark theme (System = follow OS).
     public AppThemeMode Theme { get; set; } = AppThemeMode.System;
@@ -147,6 +151,11 @@ public sealed class AppSettings
     public List<string> RecentDocuments { get; set; } = new();
     // Notes pinned to the top of Home (file paths).
     public List<string> PinnedNotes { get; set; } = new();
+    // Tags per note (file path → lower-case tags without '#'). Kept in step
+    // with moves and renames by Services.NoteTags.
+    public Dictionary<string, List<string>> NoteTags { get; set; } = new();
+    // Saved searches listed in the Home sidebar.
+    public List<SmartFolder> SmartFolders { get; set; } = new();
 
     // Folder registry — stable IDs survive renames; synced with filesystem on load
     public List<FolderInfo> Folders { get; set; } = new();

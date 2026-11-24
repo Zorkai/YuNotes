@@ -425,6 +425,11 @@ public sealed class PageRenderer
         return RectIntersects(clip, minX - pad, minY - pad, maxX + pad, maxY + pad);
     }
 
+    // Tape: whether a strip is currently revealed (set by the canvas from its
+    // EditorContext), and whether to leave tape out entirely (image export).
+    public Func<string, bool>? IsTapeRevealed { get; set; }
+    public bool HideTape { get; set; }
+
     public void DrawShape(CanvasDrawingSession ds, ShapeElement s)
     {
         if (s is null) return;
@@ -448,7 +453,7 @@ public sealed class PageRenderer
         // kinds ever carry Rotation (Line/Triangle vertices are free-form).
         var savedTransform = ds.Transform;
         bool rotated = s.Rotation != 0f && IsFinite(s.Rotation)
-            && s.Kind is ShapeKind.Rectangle or ShapeKind.Ellipse;
+            && s.Kind is ShapeKind.Rectangle or ShapeKind.Ellipse or ShapeKind.Tape;
         if (rotated)
             ds.Transform = Matrix3x2.CreateRotation(
                 s.Rotation * MathF.PI / 180f,
@@ -481,6 +486,10 @@ public sealed class PageRenderer
                     ds.DrawLine(a, b, s.Color, s.StrokeWidth, style);
                 break;
 
+            case ShapeKind.Tape:
+                if (!HideTape) DrawTape(ds, s, x, y, w, h, IsTapeRevealed?.Invoke(s.Id) == true);
+                break;
+
             case ShapeKind.Triangle:
             {
                 using var pb = new CanvasPathBuilder(ds);
@@ -496,6 +505,35 @@ public sealed class PageRenderer
         }
 
         if (rotated) ds.Transform = savedTransform;
+    }
+
+    // Covered: an opaque strip in the tape color with light diagonal stripes,
+    // so it reads as tape and not as a filled rectangle. Revealed: a faint
+    // tint and a dashed outline, so the content shows but the tape can still
+    // be found and tapped to cover it again.
+    private static void DrawTape(CanvasDrawingSession ds, ShapeElement s, float x, float y, float w, float h, bool revealed)
+    {
+        if (w <= 0 || h <= 0) return;
+        var c = s.Color;
+        float radius = MathF.Min(4f, MathF.Min(w, h) * 0.25f);
+        if (revealed)
+        {
+            ds.FillRoundedRectangle(x, y, w, h, radius, radius, Windows.UI.Color.FromArgb(28, c.R, c.G, c.B));
+            using var dashed = new CanvasStrokeStyle { DashStyle = CanvasDashStyle.Dash, LineJoin = CanvasLineJoin.Round };
+            ds.DrawRoundedRectangle(x, y, w, h, radius, radius, Windows.UI.Color.FromArgb(150, c.R, c.G, c.B), 1.5f, dashed);
+            return;
+        }
+        var solid = Windows.UI.Color.FromArgb(255, c.R, c.G, c.B);
+        ds.FillRoundedRectangle(x, y, w, h, radius, radius, solid);
+        using (var clip = CanvasGeometry.CreateRoundedRectangle(ds, x, y, w, h, radius, radius))
+        using (ds.CreateLayer(1f, clip))
+        {
+            var stripe = Windows.UI.Color.FromArgb(46, 255, 255, 255);
+            const float gap = 14f;
+            for (float d = -h; d < w; d += gap)
+                ds.DrawLine(x + d, y + h, x + d + h, y, stripe, 5f);
+        }
+        ds.DrawRoundedRectangle(x, y, w, h, radius, radius, Windows.UI.Color.FromArgb(60, 0, 0, 0), 1f);
     }
 
     // Opacity of elements the stroke eraser would remove, while hovering.
