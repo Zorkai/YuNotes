@@ -191,6 +191,7 @@ public sealed partial class EditorPage
 
         Control[] floatingBtns = {
             ToolHand, ToolPen, ToolHighlighter, ToolEraser, ToolText, ToolImage, ToolPaste, ToolShape, ToolRuler, ToolSelect, ToolExtend,
+            ToolLaser, ToolTape,
             SelDuplicateBtn, SelDeleteBtn, SelClearBtn
         };
         var floatRadius = new CornerRadius(btn / 2);
@@ -207,6 +208,8 @@ public sealed partial class EditorPage
         EraserIcon.FontSize = icon;
         ShapeIcon.FontSize = icon;
         SelectIcon.FontSize = icon;
+
+        ScaleGroupButtons(btn, icon);
 
         // Drag handle — not a Control, scaled separately
         DragHandle.Width = btn; DragHandle.Height = btn;
@@ -254,9 +257,21 @@ public sealed partial class EditorPage
                         .ToList();
 
         foreach (var el in toolMap.Values) ToolbarPrimary.Children.Remove(el);
-        // Insert after DragHandle (0) and Sep1 (1)
+        RemoveGroupButtons();
+        // Insert after DragHandle (0) and Sep1 (1). Grouped tools are replaced by
+        // their group's button, placed where the group's first tool would be.
+        var grouped = GroupedTools(s, toolMap.Keys);
+        var placedGroups = new HashSet<string>();
         int idx = 2;
-        foreach (var key in drawOrder) ToolbarPrimary.Children.Insert(idx++, toolMap[key]);
+        foreach (var key in drawOrder)
+        {
+            if (grouped.TryGetValue(key, out var g))
+            {
+                if (placedGroups.Add(g.Id)) ToolbarPrimary.Children.Insert(idx++, CreateGroupButton(g));
+            }
+            else ToolbarPrimary.Children.Insert(idx++, toolMap[key]);
+        }
+        UpdateGroupButtonsState(_selected);
 
         // Reorderable action slots in ToolbarSecondary. The insert actions
         // (blank page / PDF pages) live inside AddMenuBtn's menu, and the
@@ -304,16 +319,21 @@ public sealed partial class EditorPage
         LaserGroup.Visibility     = Show("Laser");
         TapeGroup.Visibility      = Show("Tape");
 
-        // Secondary bar — action buttons. Template and Screenshot are fixed
-        // buttons; the page-insert actions are menu items, hiding one hides its
-        // row, and the Insert menu button collapses only when both are hidden.
-        ScreenshotBtn.Visibility   = Show("Screenshot");
+        // Title bar. The Add menu holds pages, sticker and template;
+        // hiding one hides its row, and the Add button only goes when all are
+        // hidden. Side by side and Present can be hidden too.
+        ScreenshotShell.Visibility = Show("Screenshot");
         TemplateBtn.Visibility     = Show("Template");
+        StickersItem.Visibility    = Show("Stickers");
         AddPageBtn.Visibility      = Show("AddPage");
         AddPdfPagesBtn.Visibility  = Show("AddPdfPages");
         ExportBtn.Visibility       = Show("Export");
-        bool anyAddVisible = !IsHidden("AddPage") || !IsHidden("AddPdfPages");
-        AddMenuShell.Visibility = anyAddVisible ? Visibility.Visible : Visibility.Collapsed;
+        bool anyPages = !IsHidden("AddPage") || !IsHidden("AddPdfPages");
+        bool anyInserts = !IsHidden("Stickers") || !IsHidden("Template");
+        AddMenuSep.Visibility = anyPages && anyInserts ? Visibility.Visible : Visibility.Collapsed;
+        AddMenuShell.Visibility = anyPages || anyInserts ? Visibility.Visible : Visibility.Collapsed;
+        SideBySideBtn.Visibility = SideBySideDivider.Visibility = Show("SideBySide");
+        PresentShell.Visibility = Show("Present");
         // TopSep1 is an invisible layout anchor for ApplyToolbarOrder — leave it collapsed.
     }
 
@@ -347,6 +367,7 @@ public sealed partial class EditorPage
         ToolExtend.IsChecked = k == ToolKind.ExtendPage;
         ToolLaser.IsChecked = k == ToolKind.Laser;
         ToolTape.IsChecked = k == ToolKind.Tape;
+        UpdateGroupButtonsState(k);
         PresentLaserDotBtn.IsChecked = k == ToolKind.Laser && Canvas.Context.LaserMode == LaserMode.Dot;
         PresentLaserTrailBtn.IsChecked = k == ToolKind.Laser && Canvas.Context.LaserMode == LaserMode.Trail;
         PresentPenBtn.IsChecked = k == ToolKind.Pen;
@@ -383,6 +404,7 @@ public sealed partial class EditorPage
         if (!isMomentaryRevert && wasSelect && !nowSelect)
         {
             Canvas.ClearSelection();
+            Canvas.ClearSelectionArea();
             UpdateSelectionUi();
         }
 
@@ -658,6 +680,15 @@ public sealed partial class EditorPage
         {
             SelectionActions.Visibility = Visibility.Collapsed;
         }
+        // Outline the drawn area while it's what a sticker would be cut from.
+        Canvas.UpdateStickerAreaOutline();
+        // An empty rectangle/lasso over a PDF: offer to save that piece.
+        if (Canvas.HasStickerArea && _selected is ToolKind.Lasso or ToolKind.RectSelect)
+        {
+            AreaActions.Visibility = Visibility.Visible;
+            PositionAreaActions();
+        }
+        else AreaActions.Visibility = Visibility.Collapsed;
     }
 
     // Shows the selection bar's color button only when something colorable is

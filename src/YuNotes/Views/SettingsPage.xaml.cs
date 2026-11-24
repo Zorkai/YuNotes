@@ -37,6 +37,21 @@ public sealed class ToolEntry : INotifyPropertyChanged
         }
     }
 
+    // The group this tool is folded into, for the row's chip ("" = none).
+    public string GroupName { get; private set; } = "";
+    public string GroupGlyph { get; private set; } = "";
+    public string GroupTooltip => GroupName.Length == 0 ? "" : $"Shown in the toolbar inside the \u201c{GroupName}\u201d group";
+    public Microsoft.UI.Xaml.Visibility GroupVisibility =>
+        GroupName.Length > 0 ? Microsoft.UI.Xaml.Visibility.Visible : Microsoft.UI.Xaml.Visibility.Collapsed;
+
+    public void SetGroup(string name, string glyph)
+    {
+        if (GroupName == name && GroupGlyph == glyph) return;
+        GroupName = name; GroupGlyph = glyph;
+        foreach (var n in new[] { nameof(GroupName), nameof(GroupGlyph), nameof(GroupTooltip), nameof(GroupVisibility) })
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(n));
+    }
+
     public event PropertyChangedEventHandler? PropertyChanged;
 
     public ToolEntry(string key, string label, string glyph, bool visible = true)
@@ -78,10 +93,13 @@ public sealed partial class SettingsPage : Page
 
     private static readonly (string Key, string Label, string Glyph)[] ActionToolDefs =
     {
-        ("Screenshot",  "Screenshot",    ""),
-        ("Template",    "Template",      ""),
-        ("AddPdfPages", "Add PDF pages", ""),
-        ("AddPage",     "Add blank page",""),
+        ("SideBySide",  "Side by side",  ""),
+        ("Present",     "Present",       ""),
+        ("Stickers",    "Stickers (in Add)", ""),
+        ("Screenshot",  "Screenshot", ""),
+        ("Template",    "Page template (in Add)", ""),
+        ("AddPdfPages", "Pages from a PDF (in Add)", ""),
+        ("AddPage",     "Blank page (in Add)", ""),
     };
 
     private static readonly (string Title, string[] Keys)[] Shortcuts =
@@ -832,8 +850,16 @@ public sealed partial class SettingsPage : Page
             list.CollectionChanged += (_, e) =>
             {
                 if (e.NewItems != null)
-                    foreach (ToolEntry item in e.NewItems) item.PropertyChanged += (_, _) => OnChanged(view);
+                    foreach (ToolEntry item in e.NewItems)
+                        item.PropertyChanged += (_, pe) =>
+                        {
+                            // Group chip updates are display only, not a settings change.
+                            if (pe.PropertyName != nameof(ToolEntry.IsVisible)) return;
+                            OnChanged(view);
+                            RebuildToolbarPreview();
+                        };
                 OnChanged(view);
+                RebuildToolbarPreview();
             };
         WireTools(_drawingTools, DrawingToolsList);
         WireTools(_actionTools, ActionToolsList);
@@ -882,6 +908,7 @@ public sealed partial class SettingsPage : Page
         DrawingToolsList.ItemsSource = _drawingTools;
         ActionToolsList.ItemsSource = _actionTools;
         ExportToggle.IsOn = !hidden.Contains("Export");
+        RebuildToolGroupsUi();
 
         FolderBox.Text = s.DocumentsFolder;
 

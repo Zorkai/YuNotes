@@ -207,7 +207,7 @@ public sealed class EraserTool : ITool
                 foreach (var s in toRemove)
                 {
                     ctx.CurrentPage.Strokes.Remove(s);
-                    var b = Bbox.Of(s);
+                    var b = Bbox.RepaintOf(s);
                     dirty = dirty is null ? b : Bbox.Union(dirty.Value, b);
                     changed = true;
                 }
@@ -218,7 +218,7 @@ public sealed class EraserTool : ITool
             foreach (var sh in shapesToRemove)
             {
                 ctx.CurrentPage.Shapes.Remove(sh);
-                var b = Bbox.Of(sh);
+                var b = Bbox.RepaintOf(sh);
                 dirty = dirty is null ? b : Bbox.Union(dirty.Value, b);
                 changed = true;
             }
@@ -226,10 +226,13 @@ public sealed class EraserTool : ITool
         else
         {
             // Pixel eraser: split strokes by dropping points within radius.
-            // Dirty region is the eraser stamp itself, padded by the widest
-            // affected stroke (Catmull-Rom rebuild at the cut boundary can shift
-            // the curve by ~one stroke-width).
+            // Dirty region is each affected stroke's whole painted area: the
+            // smoothed curve of the pieces left behind is rebuilt from fewer
+            // points, so it can shift well away from the eraser, and a piece
+            // too short to keep vanishes entirely. Repainting only around the
+            // eraser left thin slivers of the old curve on screen.
             float maxAffectedWidth = 0f;
+            Bbox? strokeDirty = null;
             for (int i = ctx.CurrentPage.Strokes.Count - 1; i >= 0; i--)
             {
                 var s = ctx.CurrentPage.Strokes[i];
@@ -238,6 +241,8 @@ public sealed class EraserTool : ITool
                 if (!AnyPointInRadius(s, p, r2)) continue;
 
                 if (s.Width > maxAffectedWidth) maxAffectedWidth = s.Width;
+                var before = Bbox.RepaintOf(s);
+                strokeDirty = strokeDirty is null ? before : Bbox.Union(strokeDirty.Value, before);
 
                 var segments = new System.Collections.Generic.List<System.Collections.Generic.List<InkPoint>>();
                 var current = new System.Collections.Generic.List<InkPoint>();
@@ -269,7 +274,7 @@ public sealed class EraserTool : ITool
             foreach (var sh in shapesToRemovePx)
             {
                 ctx.CurrentPage.Shapes.Remove(sh);
-                var b = Bbox.Of(sh);
+                var b = Bbox.RepaintOf(sh);
                 shapeDirty = shapeDirty is null ? b : Bbox.Union(shapeDirty.Value, b);
                 changed = true;
             }
@@ -278,6 +283,7 @@ public sealed class EraserTool : ITool
             {
                 float pad = maxAffectedWidth + 4f;
                 dirty = new Bbox(p.X - r - pad, p.Y - r - pad, (r + pad) * 2, (r + pad) * 2);
+                if (strokeDirty is { } st) dirty = Bbox.Union(dirty.Value, st);
                 // A removed shape vanishes entirely, not just under the eraser.
                 if (shapeDirty is { } sd) dirty = Bbox.Union(dirty.Value, sd);
             }

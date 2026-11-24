@@ -125,6 +125,8 @@ public sealed class AppSettings
     // Toolbar tool order — keys in display order; empty = default order
     public List<string> ToolbarDrawingOrder { get; set; } = new();
     public List<string> ToolbarActionOrder { get; set; } = new();
+    // Drawing tools folded into one toolbar button each (see ToolGroup).
+    public List<ToolGroup> ToolGroups { get; set; } = new();
 
     // Pen shape recognition
     public bool HoldToSnapEnabled { get; set; } = true;

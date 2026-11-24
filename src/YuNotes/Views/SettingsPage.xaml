@@ -18,14 +18,29 @@
                     <ColumnDefinition Width="28"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
                 <FontIcon Grid.Column="0" Glyph="{Binding Glyph}" FontSize="18"
                           FontFamily="{StaticResource MaterialIconsFamily}"
                           VerticalAlignment="Center" HorizontalAlignment="Center"
                           Foreground="{ThemeResource AppTextPrimaryBrush}"/>
                 <TextBlock Grid.Column="1" Text="{Binding Label}" VerticalAlignment="Center"/>
-                <CheckBox Grid.Column="2" IsChecked="{Binding IsVisible, Mode=TwoWay}"
-                          VerticalAlignment="Center" Margin="0"/>
+                <!-- Which group the tool is folded into (hidden when none). -->
+                <Border Grid.Column="2" Visibility="{Binding GroupVisibility}"
+                        Padding="8,2,10,3" CornerRadius="10" VerticalAlignment="Center"
+                        Background="{ThemeResource AppSurfaceVariantBrush}"
+                        BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1"
+                        ToolTipService.ToolTip="{Binding GroupTooltip}">
+                    <StackPanel Orientation="Horizontal" Spacing="5">
+                        <FontIcon Glyph="{Binding GroupGlyph}" FontSize="13"
+                                  FontFamily="{StaticResource MaterialIconsFamily}"
+                                  Foreground="{ThemeResource AppAccentBrush}" VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding GroupName}" FontSize="12" VerticalAlignment="Center"
+                                   Foreground="{ThemeResource AppTextSecondaryBrush}"/>
+                    </StackPanel>
+                </Border>
+                <CheckBox Grid.Column="3" IsChecked="{Binding IsVisible, Mode=TwoWay}"
+                          VerticalAlignment="Center" Margin="0" MinWidth="0"/>
             </Grid>
         </DataTemplate>
 
@@ -469,8 +484,19 @@
                                     </ComboBox>
                                 </controls:SettingRow>
                                 <controls:SettingRow Title="Drawing tools" SettingKey="drawtools" Stacked="True"
-                                                     Description="Drag rows to reorder. Unchecked tools are hidden but still work through shortcuts and pen buttons."
-                                                     Keywords="toolbar tools reorder hide pen highlighter eraser text image shape select hand">
+                                                     Description="Drag rows to reorder. Unchecked tools are hidden but still work through shortcuts and pen buttons. Tools in a group show its name."
+                                                     Keywords="toolbar tools reorder hide pen highlighter eraser text image shape select hand group">
+                                    <StackPanel Spacing="10">
+                                    <!-- What the floating toolbar will show, groups folded in. -->
+                                    <Border Padding="10,8" CornerRadius="12"
+                                            Background="{ThemeResource AppSurfaceVariantBrush}"
+                                            BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1">
+                                        <StackPanel Spacing="6">
+                                            <TextBlock Text="Toolbar preview" FontSize="12"
+                                                       Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                            <StackPanel x:Name="ToolbarPreviewPanel" Orientation="Horizontal" Spacing="4" />
+                                        </StackPanel>
+                                    </Border>
                                     <ListView x:Name="DrawingToolsList"
                                               CanReorderItems="True" AllowDrop="True" CanDragItems="True"
                                               SelectionMode="None" ItemTemplate="{StaticResource ToolItemTemplate}"
@@ -483,9 +509,24 @@
                                             </Style>
                                         </ListView.ItemContainerStyle>
                                     </ListView>
+                                    </StackPanel>
                                 </controls:SettingRow>
-                                <controls:SettingRow Title="Action buttons" SettingKey="actiontools" Stacked="True"
-                                                     Description="Shown in the title bar. Drag to change their order."
+                                <controls:SettingRow Title="Tool groups" Stacked="True"
+                                                     Description="Fold tools you rarely use into one toolbar button with its own icon. The group sits where its first tool is in the list above."
+                                                     Keywords="toolbar group groups folder combine merge tools icon">
+                                    <StackPanel Spacing="8">
+                                        <StackPanel x:Name="ToolGroupsPanel" Spacing="6" />
+                                        <Button x:Name="NewToolGroupBtn" Padding="12,6" CornerRadius="8">
+                                            <StackPanel Orientation="Horizontal" Spacing="6">
+                                                <FontIcon Glyph="&#xe145;" FontSize="16"
+                                                          FontFamily="{StaticResource MaterialIconsFamily}" />
+                                                <TextBlock Text="New group" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </controls:SettingRow>
+                                <controls:SettingRow Title="Title bar" SettingKey="actiontools" Stacked="True"
+                                                     Description="Choose what shows in the title bar. Unchecked items are hidden; items marked (in Add) are rows of the Add menu."
                                                      Keywords="title bar screenshot template pdf page actions">
                                     <ListView x:Name="ActionToolsList"
                                               CanReorderItems="True" AllowDrop="True" CanDragItems="True"

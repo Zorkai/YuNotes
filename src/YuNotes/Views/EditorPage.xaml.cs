@@ -95,7 +95,8 @@ public sealed partial class EditorPage : Page
         BackBtn.Click += async (_, __) => { if (await ConfirmLeaveAsync()) MainWindow.GoBack(); };
         SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>(
             null, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
-        SaveBtn.Click += async (_, __) => await SaveAsync();
+        SaveStateBtn.Click += async (_, __) => await SaveAsync();
+        StickersItem.Click += (_, __) => FlyoutBase.ShowAttachedFlyout(AddMenuShell);
 
         UndoBtn.Click += (_, __) => DoUndo();
         RedoBtn.Click += (_, __) => DoRedo();
@@ -217,7 +218,7 @@ public sealed partial class EditorPage : Page
 
         SelDeleteBtn.Click += (_, __) => { Canvas.DeleteSelection(); UpdateSelectionUi(); };
         SelDuplicateBtn.Click += (_, __) => { Canvas.DuplicateSelection(); UpdateSelectionUi(); };
-        SelClearBtn.Click += (_, __) => { Canvas.ClearSelection(); UpdateSelectionUi(); };
+        SelClearBtn.Click += (_, __) => { Canvas.ClearSelection(); Canvas.ClearSelectionArea(); UpdateSelectionUi(); };
         // Selection bar color: recolors the selected ink / shapes / text in place.
         SelColorPicker.ColorChanged += (_, c) => Canvas.RecolorSelection(c);
         SelWidthPicker.WidthChanged += (_, w) => { Canvas.SetSelectionWidth((float)w); PositionSelectionActions(); };
@@ -243,7 +244,7 @@ public sealed partial class EditorPage : Page
         PageSelDeleteBtn.Click += async (_, __) => await DeleteSelectedPagesAsync();
         PageSelClearBtn.Click  += (_, __) => ClearPageSelection();
 
-        Canvas.ActivePageScrolled += (_, __) => { UpdatePagePanelHighlight(); SaveLastPage(); if (Canvas.HasSelection) PositionSelectionActions(); if (_presenting) UpdatePresentPageLabel(); };
+        Canvas.ActivePageScrolled += (_, __) => { UpdatePagePanelHighlight(); SaveLastPage(); if (Canvas.HasSelection) PositionSelectionActions(); if (AreaActions.Visibility == Visibility.Visible) PositionAreaActions(); if (_presenting) UpdatePresentPageLabel(); };
 
         SearchBtn.Click += (_, __) => OpenSearch();
         SearchCloseBtn.Click += (_, __) => CloseSearch();
@@ -337,6 +338,7 @@ public sealed partial class EditorPage : Page
             _suppressZoomSlider = false;
             ZoomLabel.Text = $"{pct:0}%";
             if (Canvas.HasSelection) PositionSelectionActions();
+            if (AreaActions.Visibility == Visibility.Visible) PositionAreaActions();
         };
 
         SizeChanged += (_, e) => ApplyToolbarScaleForWidth(e.NewSize.Width);
@@ -856,6 +858,7 @@ public sealed partial class EditorPage : Page
                 args.Handled = true; break;
             case VirtualKey.Escape:
                 if (_presenting) { ExitPresentation(); args.Handled = true; break; }
+                Canvas.ClearSelectionArea();
                 Canvas.ClearSelection();
                 Canvas.ClearTextSelection();
                 _image.PendingPng = null;

@@ -70,6 +70,7 @@ public sealed partial class EditorPage
         }
 
         MainWindow.SetFullScreen(true);
+        Canvas.AddPagesAllowed = false;   // no "+" or pull-to-add while presenting
         SelectTool(ToolKind.Laser);
         UpdatePresentPageLabel(page);
         FitPresentedPageSoon(page);
@@ -93,6 +94,7 @@ public sealed partial class EditorPage
         PresentBar.Visibility = Visibility.Collapsed;
 
         Canvas.ClearLaser();
+        Canvas.AddPagesAllowed = true;
         MainWindow.SetFullScreen(false);
         SelectTool(_toolBeforePresent);
 

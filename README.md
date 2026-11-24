@@ -48,7 +48,7 @@
 **🎯 Selection & editing**
 - Lasso and rectangle select; move, resize, rotate, duplicate, recolor and change line width of the selection
 - Type text or paste images straight onto the page
-- Stickers: save a lasso selection (a diagram, a stamp, a signature) and drop an editable copy into any note
+- Stickers: save a lasso selection (a diagram, a stamp, a signature), optionally with the PDF behind it, or just a piece of a PDF, and drop a copy into any note
 - Screenshot tool: capture a region and copy, save or insert it into the page
 - Undo and redo for ink, page changes and templates
 
@@ -59,7 +59,7 @@
 - Page templates: blank, grid, dots, lined, Cornell, with adjustable spacing
 - Widen a page to the left or right (it snaps to match neighbouring widened pages), or keep scrolling past the end to add a page
 - Page sorter: reorder, delete and jump between pages; bookmark pages
-- Autosave and version history: go back to an earlier version of a note
+- Autosave and version history: preview an earlier version next to the note, then restore it if you want
 - `.yunote` files are SQLite, so every stroke stays editable after you close and reopen
 
 **🔎 Finding things**
@@ -80,7 +80,7 @@
 **🖐️ Input & look**
 - Configurable palm rejection; touch pans and zooms, your hand never draws
 - Pinch-to-zoom and an optional zoom slider
-- Floating toolbar you can dock to any edge or drag anywhere, resize, and reorder or hide tools in
+- Floating toolbar you can dock to any edge or drag anywhere, resize, and reorder or hide tools in; fold rarely used tools into groups with their own icon
 - Light, dark or system theme with a liquid-glass toolbar
 - Automatic updates for GitHub installs (can be turned off in Settings)
 

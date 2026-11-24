@@ -62,6 +62,8 @@ public sealed partial class EditorPage
 
     private async Task OpenReferenceAsync(string path)
     {
+        // Showing another note ends a version preview.
+        if (_refVersion is not null) CloseReference();
         try
         {
             var doc = await Task.Run(() =>
@@ -111,6 +113,13 @@ public sealed partial class EditorPage
     private void CloseReference()
     {
         _refPath = null;
+        // Leaving a version preview: the pane's button goes back to normal.
+        if (_refVersion is not null)
+        {
+            _refVersion = null;
+            RefOpenBtn.Content = "Open to edit";
+            ToolTipService.SetToolTip(RefOpenBtn, "Open this note in the editor");
+        }
         RefPane.Visibility = Visibility.Collapsed;
         RefSplitter.Visibility = Visibility.Collapsed;
         ApplyReferenceWidths();
@@ -120,6 +129,7 @@ public sealed partial class EditorPage
     // first); the reference pane closes since that note now has a tab.
     private async Task OpenReferenceAsMainAsync()
     {
+        if (_refVersion is { } version) { await RestoreVersionAsync(version); return; }
         if (_refPath is null) return;
         var target = _refPath;
         CloseReference();

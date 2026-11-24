@@ -25,9 +25,14 @@ namespace YuNotes.Views;
 public sealed partial class EditorPage
 {
     // ─── Earlier versions ────────────────────────────────────────────────────────
-    // Lists the copies VersionHistory kept and puts one back. The current note
-    // is saved and kept as a version first, so a restore can be undone the
-    // same way.
+    // Lists the copies VersionHistory kept. Preview opens one read-only in the
+    // side-by-side pane next to the current note, with a Restore button there;
+    // Restore puts it back. The current note is saved and kept as a version
+    // first, so a restore can be undone the same way.
+
+    // The version shown in the side-by-side pane, if the pane is a preview.
+    private Services.VersionHistory.Version? _refVersion;
+
     private async Task ShowVersionsAsync()
     {
         if (_doc is null || string.IsNullOrEmpty(_doc.Info.FilePath)) return;
@@ -53,6 +58,7 @@ public sealed partial class EditorPage
             list.Children.Add(new TextBlock { Text = "No earlier versions yet.", Margin = new Thickness(0, 8, 0, 8) });
 
         Services.VersionHistory.Version? chosen = null;
+        Services.VersionHistory.Version? previewed = null;
         foreach (var v in versions)
         {
             var row = new Grid { ColumnSpacing = 12, Padding = new Thickness(10, 8, 8, 8), CornerRadius = new CornerRadius(8),
@@ -66,18 +72,43 @@ public sealed partial class EditorPage
                 Text = $"{v.SavedAt:dddd d MMM yyyy, HH:mm:ss} · {v.Size / 1024.0 / 1024.0:0.0} MB",
                 FontSize = 11, Foreground = (Brush)res["AppTextSecondaryBrush"],
             });
+            var preview = new Button { Content = "Preview", CornerRadius = new CornerRadius(8), VerticalAlignment = VerticalAlignment.Center };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(preview, $"Preview version from {VersionDate(v.SavedAt)}");
+            ToolTipService.SetToolTip(preview, "Show it next to the current note, without changing anything");
+            preview.Click += (_, __) => { previewed = v; dlg.Hide(); };
             var restore = new Button { Content = "Restore", CornerRadius = new CornerRadius(8), VerticalAlignment = VerticalAlignment.Center };
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(restore, $"Restore version from {VersionDate(v.SavedAt)}");
             restore.Click += (_, __) => { chosen = v; dlg.Hide(); };
-            Grid.SetColumn(restore, 1);
+            var buttons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            buttons.Children.Add(preview);
+            buttons.Children.Add(restore);
+            Grid.SetColumn(buttons, 1);
             row.Children.Add(text);
-            row.Children.Add(restore);
+            row.Children.Add(buttons);
             list.Children.Add(row);
         }
 
         await dlg.ShowAsync();
+        if (previewed is not null) { await PreviewVersionAsync(previewed); return; }
         if (chosen is null) return;
+        await RestoreVersionAsync(chosen);
+    }
 
+    // Read-only, side by side with the current note; the pane's button restores it.
+    private async Task PreviewVersionAsync(Services.VersionHistory.Version v)
+    {
+        await OpenReferenceAsync(v.FilePath);
+        if (_refPath != v.FilePath) return;   // couldn't open it
+        _refVersion = v;
+        RefTitle.Text = $"Version from {VersionDate(v.SavedAt).ToLowerInvariant()} (preview)";
+        RefOpenBtn.Content = "Restore this version";
+        ToolTipService.SetToolTip(RefOpenBtn, "Replace the current note with this version");
+    }
+
+    private async Task RestoreVersionAsync(Services.VersionHistory.Version chosen)
+    {
+        if (_doc is null || string.IsNullOrEmpty(_doc.Info.FilePath)) return;
+        var path = _doc.Info.FilePath;
         var confirm = new ContentDialog
         {
             Title = "Restore this version?",
@@ -90,6 +121,7 @@ public sealed partial class EditorPage
 
         try
         {
+            if (_refVersion is not null) CloseReference();   // the preview's file is about to change hands
             if (_doc.IsDirty) await SaveAsync(toast: false);
             _doc.IsDirty = false;   // reopening below must not prompt or save over the restore
             var version = chosen;

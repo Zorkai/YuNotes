@@ -14,6 +14,7 @@ public sealed class RectSelectTool : ITool
     public void OnPointerDown(EditorContext ctx, Vector2 p, float pressure)
     {
         _down = true; _start = p;
+        ctx.LastSelectionArea = null;
         bool hadSelection = SelectionToolHelpers.HasSelection(ctx);
         ctx.SelectedStrokeIds.Clear();
         ctx.SelectedShapeIds.Clear();
@@ -47,6 +48,10 @@ public sealed class RectSelectTool : ITool
         if (ctx.SelectionRect is { } r && r.W > 2 && r.H > 2)
         {
             ctx.LastDrawnRectSelection = r;
+            SelectionToolHelpers.RememberArea(ctx, new List<Vector2>
+            {
+                new(r.X, r.Y), new(r.X + r.W, r.Y), new(r.X + r.W, r.Y + r.H), new(r.X, r.Y + r.H),
+            });
             var sel = new Bbox(r.X, r.Y, r.W, r.H);
             foreach (var s in ctx.CurrentPage.Strokes)
                 if (sel.Overlaps(Bbox.Of(s))) { ctx.SelectedStrokeIds.Add(s.Id); selBounds = SelectionToolHelpers.Union(selBounds, Bbox.Of(s)); }
@@ -75,6 +80,21 @@ internal static class SelectionToolHelpers
 
     public static Bbox? Union(Bbox? acc, Bbox b) => acc is { } a ? Bbox.Union(a, b) : b;
 
+    // Keeps the covered area (if it's big enough to be worth saving) for
+    // "save this part of the PDF as a sticker".
+    public static void RememberArea(EditorContext ctx, List<Vector2> polygon)
+    {
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        foreach (var v in polygon)
+        {
+            minX = MathF.Min(minX, v.X); minY = MathF.Min(minY, v.Y);
+            maxX = MathF.Max(maxX, v.X); maxY = MathF.Max(maxY, v.Y);
+        }
+        bool big = maxX - minX >= 12 && maxY - minY >= 12;
+        ctx.LastSelectionArea = big ? polygon : null;
+        ctx.LastSelectionAreaPage = big ? ctx.CurrentPage : null;
+    }
+
     // Repaints just the region the committed selection chrome (tint, dashed
     // outline, handles, rotate stalk) occupies — nothing selected costs no
     // main-canvas work at all.
@@ -96,6 +116,7 @@ public sealed class LassoTool : ITool
     public void OnPointerDown(EditorContext ctx, Vector2 p, float pressure)
     {
         _down = true;
+        ctx.LastSelectionArea = null;
         bool hadSelection = SelectionToolHelpers.HasSelection(ctx);
         ctx.SelectedStrokeIds.Clear();
         ctx.SelectedShapeIds.Clear();
@@ -121,6 +142,7 @@ public sealed class LassoTool : ITool
         Bbox? selBounds = null;
         if (ctx.SelectionLasso is { Count: >= 3 } lasso)
         {
+            SelectionToolHelpers.RememberArea(ctx, new List<Vector2>(lasso));
             foreach (var s in ctx.CurrentPage.Strokes)
             {
                 var b = Bbox.Of(s);

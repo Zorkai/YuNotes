@@ -515,6 +515,35 @@
              toolbar so showing it never resizes a docked toolbar. Position
              (top/bottom-centre) is set in ApplyToolbarPosition to avoid the
              toolbar. Plain toolbar brush (no liquid glass — that's toolbar-only). -->
+        <!-- Shown when a rectangle/lasso over an imported PDF selected no ink:
+             saves that piece of the PDF as a sticker. Positioned in code. -->
+        <Border x:Name="AreaActions"
+                Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
+                Canvas.ZIndex="11"
+                HorizontalAlignment="Left" VerticalAlignment="Top"
+                Visibility="Collapsed"
+                CornerRadius="22" Padding="6,4"
+                Background="{ThemeResource AppToolbarBrush}"
+                BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1"
+                Translation="0,0,32">
+            <Border.Shadow><ThemeShadow /></Border.Shadow>
+            <StackPanel Orientation="Horizontal" Spacing="4">
+                <Button x:Name="AreaSaveStickerBtn" Padding="12,6" CornerRadius="16"
+                        Background="Transparent" BorderThickness="0"
+                        ToolTipService.ToolTip="Save this part of the PDF as a sticker"
+                        AutomationProperties.Name="Save area as sticker">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xe02e;" FontSize="18" />
+                        <TextBlock Text="Save as sticker" FontSize="13" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="AreaCloseBtn" Style="{StaticResource ToolButtonStyle}"
+                        ToolTipService.ToolTip="Dismiss" AutomationProperties.Name="Dismiss">
+                    <FontIcon Glyph="&#xe5cd;" FontSize="16" />
+                </Button>
+            </StackPanel>
+        </Border>
+
         <Border x:Name="SelectionActions"
                 Grid.Row="1" Grid.Column="0" Grid.ColumnSpan="3"
                 Canvas.ZIndex="11"
@@ -723,14 +752,16 @@
                 <Border x:Name="TopBarDragRegion" Grid.Column="1"
                         Background="Transparent" />
 
-                <!-- Left: home · undo/redo · save/export -->
+                <!-- Left: home · undo/redo · share menu. Every cluster is a rounded
+                     group, separated by spacing only. -->
                 <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8"
                             VerticalAlignment="Center">
-                    <Button x:Name="BackBtn" Style="{StaticResource TopBarButtonStyle}" ToolTipService.ToolTip="Home">
-                        <FontIcon Glyph="&#xe88a;" FontSize="18" />
-                    </Button>
-                    <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="22"
-                            VerticalAlignment="Center" />
+                    <Border Style="{StaticResource TopBarGroupStyle}">
+                        <Button x:Name="BackBtn" Style="{StaticResource TopBarSegButtonStyle}"
+                                ToolTipService.ToolTip="Home" AutomationProperties.Name="Home">
+                            <FontIcon Glyph="&#xe88a;" FontSize="18" />
+                        </Button>
+                    </Border>
                     <Border Style="{StaticResource TopBarGroupStyle}">
                         <StackPanel Orientation="Horizontal" Spacing="0">
                             <Button x:Name="UndoBtn" Style="{StaticResource TopBarSegButtonStyle}"
@@ -744,93 +775,95 @@
                             </Button>
                         </StackPanel>
                     </Border>
+                    <!-- Everything that takes the note somewhere else, in one menu. -->
                     <Border Style="{StaticResource TopBarGroupStyle}">
-                        <StackPanel Orientation="Horizontal" Spacing="0">
-                            <Button x:Name="SaveBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Save (Ctrl+S)">
-                                <FontIcon Glyph="&#xe161;" FontSize="18" />
-                            </Button>
-                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
-                            <Button x:Name="ExportBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Export">
-                                <FontIcon Glyph="&#xf3b2;" FontSize="18" />
-                            </Button>
-                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
-                            <Button x:Name="ShareBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Share"
-                                    AutomationProperties.Name="Share">
-                                <FontIcon Glyph="&#xe80d;" FontSize="18" />
-                                <Button.Flyout>
-                                    <MenuFlyout Placement="Bottom" ShouldConstrainToRootBounds="True">
-                                        <MenuFlyoutItem x:Name="SharePdfItem" Text="Share as PDF">
-                                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe415;" /></MenuFlyoutItem.Icon>
-                                        </MenuFlyoutItem>
-                                        <MenuFlyoutItem x:Name="SharePagePngItem" Text="Share this page as an image">
-                                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe3f4;" /></MenuFlyoutItem.Icon>
-                                        </MenuFlyoutItem>
-                                        <MenuFlyoutItem x:Name="ShareAllPngItem" Text="Share all pages as images">
-                                            <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe3f4;" /></MenuFlyoutItem.Icon>
-                                        </MenuFlyoutItem>
-                                    </MenuFlyout>
-                                </Button.Flyout>
-                            </Button>
-                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
-                            <Button x:Name="VersionsBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Earlier versions"
-                                    AutomationProperties.Name="Earlier versions">
-                                <FontIcon Glyph="&#xe889;" FontSize="18" />
-                            </Button>
-                        </StackPanel>
+                        <Button x:Name="ShareBtn" Style="{StaticResource TopBarAddButtonStyle}"
+                                Width="Auto" ToolTipService.ToolTip="Share, export and earlier versions"
+                                AutomationProperties.Name="Share">
+                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xe80d;" FontSize="16" />
+                                <TextBlock Text="Share" FontSize="13"
+                                           FontFamily="{ThemeResource ContentControlThemeFontFamily}"
+                                           VerticalAlignment="Center" />
+                                <FontIcon Glyph="&#xe5cf;" FontSize="11" />
+                            </StackPanel>
+                            <Button.Flyout>
+                                <MenuFlyout Placement="Bottom" ShouldConstrainToRootBounds="True">
+                                    <MenuFlyoutItem x:Name="SharePdfItem" Text="Share as PDF">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe415;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="SharePagePngItem" Text="Share this page as an image">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe3f4;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="ShareAllPngItem" Text="Share all pages as images">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe3f4;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator />
+                                    <MenuFlyoutItem x:Name="ExportBtn" Text="Export to a file…">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xf3b2;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="VersionsBtn" Text="Earlier versions…">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe889;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
                     </Border>
                 </StackPanel>
 
                 <!-- Center: document title + save state. Sits over the drag region,
-                     which owns all input there; only TopBarTitleHost is carved out
-                     as a passthrough rect (UpdateTitlePassthrough) so the title can
-                     be clicked to rename while the rest still drags the window. -->
-                <StackPanel Grid.Column="1" Orientation="Horizontal" Spacing="10"
+                     which owns all input there; TopBarTitleHost (title and the save
+                     state) is carved out as a passthrough rect (UpdateTitlePassthrough)
+                     so the title can be clicked to rename and the state to save, while
+                     the rest still drags the window. -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal"
                             HorizontalAlignment="Center" VerticalAlignment="Center">
-                    <Grid x:Name="TopBarTitleHost" VerticalAlignment="Center">
-                        <Button x:Name="TopBarTitleBtn"
+                    <StackPanel x:Name="TopBarTitleHost" Orientation="Horizontal" Spacing="2" VerticalAlignment="Center">
+                        <Grid VerticalAlignment="Center">
+                            <Button x:Name="TopBarTitleBtn"
+                                    Background="Transparent" BorderThickness="0"
+                                    Padding="8,4" CornerRadius="6"
+                                    ToolTipService.ToolTip="Rename">
+                                <TextBlock x:Name="TopBarTitle"
+                                           FontSize="14" FontWeight="SemiBold" MaxWidth="360"
+                                           VerticalAlignment="Center"
+                                           TextTrimming="CharacterEllipsis" />
+                            </Button>
+                            <TextBox x:Name="TopBarTitleBox"
+                                     Visibility="Collapsed"
+                                     FontSize="14" FontWeight="SemiBold"
+                                     MinWidth="200" MaxWidth="360"
+                                     VerticalAlignment="Center" />
+                        </Grid>
+                        <!-- Save state doubles as the save button (autosave does the rest). -->
+                        <Button x:Name="SaveStateBtn"
                                 Background="Transparent" BorderThickness="0"
                                 Padding="8,4" CornerRadius="6"
-                                ToolTipService.ToolTip="Rename">
-                            <TextBlock x:Name="TopBarTitle"
-                                       FontSize="14" FontWeight="SemiBold" MaxWidth="360"
-                                       VerticalAlignment="Center"
-                                       TextTrimming="CharacterEllipsis" />
+                                ToolTipService.ToolTip="Save now (Ctrl+S)"
+                                AutomationProperties.Name="Save">
+                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                <FontIcon x:Name="SaveStateCheck" Glyph="&#xe5ca;" FontSize="14"
+                                          Foreground="{ThemeResource AppSuccessBrush}" VerticalAlignment="Center" />
+                                <Ellipse x:Name="SaveStateDot" Width="6" Height="6"
+                                         Fill="{ThemeResource AppAccentBrush}" Visibility="Collapsed"
+                                         VerticalAlignment="Center" />
+                                <TextBlock x:Name="SaveStateText" Text="Saved"
+                                           FontSize="12" Foreground="{ThemeResource AppSuccessBrush}"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
                         </Button>
-                        <TextBox x:Name="TopBarTitleBox"
-                                 Visibility="Collapsed"
-                                 FontSize="14" FontWeight="SemiBold"
-                                 MinWidth="200" MaxWidth="360"
-                                 VerticalAlignment="Center" />
-                    </Grid>
-                    <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center"
-                                IsHitTestVisible="False">
-                        <FontIcon x:Name="SaveStateCheck" Glyph="&#xe5ca;" FontSize="14"
-                                  Foreground="{ThemeResource AppSuccessBrush}" VerticalAlignment="Center" />
-                        <Ellipse x:Name="SaveStateDot" Width="6" Height="6"
-                                 Fill="{ThemeResource AppAccentBrush}" Visibility="Collapsed"
-                                 VerticalAlignment="Center" />
-                        <TextBlock x:Name="SaveStateText" Text="Saved"
-                                   FontSize="12" Foreground="{ThemeResource AppSuccessBrush}"
-                                   VerticalAlignment="Center" />
                     </StackPanel>
                 </StackPanel>
 
-                <!-- Right: view · insert menu · settings -->
+                <!-- Right: screenshot · view · add · present · settings -->
                 <StackPanel x:Name="ToolbarSecondary" Grid.Column="2" Orientation="Horizontal" Spacing="8"
                             Padding="0,0,4,0" VerticalAlignment="Center">
-                    <!-- Fixed slots left of the page sorter (user request); not part of
-                         the reorderable action slots, though the settings hide toggles
-                         still apply. -->
-                    <Button x:Name="TemplateBtn" Style="{StaticResource TopBarButtonStyle}" ToolTipService.ToolTip="Page template">
-                        <FontIcon Glyph="&#xf79d;" FontSize="18" />
-                    </Button>
-                    <Button x:Name="ScreenshotBtn" Style="{StaticResource TopBarButtonStyle}" ToolTipService.ToolTip="Take screenshot">
-                        <FontIcon Glyph="&#xe3b0;" FontSize="18" />
-                    </Button>
+                    <Border x:Name="ScreenshotShell" Style="{StaticResource TopBarGroupStyle}">
+                        <Button x:Name="ScreenshotBtn" Style="{StaticResource TopBarSegButtonStyle}"
+                                ToolTipService.ToolTip="Take screenshot" AutomationProperties.Name="Take screenshot">
+                            <FontIcon Glyph="&#xe3b0;" FontSize="18" />
+                        </Button>
+                    </Border>
                     <Border Style="{StaticResource TopBarGroupStyle}">
                         <StackPanel Orientation="Horizontal" Spacing="0">
                             <Button x:Name="PagePanelBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Page sorter">
@@ -840,7 +873,7 @@
                             <Button x:Name="SearchBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Find text (Ctrl+F)">
                                 <FontIcon Glyph="&#xe8b6;" FontSize="18" />
                             </Button>
-                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
+                            <Border x:Name="SideBySideDivider" Style="{StaticResource TopBarSegDividerStyle}" />
                             <Button x:Name="SideBySideBtn" Style="{StaticResource TopBarSegButtonStyle}"
                                     ToolTipService.ToolTip="Side by side: open another note next to this one"
                                     AutomationProperties.Name="Side by side">
@@ -849,53 +882,14 @@
                                     <MenuFlyout x:Name="SideBySideFlyout" Placement="Bottom" ShouldConstrainToRootBounds="True" />
                                 </Button.Flyout>
                             </Button>
-                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
-                            <Button x:Name="NewTabBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Open another note in a new tab (Ctrl+T)"
-                                    AutomationProperties.Name="New tab">
-                                <FontIcon Glyph="&#xe9ee;" FontSize="18" />
-                                <Button.Flyout>
-                                    <MenuFlyout x:Name="NewTabFlyout" Placement="Bottom" ShouldConstrainToRootBounds="True" />
-                                </Button.Flyout>
-                            </Button>
-                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
-                            <Button x:Name="PresentBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Present full screen with the laser pointer (F5)"
-                                    AutomationProperties.Name="Present">
-                                <FontIcon Glyph="&#xe41b;" FontSize="18" />
-                            </Button>
                         </StackPanel>
                     </Border>
                     <!-- Invisible anchor: ApplyToolbarOrder re-inserts the reorderable
-                         action slots (Insert menu) right after it. -->
+                         action slots (Add menu) right after it. -->
                     <Border x:Name="TopSep1" Width="0" Visibility="Collapsed" />
+                    <!-- Everything you put on a page. Stickers opens its picker from here. -->
                     <Border x:Name="AddMenuShell" Style="{StaticResource TopBarGroupStyle}">
-                        <Button x:Name="AddMenuBtn" Style="{StaticResource TopBarAddButtonStyle}"
-                                Width="Auto" ToolTipService.ToolTip="Insert">
-                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
-                                <FontIcon Glyph="&#xe145;" FontSize="16" />
-                                <TextBlock Text="Add" FontSize="13"
-                                           FontFamily="{ThemeResource ContentControlThemeFontFamily}"
-                                           VerticalAlignment="Center" />
-                                <FontIcon Glyph="&#xe5cf;" FontSize="11" />
-                            </StackPanel>
-                            <Button.Flyout>
-                                <MenuFlyout>
-                                    <MenuFlyoutItem x:Name="AddPageBtn" Text="Add blank page">
-                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe145;" /></MenuFlyoutItem.Icon>
-                                    </MenuFlyoutItem>
-                                    <MenuFlyoutItem x:Name="AddPdfPagesBtn" Text="Add pages from a PDF">
-                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe415;" /></MenuFlyoutItem.Icon>
-                                    </MenuFlyoutItem>
-                                </MenuFlyout>
-                            </Button.Flyout>
-                        </Button>
-                    </Border>
-                    <Button x:Name="StickersBtn" Style="{StaticResource TopBarButtonStyle}"
-                            ToolTipService.ToolTip="Stickers: drop a saved clip into this note"
-                            AutomationProperties.Name="Stickers">
-                        <FontIcon Glyph="&#xe707;" FontSize="18" />
-                        <Button.Flyout>
+                        <FlyoutBase.AttachedFlyout>
                             <Flyout x:Name="StickersFlyout" Placement="Bottom" ShouldConstrainToRootBounds="True"
                                     FlyoutPresenterStyle="{StaticResource GlassFlyoutPresenterStyle}">
                                 <StackPanel Width="344" Spacing="10">
@@ -914,17 +908,57 @@
                                                Text="Tap to add to this page. Right-click to rename or delete." />
                                 </StackPanel>
                             </Flyout>
-                        </Button.Flyout>
-                    </Button>
-                    <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="22"
-                            VerticalAlignment="Center" />
-                    <Button x:Name="SettingsBtn" Style="{StaticResource TopBarButtonStyle}" ToolTipService.ToolTip="Settings">
-                        <FontIcon Glyph="&#xe8b8;" FontSize="18" />
-                    </Button>
+                        </FlyoutBase.AttachedFlyout>
+                        <Button x:Name="AddMenuBtn" Style="{StaticResource TopBarAddButtonStyle}"
+                                Width="Auto" ToolTipService.ToolTip="Add pages, stickers and page templates">
+                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xe145;" FontSize="16" />
+                                <TextBlock Text="Add" FontSize="13"
+                                           FontFamily="{ThemeResource ContentControlThemeFontFamily}"
+                                           VerticalAlignment="Center" />
+                                <FontIcon Glyph="&#xe5cf;" FontSize="11" />
+                            </StackPanel>
+                            <Button.Flyout>
+                                <MenuFlyout Placement="Bottom" ShouldConstrainToRootBounds="True">
+                                    <MenuFlyoutItem x:Name="AddPageBtn" Text="Blank page">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe145;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="AddPdfPagesBtn" Text="Pages from a PDF…">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe415;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator x:Name="AddMenuSep" />
+                                    <MenuFlyoutItem x:Name="StickersItem" Text="Sticker…">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe707;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="TemplateBtn" Text="Page template…">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xf79d;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                    </Border>
+                    <!-- Present is a mode switch, so it gets its own labelled button. -->
+                    <Border x:Name="PresentShell" Style="{StaticResource TopBarGroupStyle}">
+                        <Button x:Name="PresentBtn" Style="{StaticResource TopBarAddButtonStyle}"
+                                Width="Auto" ToolTipService.ToolTip="Present full screen with the laser pointer (F5)"
+                                AutomationProperties.Name="Present">
+                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xe41b;" FontSize="16" />
+                                <TextBlock Text="Present" FontSize="13"
+                                           FontFamily="{ThemeResource ContentControlThemeFontFamily}"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </Border>
+                    <Border Style="{StaticResource TopBarGroupStyle}">
+                        <Button x:Name="SettingsBtn" Style="{StaticResource TopBarSegButtonStyle}"
+                                ToolTipService.ToolTip="Settings" AutomationProperties.Name="Settings">
+                            <FontIcon Glyph="&#xe8b8;" FontSize="18" />
+                        </Button>
+                    </Border>
                 </StackPanel>
             </Grid>
-            <!-- Open notes as tabs. Shown only while two or more notes are open, so
-                 a single note looks exactly as before. -->
+            <!-- Open notes as tabs; always shown, with + to open another note. -->
             <TabView x:Name="TabStrip" Grid.Row="1" Visibility="Collapsed"
                      Padding="8,0,8,0" Height="38"
                      TabWidthMode="SizeToContent" CloseButtonOverlayMode="OnPointerOver"

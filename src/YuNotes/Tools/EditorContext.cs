@@ -28,6 +28,11 @@ public sealed class EditorContext
     public (float X, float Y, float W, float H)? SelectionRect { get; set; }
     public (float X, float Y, float W, float H)? LastDrawnRectSelection { get; set; }
     public List<System.Numerics.Vector2>? SelectionLasso { get; set; }
+    // The area the last rectangle/lasso covered (page coordinates of
+    // LastSelectionAreaPage), kept even when it selected nothing, so a piece
+    // of an imported PDF can be saved as a sticker.
+    public List<System.Numerics.Vector2>? LastSelectionArea { get; set; }
+    public NotePage? LastSelectionAreaPage { get; set; }
 
     public DispatcherQueue? DispatcherQueue { get; set; }
 

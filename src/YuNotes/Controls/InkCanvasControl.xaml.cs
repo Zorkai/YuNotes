@@ -296,6 +296,8 @@ public sealed partial class InkCanvasControl : UserControl
         }
         _pullZone = null;
         _pullRingHost = null;
+        _addBtnWrapper = null;
+        _separators.Clear();
         if (Document is null || _renderer is null || _palm is null || _router is null) return;
 
         PagesPanel.Spacing = SeamlessPages ? 0 : 24;
@@ -308,12 +310,17 @@ public sealed partial class InkCanvasControl : UserControl
             // enough contrast to be clearly visible against white page paper.
             if (SeamlessPages && _pageCanvases.Count > 0)
             {
-                PagesPanel.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle
+                // Width is set by UpdateSeparators: only as wide as both pages
+                // it separates (pages are left-aligned, so a widened page must
+                // not drag every separator out past narrower pages).
+                var sep = new Microsoft.UI.Xaml.Shapes.Rectangle
                 {
                     Height = 4,
-                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    HorizontalAlignment = HorizontalAlignment.Left,
                     Fill = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["PageSeparatorBrush"]
-                });
+                };
+                PagesPanel.Children.Add(sep);
+                _separators.Add(sep);
             }
 
             var canvas = new PageCanvas(
@@ -363,6 +370,18 @@ public sealed partial class InkCanvasControl : UserControl
             stdW = first.BackgroundContentWidth > 0 ? first.BackgroundContentWidth : first.Width;
         }
         BuildAddPageControls(stdW);
+        UpdateSeparators();
+    }
+
+    // Separator i sits between page i and page i+1 (seamless mode only).
+    private readonly List<Microsoft.UI.Xaml.Shapes.Rectangle> _separators = new();
+
+    // Each separator spans only where both of its pages are, i.e. the narrower
+    // of the two. Called after anything that changes a page's width.
+    public void UpdateSeparators()
+    {
+        for (int i = 0; i < _separators.Count && i + 1 < _pageCanvases.Count; i++)
+            _separators[i].Width = Math.Max(1, Math.Min(_pageCanvases[i].Page.Width, _pageCanvases[i + 1].Page.Width));
     }
 
     // ── Pull to add page ────────────────────────────────────────────────────────
@@ -388,6 +407,34 @@ public sealed partial class InkCanvasControl : UserControl
     private const double PullFullThreshold = 0.995;
 
     private Grid? _pullZone;
+    private Grid? _addBtnWrapper;
+    private bool _addPagesAllowed = true;
+
+    // False hides the "+" under the last page and the pull-to-add scroll space,
+    // so scrolling stops at the end of the document (presentation mode).
+    public bool AddPagesAllowed
+    {
+        get => _addPagesAllowed;
+        set { _addPagesAllowed = value; ApplyAddPagesAllowed(); }
+    }
+
+    private void ApplyAddPagesAllowed()
+    {
+        var vis = _addPagesAllowed ? Visibility.Visible : Visibility.Collapsed;
+        if (_addBtnWrapper is not null) _addBtnWrapper.Visibility = vis;
+        if (_pullZone is not null) _pullZone.Visibility = vis;
+        if (!_addPagesAllowed)
+        {
+            _pullArmed = false;
+            _pullWheelCarry = false;
+            _pullReleaseTimer?.Stop();
+            SetPullProgress(0);
+        }
+    }
+
+    // The pull gesture does nothing while there is no pull zone or adding
+    // pages is switched off.
+    private bool PullDisabled => _pullZone is null || !_addPagesAllowed;
     private Grid? _pullRingHost;
     private Microsoft.UI.Xaml.Shapes.Ellipse? _pullTrack;
     private Microsoft.UI.Xaml.Shapes.Ellipse? _pullFull;
@@ -483,6 +530,7 @@ public sealed partial class InkCanvasControl : UserControl
         var addBtnWrapper = new Grid { Width = stdW, HorizontalAlignment = HorizontalAlignment.Left };
         addBtnWrapper.Children.Add(_pullRingHost);
         PagesPanel.Children.Add(addBtnWrapper);
+        _addBtnWrapper = addBtnWrapper;
 
         // The pull zone: empty scroll space revealed as the user pushes past
         // the end. Its hint label sits at the top, right under the button.
@@ -506,6 +554,7 @@ public sealed partial class InkCanvasControl : UserControl
         };
         _pullZone.Children.Add(_pullLabel);
         PagesPanel.Children.Add(_pullZone);
+        ApplyAddPagesAllowed();
 
         _pullArmed = false;
         _pullWheelCarry = false;
@@ -540,7 +589,7 @@ public sealed partial class InkCanvasControl : UserControl
     // meets the bottom of the viewport — where the view rests.
     private double PullRestOffset()
     {
-        if (_pullZone is null) return double.MaxValue;
+        if (PullDisabled) return double.MaxValue;
         try
         {
             double top = _pullZone.TransformToVisual(ContentRoot).TransformPoint(new Windows.Foundation.Point(0, 0)).Y;
@@ -567,6 +616,7 @@ public sealed partial class InkCanvasControl : UserControl
 
     private void OnPullWheel(object sender, PointerRoutedEventArgs e)
     {
+        if (PullDisabled) return;
         var props = e.GetCurrentPoint(Scroller).Properties;
         // Ctrl = zoom, Shift / tilt = horizontal scroll.
         if (props.IsHorizontalMouseWheel ||
@@ -586,7 +636,7 @@ public sealed partial class InkCanvasControl : UserControl
 
     private void OnPullViewChanging(object? sender, ScrollViewerViewChangingEventArgs e)
     {
-        if (_pullZone is null || _pullCommitting) return;
+        if (PullDisabled || _pullCommitting) return;
         double rest = PullRestOffset();
         double next = e.NextView.VerticalOffset;
         bool inZone = next > rest + 0.5;
@@ -660,7 +710,7 @@ public sealed partial class InkCanvasControl : UserControl
 
     private void SchedulePullRelease()
     {
-        if (_pullZone is null) return;
+        if (PullDisabled) return;
         if (_pullReleaseTimer is null)
         {
             _pullReleaseTimer = DispatcherQueue.CreateTimer();
@@ -675,7 +725,7 @@ public sealed partial class InkCanvasControl : UserControl
 
     private void EvaluatePullRelease()
     {
-        if (_pullZone is null || _pullCommitting || _pullInManipulation || PullSnapping) return;
+        if (PullDisabled || _pullCommitting || _pullInManipulation || PullSnapping) return;
         if (_pullViewMoving) return;   // the final ViewChanged reschedules us
         double rest = PullRestOffset();
         double p = PullProgressAt(Scroller.VerticalOffset);
@@ -792,6 +842,7 @@ public sealed partial class InkCanvasControl : UserControl
     public void ResizeAllCanvases()
     {
         foreach (var pc in _pageCanvases) pc.ResizeCanvas();
+        UpdateSeparators();
     }
 
     public void InvalidateAllLive()
@@ -1273,15 +1324,146 @@ public sealed partial class InkCanvasControl : UserControl
     /// <summary>Renders the bounding box of the current selection as a PNG.</summary>
     // ── Stickers ──────────────────────────────────────────────────────────────
 
+    // Whether the selected elements sit on an imported PDF page, so the save
+    // dialog can offer to keep the PDF behind them.
+    public bool SelectionIsOnPdfPage =>
+        HasSelection && ActivePageCanvas is { } pc && Rendering.PageRenderer.HasImportedPdf(pc.Page);
+
+    private PageCanvas? AreaPageCanvas =>
+        Context.LastSelectionArea is { Count: >= 3 } && Context.LastSelectionAreaPage is { } p
+            ? _pageCanvases.FirstOrDefault(c => ReferenceEquals(c.Page, p)) : null;
+
+    // A rectangle/lasso over an imported PDF that selected no ink: that piece
+    // of the PDF can be saved as a sticker on its own.
+    public bool HasStickerArea =>
+        !HasSelection && AreaPageCanvas is { } pc && Rendering.PageRenderer.HasImportedPdf(pc.Page);
+
+    public void ClearSelectionArea()
+    {
+        Context.LastSelectionArea = null;
+        Context.LastSelectionAreaPage = null;
+        UpdateStickerAreaOutline();
+    }
+
+    // The region a sticker is cut from. For a selection with the PDF included
+    // it's the whole rectangle/lasso the user drew (so a big piece of PDF with
+    // a little ink on it keeps its size), widened if needed so no selected ink
+    // is cut off; otherwise just the selection's own box. Kept on the page.
+    private bool ResolveStickerRegion(bool fromSelection, bool includeBackground, out PageCanvas pc,
+        out (float X, float Y, float W, float H) region, out IReadOnlyList<System.Numerics.Vector2>? clip)
+    {
+        pc = null!; region = default; clip = null;
+        if (fromSelection)
+        {
+            if (ActivePageCanvas is not { } apc || !HasSelection || !apc.SelectionBbox(out var b)) return false;
+            pc = apc;
+            float x0 = b.X, y0 = b.Y, x1 = b.Right, y1 = b.Bottom;
+            if (includeBackground && AreaPageCanvas is { } areaPc && ReferenceEquals(areaPc, apc)
+                && Context.LastSelectionArea is { } poly)
+            {
+                var a = PolygonBounds(poly);
+                bool overlaps = !(a.X > b.Right || a.X + a.W < b.X || a.Y > b.Bottom || a.Y + a.H < b.Y);
+                if (overlaps)
+                {
+                    x0 = MathF.Min(x0, a.X); y0 = MathF.Min(y0, a.Y);
+                    x1 = MathF.Max(x1, a.X + a.W); y1 = MathF.Max(y1, a.Y + a.H);
+                    clip = poly;
+                }
+            }
+            region = (x0, y0, MathF.Max(1, x1 - x0), MathF.Max(1, y1 - y0));
+            return true;
+        }
+        if (AreaPageCanvas is not { } p2 || Context.LastSelectionArea is not { } area) return false;
+        pc = p2;
+        var r = PolygonBounds(area);
+        float ax0 = Math.Max(0, r.X), ay0 = Math.Max(0, r.Y);
+        float ax1 = Math.Min((float)p2.Page.Width, r.X + r.W), ay1 = Math.Min((float)p2.Page.Height, r.Y + r.H);
+        if (ax1 - ax0 < 4 || ay1 - ay0 < 4) return false;
+        region = (ax0, ay0, ax1 - ax0, ay1 - ay0);
+        clip = area;
+        return true;
+    }
+
+    private HashSet<string> SelectedIds() =>
+        new(Context.SelectedStrokeIds.Concat(Context.SelectedShapeIds)
+            .Concat(Context.SelectedTextIds).Concat(Context.SelectedImageIds));
+
+    // Picture of exactly what will be saved (also used as the sticker's thumbnail).
+    public byte[]? RenderStickerPreview(bool fromSelection, bool includeBackground)
+    {
+        if (!ResolveStickerRegion(fromSelection, includeBackground || !fromSelection, out var pc, out var r, out var clip)) return null;
+        var keep = fromSelection ? SelectedIds() : new HashSet<string>();
+        float longest = MathF.Max(r.W, r.H);
+        float scale = longest > 0 ? Math.Clamp(480f / longest, 0.25f, 2f) : 1f;
+        return pc.RenderStickerPreviewPng(r.X, r.Y, r.W, r.H, clip, includeBackground || !fromSelection, keep, scale);
+    }
+
+    // Shows the dashed outline of the remembered area on its page, while that
+    // area is what a sticker would be cut from.
+    public void UpdateStickerAreaOutline()
+    {
+        var target = Context.LastSelectionArea is { Count: >= 3 } && AreaPageCanvas is { } apc
+                     && Rendering.PageRenderer.HasImportedPdf(apc.Page)
+                     && (!HasSelection || ReferenceEquals(ActivePageCanvas, apc))
+            ? apc : null;
+        foreach (var pc in _pageCanvases)
+            pc.ShowStickerArea(ReferenceEquals(pc, target) ? Context.LastSelectionArea : null);
+    }
+
+    private static (float X, float Y, float W, float H) PolygonBounds(IReadOnlyList<System.Numerics.Vector2> poly)
+    {
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        foreach (var v in poly)
+        {
+            minX = MathF.Min(minX, v.X); minY = MathF.Min(minY, v.Y);
+            maxX = MathF.Max(maxX, v.X); maxY = MathF.Max(maxY, v.Y);
+        }
+        return (minX, minY, maxX - minX, maxY - minY);
+    }
+
+    // The PDF under the remembered area as a one-picture sticker, cut to the
+    // lasso's shape (transparent outside it).
+    public Services.StickerContent? CopySelectionAreaAsSticker(out byte[]? png)
+    {
+        png = null;
+        // Kept on the page: a lasso can stray past the paper's edge.
+        if (!ResolveStickerRegion(false, true, out var pc, out var r, out var clip)) return null;
+        png = pc.RenderBackgroundRegionToPng(r.X, r.Y, r.W, r.H, clip);
+        var c = new Services.StickerContent { Width = r.W, Height = r.H };
+        c.Images.Add(new ImageElement { X = 0, Y = 0, Width = r.W, Height = r.H, PngData = png });
+        return c;
+    }
+
+    // Screen bounds of the remembered area, for placing its action bar.
+    public bool TryGetAreaScreenBounds(UIElement relativeTo, out Windows.Foundation.Rect bounds)
+    {
+        bounds = default;
+        if (AreaPageCanvas is not { } pc || Context.LastSelectionArea is not { } poly) return false;
+        try
+        {
+            var (x, y, w, h) = PolygonBounds(poly);
+            var t = pc.TransformToVisual(relativeTo);
+            bounds = t.TransformBounds(new Windows.Foundation.Rect(x, y, w, h));
+            return true;
+        }
+        catch { return false; }
+    }
+
     // Copies the current selection out as sticker content: fresh copies of the
     // selected elements, shifted so the selection's bounding box starts at 0,0.
-    public Services.StickerContent? CopySelectionAsSticker()
+    // With includeBackground, the PDF behind the selection is added as a
+    // picture underneath, so the ink stays editable on top of it.
+    public Services.StickerContent? CopySelectionAsSticker(bool includeBackground = false)
     {
-        var pc = ActivePageCanvas;
-        if (pc is null || !HasSelection || !pc.SelectionBbox(out var b)) return null;
+        if (!ResolveStickerRegion(true, includeBackground, out var pc, out var r, out var clip)) return null;
         var page = pc.Page;
-        float dx = -b.X, dy = -b.Y;
-        var c = new Services.StickerContent { Width = Math.Max(1, b.W), Height = Math.Max(1, b.H) };
+        float dx = -r.X, dy = -r.Y;
+        var c = new Services.StickerContent { Width = r.W, Height = r.H };
+        if (includeBackground)
+        {
+            var bg = pc.RenderBackgroundRegionToPng(r.X, r.Y, r.W, r.H, clip);
+            c.Images.Add(new ImageElement { X = 0, Y = 0, Width = c.Width, Height = c.Height, PngData = bg });
+        }
         foreach (var s in page.Strokes.Where(s => Context.SelectedStrokeIds.Contains(s.Id)))
         {
             var k = new Stroke { Kind = s.Kind, Color = s.Color, Width = s.Width, PressureMode = s.PressureMode };
@@ -1483,6 +1665,7 @@ public sealed partial class InkCanvasControl : UserControl
         var pc = _pageCanvases.FirstOrDefault(c => ReferenceEquals(c.Page, page));
         ResetExtension(page);
         pc?.ResizeCanvas();
+        UpdateSeparators();
         DocumentMutated?.Invoke(this, page);
     }
 
@@ -1492,6 +1675,7 @@ public sealed partial class InkCanvasControl : UserControl
         // increase and reduction (amount may be 0 to fully unextend a side).
         SetExtensionAbsolute(page, side, amount);
         pc?.ResizeCanvas();
+        UpdateSeparators();
         DocumentMutated?.Invoke(this, page);
     }
 

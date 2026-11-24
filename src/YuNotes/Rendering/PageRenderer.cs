@@ -252,9 +252,11 @@ public sealed class PageRenderer
             }
         }
 
-        // Shapes (drawn below strokes so ink can annotate over them)
+        // Shapes (drawn below strokes so ink can annotate over them). Tape is
+        // the exception: it is drawn last, over ink and text, so it hides them.
         foreach (var sh in page.Shapes)
         {
+            if (sh.Kind == ShapeKind.Tape) continue;
             if (skipElementIds?.Contains(sh.Id) == true) continue;
             if (cullClip is { } cc2 && !ShapeIntersects(cc2, sh)) continue;
             if (fadedElementIds?.Contains(sh.Id) == true)
@@ -292,6 +294,20 @@ public sealed class PageRenderer
             }
             DrawText(ds, t);
             ds.Transform = prev;
+        }
+
+        // Tape on top of everything, so a covered strip hides ink, text and
+        // images as well as the PDF underneath.
+        foreach (var sh in page.Shapes)
+        {
+            if (sh.Kind != ShapeKind.Tape) continue;
+            if (skipElementIds?.Contains(sh.Id) == true) continue;
+            if (cullClip is { } cc4 && !ShapeIntersects(cc4, sh)) continue;
+            if (fadedElementIds?.Contains(sh.Id) == true)
+            {
+                using (ds.CreateLayer(FadedOpacity)) DrawShape(ds, sh);
+            }
+            else DrawShape(ds, sh);
         }
 
         // Restore transform to what it was before the optional preview offset.
@@ -332,7 +348,7 @@ public sealed class PageRenderer
         }
 
         foreach (var sh in page.Shapes)
-            if (shapeIds.Contains(sh.Id)) DrawShape(ds, sh);
+            if (sh.Kind != ShapeKind.Tape && shapeIds.Contains(sh.Id)) DrawShape(ds, sh);
 
         foreach (var s in page.Strokes)
             if (s.Kind == StrokeKind.Highlighter && strokeIds.Contains(s.Id)) DrawStroke(ds, s);
@@ -352,6 +368,9 @@ public sealed class PageRenderer
             DrawText(ds, t);
             ds.Transform = prev;
         }
+
+        foreach (var sh in page.Shapes)
+            if (sh.Kind == ShapeKind.Tape && shapeIds.Contains(sh.Id)) DrawShape(ds, sh);
     }
 
     private static bool RectIntersects(in Rect clip, float minX, float minY, float maxX, float maxY)
@@ -518,9 +537,16 @@ public sealed class PageRenderer
         float radius = MathF.Min(4f, MathF.Min(w, h) * 0.25f);
         if (revealed)
         {
-            ds.FillRoundedRectangle(x, y, w, h, radius, radius, Windows.UI.Color.FromArgb(28, c.R, c.G, c.B));
-            using var dashed = new CanvasStrokeStyle { DashStyle = CanvasDashStyle.Dash, LineJoin = CanvasLineJoin.Round };
-            ds.DrawRoundedRectangle(x, y, w, h, radius, radius, Windows.UI.Color.FromArgb(150, c.R, c.G, c.B), 1.5f, dashed);
+            // A clear tint plus a bold dashed edge in the tape's own color, so a
+            // revealed strip is easy to spot and tap to cover it again.
+            ds.FillRoundedRectangle(x, y, w, h, radius, radius, Windows.UI.Color.FromArgb(64, c.R, c.G, c.B));
+            using var dashed = new CanvasStrokeStyle
+            {
+                DashStyle = CanvasDashStyle.Dash, LineJoin = CanvasLineJoin.Round,
+                DashCap = CanvasCapStyle.Round,
+            };
+            var edge = Windows.UI.Color.FromArgb(235, c.R, c.G, c.B);
+            ds.DrawRoundedRectangle(x + 1, y + 1, w - 2, h - 2, radius, radius, edge, 2.5f, dashed);
             return;
         }
         var solid = Windows.UI.Color.FromArgb(255, c.R, c.G, c.B);

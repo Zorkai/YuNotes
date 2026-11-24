@@ -364,7 +364,18 @@ public sealed class PageCanvas : ContentControl
 
     private bool TrySelectElementAt(Vector2 p)
     {
-        // Hit-test in reverse render order: text (topmost) → strokes → shapes → images.
+        // A tap draws no area, so an older one must not be used for a sticker.
+        Context.LastSelectionArea = null;
+        // Hit-test in reverse render order: tape (drawn over everything) → text
+        // → strokes → shapes → images.
+        if (TapeAt(p) is { } tape)
+        {
+            Context.SelectedStrokeIds.Clear(); Context.SelectedShapeIds.Clear();
+            Context.SelectedImageIds.Clear();  Context.SelectedTextIds.Clear();
+            Context.SelectedShapeIds.Add(tape.Id);
+            Context.SelectionChanged?.Invoke();
+            return true;
+        }
         foreach (var t in Page.Texts.AsEnumerable().Reverse())
         {
             if (Bbox.Of(t).Contains(p.X, p.Y))
@@ -1184,10 +1195,12 @@ public sealed class PageCanvas : ContentControl
         if (bbox.Y < 0) PrevPageCanvas?.RequestRedraw();
         if (bbox.Y + bbox.H > Page.Height) NextPageCanvas?.RequestRedraw();
 
-        double x = Math.Max(0, bbox.X);
-        double y = Math.Max(0, bbox.Y);
-        double w = Math.Min(Page.Width,  bbox.X + bbox.W) - x;
-        double h = Math.Min(Page.Height, bbox.Y + bbox.H) - y;
+        // Round outward to whole units so a fractional edge can't leave a
+        // half-repainted row of pixels behind.
+        double x = Math.Max(0, Math.Floor(bbox.X) - 1);
+        double y = Math.Max(0, Math.Floor(bbox.Y) - 1);
+        double w = Math.Min(Page.Width,  Math.Ceiling(bbox.X + bbox.W) + 1) - x;
+        double h = Math.Min(Page.Height, Math.Ceiling(bbox.Y + bbox.H) + 1) - y;
         if (w <= 0 || h <= 0) return;
         _canvas.Invalidate(new Windows.Foundation.Rect(x, y, w, h));
     }
@@ -2150,8 +2163,8 @@ public sealed class PageCanvas : ContentControl
         {
             Bbox b;
             float pad;
-            if (Page.Strokes.FirstOrDefault(x => x.Id == id) is { } st) { b = Bbox.Of(st); pad = st.Width; }
-            else if (Page.Shapes.FirstOrDefault(x => x.Id == id) is { } sh) { b = Bbox.Of(sh); pad = sh.StrokeWidth; }
+            if (Page.Strokes.FirstOrDefault(x => x.Id == id) is { } st) { b = Bbox.RepaintOf(st); pad = 0f; }
+            else if (Page.Shapes.FirstOrDefault(x => x.Id == id) is { } sh) { b = Bbox.RepaintOf(sh); pad = 0f; }
             else return;
             b = new Bbox(b.X - pad, b.Y - pad, b.W + pad * 2, b.H + pad * 2);
             dirty = dirty is null ? b : Bbox.Union(dirty.Value, b);
@@ -2709,6 +2722,7 @@ public sealed class PageCanvas : ContentControl
     // hidden originals and repaints only the affected region.
     private void EndDrag()
     {
+        if (_dragMoved) Context.LastSelectionArea = null;   // the area no longer matches the selection
         var mode = _drag;
         _drag = DragMode.None;
         Canvas.SetZIndex(this, 0);   // undo the drag-time raise (see StartDrag)
@@ -3589,6 +3603,104 @@ public sealed class PageCanvas : ContentControl
     public void DrawContentInto(CanvasDrawingSession ds, ICanvasResourceCreator dev)
         => Renderer.DrawPage(ds, dev, Page, PageTemplate, _bgBitmap, _imageCache);
 
+    // Exactly what a sticker from this region will look like: the page behind
+    // it (cut to `clip`) when includeBackground, then only the `keep` elements
+    // on top (never cut). Transparent where there's nothing.
+    public byte[] RenderStickerPreviewPng(float x, float y, float w, float h,
+        IReadOnlyList<Vector2>? clip, bool includeBackground, ISet<string> keep, float scale = 1f)
+    {
+        w = Math.Max(1, w); h = Math.Max(1, h);
+        var device = CanvasDevice.GetSharedDevice();
+        using var target = new CanvasRenderTarget(device, w * scale, h * scale, 96f);
+        var all = new HashSet<string>();
+        foreach (var s in Page.Strokes) all.Add(s.Id);
+        foreach (var s in Page.Shapes) all.Add(s.Id);
+        foreach (var t in Page.Texts) all.Add(t.Id);
+        foreach (var i in Page.Images) all.Add(i.Id);
+        var others = new HashSet<string>(all);
+        others.ExceptWith(keep);
+        using (var ds = target.CreateDrawingSession())
+        {
+            ds.Clear(Colors.Transparent);
+            ds.Transform = Matrix3x2.CreateTranslation(-x, -y) * Matrix3x2.CreateScale(scale);
+            if (includeBackground)
+            {
+                Microsoft.Graphics.Canvas.Geometry.CanvasGeometry? geo = null;
+                if (clip is { Count: >= 3 })
+                    geo = Microsoft.Graphics.Canvas.Geometry.CanvasGeometry.CreatePolygon(device, clip.ToArray());
+                using (geo)
+                using (geo is null ? null : ds.CreateLayer(1f, geo))
+                    Renderer.DrawPage(ds, device, Page, PageTemplate, _bgBitmap, _imageCache, skipElementIds: all);
+            }
+            if (keep.Count > 0)
+                Renderer.DrawPage(ds, device, Page, PageTemplate, _bgBitmap, _imageCache, overlayOnly: true, skipElementIds: others);
+        }
+        using var ms = new MemoryStream();
+        target.SaveAsync(ms.AsRandomAccessStream(), CanvasBitmapFileFormat.Png)
+              .AsTask().GetAwaiter().GetResult();
+        return ms.ToArray();
+    }
+
+    // Dashed outline of the area a sticker would be cut from (null hides it).
+    private Polygon? _stickerAreaOutline;
+    public void ShowStickerArea(IReadOnlyList<Vector2>? poly)
+    {
+        if (poly is not { Count: >= 3 })
+        {
+            if (_stickerAreaOutline is not null) _stickerAreaOutline.Visibility = Visibility.Collapsed;
+            return;
+        }
+        if (_stickerAreaOutline is null)
+        {
+            _stickerAreaOutline = new Polygon
+            {
+                Stroke = new SolidColorBrush(Color.FromArgb(230, 91, 107, 255)),
+                StrokeThickness = 2,
+                StrokeDashArray = new DoubleCollection { 5, 3 },
+                StrokeLineJoin = PenLineJoin.Round,
+                Fill = new SolidColorBrush(Color.FromArgb(22, 91, 107, 255)),
+                IsHitTestVisible = false,
+            };
+            Canvas.SetZIndex(_stickerAreaOutline, 8500);
+            _overlay.Children.Add(_stickerAreaOutline);
+        }
+        var pts = new PointCollection();
+        foreach (var v in poly) pts.Add(new Windows.Foundation.Point(v.X, v.Y));
+        _stickerAreaOutline.Points = pts;
+        _stickerAreaOutline.Visibility = Visibility.Visible;
+    }
+
+    // Renders only the page itself (PDF / template background, no ink, text,
+    // images or tape) for the given region, at `scale`× for a crisp sticker.
+    // With a polygon, everything outside it is transparent (a lasso cut-out).
+    public byte[] RenderBackgroundRegionToPng(float x, float y, float w, float h,
+        IReadOnlyList<Vector2>? clipPolygon = null, float scale = 2f)
+    {
+        w = Math.Max(1, w); h = Math.Max(1, h);
+        var device = CanvasDevice.GetSharedDevice();
+        using var target = new CanvasRenderTarget(device, w * scale, h * scale, 96f);
+        var skip = new HashSet<string>();
+        foreach (var s in Page.Strokes) skip.Add(s.Id);
+        foreach (var s in Page.Shapes) skip.Add(s.Id);
+        foreach (var t in Page.Texts) skip.Add(t.Id);
+        foreach (var i in Page.Images) skip.Add(i.Id);
+        using (var ds = target.CreateDrawingSession())
+        {
+            ds.Clear(Colors.Transparent);
+            ds.Transform = Matrix3x2.CreateTranslation(-x, -y) * Matrix3x2.CreateScale(scale);
+            Microsoft.Graphics.Canvas.Geometry.CanvasGeometry? clip = null;
+            if (clipPolygon is { Count: >= 3 })
+                clip = Microsoft.Graphics.Canvas.Geometry.CanvasGeometry.CreatePolygon(device, clipPolygon.ToArray());
+            using (clip)
+            using (clip is null ? null : ds.CreateLayer(1f, clip))
+                Renderer.DrawPage(ds, device, Page, PageTemplate, _bgBitmap, _imageCache, skipElementIds: skip);
+        }
+        using var ms = new MemoryStream();
+        target.SaveAsync(ms.AsRandomAccessStream(), CanvasBitmapFileFormat.Png)
+              .AsTask().GetAwaiter().GetResult();
+        return ms.ToArray();
+    }
+
     public byte[] RenderRegionToPng(float x, float y, float w, float h)
     {
         w = Math.Max(1, w); h = Math.Max(1, h);
@@ -3826,8 +3938,8 @@ public sealed class PageCanvas : ContentControl
     //  - the same extension on this side, which lines up both content and
     //    edges when the pages have the same original width;
     //  - when original widths differ (mixed PDF page sizes), the extension
-    //    that makes this page as wide as that one, so the centred pages' edges
-    //    line up instead.
+    //    that makes this page as wide as that one; pages are left-aligned, so
+    //    their right edges then line up.
     // Duplicates and zero are skipped (0 is already a preset snap point).
     private List<(double Amount, string Label)> NeighbourSnapTargets(ExtendSide side)
     {

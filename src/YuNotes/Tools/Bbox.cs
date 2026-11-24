@@ -31,6 +31,27 @@ public readonly record struct Bbox(float X, float Y, float W, float H)
         return new Bbox(minX - pad, minY - pad, (maxX - minX) + pad * 2, (maxY - minY) + pad * 2);
     }
 
+    // Area to repaint when a stroke disappears or changes: its rendered bounds
+    // plus another half width (pressure ink can swell past Width) and a couple
+    // of pixels for anti-aliasing. Repainting less leaves thin slivers of the
+    // old ink on screen.
+    public static Bbox RepaintOf(Stroke s)
+    {
+        var b = OfRendered(s);
+        float m = MathF.Max(0f, s.Width) * 0.5f + 2f;
+        return new Bbox(b.X - m, b.Y - m, b.W + m * 2, b.H + m * 2);
+    }
+
+    // Same for a shape: its outline width, arrowheads and anti-aliasing.
+    public static Bbox RepaintOf(ShapeElement s)
+    {
+        var b = Of(s);
+        if (s.Rotation != 0f && float.IsFinite(s.Rotation))
+            b = RotatedAabb(b.X, b.Y, b.Right, b.Bottom, s.Rotation);
+        float m = MathF.Max(0f, s.StrokeWidth) * 0.5f + ShapeGeometry.Overhang(s) + 3f;
+        return new Bbox(b.X - m, b.Y - m, b.W + m * 2, b.H + m * 2);
+    }
+
     // Bounds of the stroke as RENDERED: like Of(), but for smoothed (non-
     // pressure) strokes also pads by the Catmull-Rom overshoot bound — the
     // curve's control points sit up to max|P[i+1]-P[i-1]|/6 outside the sample

@@ -21,7 +21,8 @@ public sealed partial class EditorPage
     // Several notes open in one window. The tab list is static so it survives
     // going back to Home and opening the editor again. Opening a note from Home
     // replaces the current tab (as before tabs existed); new tabs come from the
-    // tab button, Ctrl+T, Ctrl+click on Home, or "Open to edit" in side by side.
+    // + at the end of the tab strip, Ctrl+T, Ctrl+click on Home, or "Open to
+    // edit" in side by side. The strip is always shown, even with one tab.
     //
     // Only the active tab can hold unsaved changes: leaving a tab saves it
     // (or asks, when autosave is off), so background tabs are always clean.
@@ -57,7 +58,6 @@ public sealed partial class EditorPage
             int idx = TabStrip.TabItems.IndexOf(args.Tab);
             if (idx >= 0) _ = CloseTabAsync(idx);
         };
-        NewTabFlyout.Opening += (_, __) => RebuildNewTabFlyout(NewTabFlyout);
         TabAddFlyout.Opening += (_, __) => RebuildNewTabFlyout(TabAddFlyout);
     }
 
@@ -165,7 +165,7 @@ public sealed partial class EditorPage
                 TabStrip.TabItems.Add(item);
             }
             TabStrip.SelectedIndex = s_activeTab;
-            TabStrip.Visibility = s_tabs.Count > 1 ? Visibility.Visible : Visibility.Collapsed;
+            TabStrip.Visibility = s_tabs.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         }
         finally { _suppressTabEvents = false; }
     }
@@ -319,7 +319,7 @@ public sealed partial class EditorPage
         }
         if (open.Count == 0)
             flyout.Items.Add(new MenuFlyoutItem { Text = "No other notes to open", IsEnabled = false });
-        if (s_tabs.Count > 1)
+        if (s_tabs.Count > 0)
         {
             flyout.Items.Add(new MenuFlyoutSeparator());
             var close = new MenuFlyoutItem { Text = "Close this tab (Ctrl+W)" };
@@ -328,11 +328,10 @@ public sealed partial class EditorPage
         }
     }
 
-    // Ctrl+T: the picker opens from whichever button is on screen.
+    // Ctrl+T: open the picker from the tab strip's + button.
     private void ShowNewTabPicker()
     {
-        var btn = TabStrip.Visibility == Visibility.Visible ? TabAddBtn : NewTabBtn;
-        btn.Flyout?.ShowAt(btn);
+        TabAddBtn.Flyout?.ShowAt(TabAddBtn);
     }
 
     // A restored version replaces the note on disk: any copy held by a tab is stale.
