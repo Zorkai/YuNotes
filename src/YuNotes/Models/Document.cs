@@ -80,6 +80,8 @@ public sealed class NotePage
     public int? SourcePageIndex { get; set; }
     // Bookmark label ("Theorem", "Exam", …) shown in the page panel; null = none.
     public string? Bookmark { get; set; }
+    // Blank space inserted into the page (see PageGaps). Empty = none.
+    public List<PageGap> Gaps { get; } = new();
     public List<Stroke> Strokes { get; } = new();
     public List<ShapeElement> Shapes { get; } = new();
     public List<TextElement> Texts { get; } = new();

@@ -40,7 +40,7 @@ public sealed class SelectionDropEventArgs : EventArgs
     public bool Transferred { get; set; }
 }
 
-public sealed class PageCanvas : ContentControl
+public sealed partial class PageCanvas : ContentControl
 {
     public NotePage Page { get; }
     public TemplateSettings PageTemplate { get; set; }
@@ -76,7 +76,6 @@ public sealed class PageCanvas : ContentControl
     // window per frame (~half the drawing-time GPU cost; see
     // prototypes/InkPerfLab).
     private LiveInkSurface? _liveInk;
-    private bool _liveInkActive;   // last value raised through LiveInkActiveChanged
 
     // ── Hi-res PDF background (zoomed in) ───────────────────────────────────
     // The imported background PNG is rasterized at 300 DPI (2× the coord
@@ -146,7 +145,7 @@ public sealed class PageCanvas : ContentControl
     public void InvalidateContentBounds() => _contentBoundsDirty = true;
 
     // Drag modes when interacting with selection
-    private enum DragMode { None, Move, ResizeNW, ResizeNE, ResizeSW, ResizeSE, Rotate }
+    private enum DragMode { None, Move, ResizeNW, ResizeNE, ResizeSW, ResizeSE, ResizeW, ResizeE, ResizeN, ResizeS, Rotate }
     private DragMode _drag = DragMode.None;
     private Bbox _dragStartBbox;
     private Vector2 _dragStartCenter;
@@ -171,6 +170,11 @@ public sealed class PageCanvas : ContentControl
     // the model mutates ONCE on release.
     private Image? _dragGhost;
     private Rectangle? _dragGhostBorder;
+    // While resizing a selection with text in it, the text is drawn here at its
+    // new size and wrapping on every move (see UpdateTextResizeGhost), not
+    // stretched with the rest of the ghost — so the preview matches the result.
+    private Image? _textResizeGhost;
+    private readonly Dictionary<string, float> _origTextFont = new();
     private RotateTransform? _dragGhostRotate;
     private RotateTransform? _dragGhostBorderRotate;
     private Bbox _dragGhostBbox;          // padded doc-space rect the ghost image covers
@@ -189,7 +193,7 @@ public sealed class PageCanvas : ContentControl
     // Snapshot of original element transforms at drag start, keyed by id
     private readonly Dictionary<string, Bbox> _origImageBoxes = new();
     private readonly Dictionary<string, Bbox> _origTextBoxes = new();
-    private readonly Dictionary<string, (float X1, float Y1, float X2, float Y2)> _origShapePoints = new();
+    private readonly Dictionary<string, (float X1, float Y1, float X2, float Y2, float X3, float Y3)> _origShapePoints = new();
     private readonly Dictionary<string, double> _origImageRot = new();
     private readonly Dictionary<string, double> _origTextRot = new();
 
@@ -276,11 +280,6 @@ public sealed class PageCanvas : ContentControl
     public event EventHandler<ToolKind>? MomentaryToolStart;
     public event EventHandler? MomentaryToolEnd;
     public event EventHandler? RectSelectionCompleted;
-
-    // Raised when a live stroke starts (true) and when it is committed,
-    // cancelled or dropped (false). EditorPage pauses the toolbar's live glass
-    // refraction in between so drawing doesn't re-blur it every frame.
-    public event EventHandler<bool>? LiveInkActiveChanged;
 
     // Raised when a Move drag is released. InkCanvasControl uses it to hand the
     // selection to whichever page the pointer ended over (a cross-page move);
@@ -495,15 +494,6 @@ public sealed class PageCanvas : ContentControl
     {
         CancelLiveInkSync();
         _liveInk?.Clear();
-        ReportLiveInkActive();
-    }
-
-    private void ReportLiveInkActive()
-    {
-        bool active = _liveInk?.IsActive == true;
-        if (active == _liveInkActive) return;
-        _liveInkActive = active;
-        LiveInkActiveChanged?.Invoke(this, active);
     }
 
     private void SyncLiveInkSurface(Stroke s)
@@ -521,7 +511,6 @@ public sealed class PageCanvas : ContentControl
             alpha = (byte)Math.Min(140, alpha == 255 ? 110 : alpha);
         _liveInk.Sync(s, Color.FromArgb(alpha, s.Color.R, s.Color.G, s.Color.B),
             (float)Page.Width, (float)Page.Height);
-        ReportLiveInkActive();   // also catches a device-lost Clear inside Sync
     }
 
     // Prediction lead: extrapolate up to TWO samples ahead (never less than
@@ -815,7 +804,16 @@ public sealed class PageCanvas : ContentControl
             ? Page.BackgroundContentWidth
             : Page.Width - bgLeft;
         if (bgW <= 0) { ClearHiResBackground(); return; }
-        var bgRect = new Windows.Foundation.Rect(bgLeft, 0, bgW, Page.Height);
+        // The crop is worked out in background rows (as imported, before any
+        // inserted space); the renderer places each piece. Without gaps these
+        // are the same as page rows.
+        var bgRect = new Windows.Foundation.Rect(bgLeft, 0, bgW, PageGaps.BackgroundHeight(Page));
+        if (PageGaps.Any(Page))
+        {
+            double vt = PageGaps.ToBackground(Page, viewRect.Y);
+            double vb = PageGaps.ToBackground(Page, viewRect.Bottom);
+            viewRect = new Windows.Foundation.Rect(viewRect.X, vt, viewRect.Width, Math.Max(0, vb - vt));
+        }
 
         // Keep the current crop while it still covers the view at this scale.
         if (_bgHiRes is not null && Math.Abs(_bgHiResScale - backingScale) < 0.01f)
@@ -858,7 +856,7 @@ public sealed class PageCanvas : ContentControl
                                   Windows.Foundation.Rect want, float backingScale, int gen,
                                   Windows.Foundation.Rect? followUp)
     {
-        double pageH = Page.Height;
+        double pageH = PageGaps.BackgroundHeight(Page);
         double bgLeft = Page.BackgroundLeft;
         double bgW = Page.BackgroundContentWidth > 0
             ? Page.BackgroundContentWidth
@@ -928,6 +926,11 @@ public sealed class PageCanvas : ContentControl
                     _bgHiResScale = backingScale;
                     var dirty = want;
                     if (old is not null) { old.Dispose(); dirty.Union(oldRect); }
+                    if (PageGaps.Any(Page))
+                    {
+                        double top = PageGaps.ToPage(Page, dirty.Y), bottom = PageGaps.ToPage(Page, dirty.Bottom);
+                        dirty = new Windows.Foundation.Rect(dirty.X, top, dirty.Width, Math.Max(0, bottom - top));
+                    }
                     _canvas.Invalidate(dirty);
                     // Tight pass is on screen — widen to the scroll-headroom crop.
                     if (followUp is { } inflated)
@@ -1255,8 +1258,21 @@ public sealed class PageCanvas : ContentControl
 
         // Corner handles + (single-element only) rotate handle
         var handles = HandlePositions(outer);
-        foreach (var (_, pos) in handles)
+        foreach (var (mode, pos) in handles)
         {
+            if (mode is DragMode.ResizeW or DragMode.ResizeE or DragMode.ResizeN or DragMode.ResizeS)
+            {
+                // Edge handles are pills along their edge: tall on the sides
+                // (width only), wide on top and bottom (height only).
+                bool side = mode is DragMode.ResizeW or DragMode.ResizeE;
+                float hw = side ? HandleSize * 0.32f : HandleSize * 0.8f;
+                float hh = side ? HandleSize * 0.8f : HandleSize * 0.32f;
+                var r = new Windows.Foundation.Rect(pos.X - hw, pos.Y - hh, hw * 2, hh * 2);
+                float rr = Math.Min(hw, hh);
+                ds.FillRoundedRectangle(r, rr, rr, Colors.White);
+                ds.DrawRoundedRectangle(r, rr, rr, Color.FromArgb(255, 91, 107, 255), 2f);
+                continue;
+            }
             ds.FillCircle(pos, HandleSize * 0.5f, Colors.White);
             ds.DrawCircle(pos, HandleSize * 0.5f, Color.FromArgb(255, 91, 107, 255), 2f);
         }
@@ -1271,14 +1287,30 @@ public sealed class PageCanvas : ContentControl
 
     private List<(DragMode mode, Vector2 pos)> HandlePositions(Bbox b)
     {
-        return new()
+        var list = new List<(DragMode, Vector2)>
         {
             (DragMode.ResizeNW, new Vector2(b.X, b.Y)),
             (DragMode.ResizeNE, new Vector2(b.Right, b.Y)),
             (DragMode.ResizeSW, new Vector2(b.X, b.Bottom)),
             (DragMode.ResizeSE, new Vector2(b.Right, b.Bottom)),
         };
+        // Side handles change only the width (text rewraps at the same size);
+        // top/bottom handles change only the height. Text boxes get no
+        // top/bottom handles: their height always fits their text.
+        list.Add((DragMode.ResizeW, new Vector2(b.X, b.Y + b.H / 2)));
+        list.Add((DragMode.ResizeE, new Vector2(b.Right, b.Y + b.H / 2)));
+        if (!SelectionIsTextOnly)
+        {
+            list.Add((DragMode.ResizeN, new Vector2(b.X + b.W / 2, b.Y)));
+            list.Add((DragMode.ResizeS, new Vector2(b.X + b.W / 2, b.Bottom)));
+        }
+        return list;
     }
+
+    // Only text boxes are selected (no ink, shapes or images).
+    private bool SelectionIsTextOnly =>
+        Context.SelectedTextIds.Count > 0 && Context.SelectedStrokeIds.Count == 0
+        && Context.SelectedShapeIds.Count == 0 && Context.SelectedImageIds.Count == 0;
 
     private bool TryRotateHandle(Bbox outer, out Vector2 pos)
     {
@@ -1658,7 +1690,7 @@ public sealed class PageCanvas : ContentControl
         if (Context.EditingSuspended) return;
         // A new press while a previous gesture is still marked in progress means
         // that gesture was interrupted without a release — finish it first.
-        if (_panning || _selectingText || _lasering || _tapeGesture || _drag != DragMode.None || _activeTool is not null)
+        if (_panning || _selectingText || _lasering || _spacing || _tapeGesture || _drag != DragMode.None || _activeTool is not null)
             ResetInputState();
         Focus(FocusState.Pointer);
         var p = ToPageSpace(e);
@@ -1677,6 +1709,17 @@ public sealed class PageCanvas : ContentControl
             _tapeTap = tape;
             _tapeTapStart = p;
             _tapeTapPans = tool is PanTool;
+            CapturePointer(e.Pointer);
+            _capturedPointerId = e.Pointer.PointerId;
+            e.Handled = true;
+            return;
+        }
+
+        // Page size tool: a drag inside the page opens (or closes) space.
+        if (tool is ExtendPageTool)
+        {
+            if (HasCommittedSelection()) ClearSelection();
+            BeginSpace(p);
             CapturePointer(e.Pointer);
             _capturedPointerId = e.Pointer.PointerId;
             e.Handled = true;
@@ -2219,6 +2262,11 @@ public sealed class PageCanvas : ContentControl
             }
             return;
         }
+        if (_spacing)
+        {
+            ContinueSpace(p);
+            return;
+        }
         if (_lasering)
         {
             var pts = e.GetIntermediatePoints(this);
@@ -2327,6 +2375,13 @@ public sealed class PageCanvas : ContentControl
             EndLaser();
             skipFullRedraw = true;
         }
+        else if (_spacing)
+        {
+            // The page is resized and repainted by InkCanvasControl if this
+            // drag changed anything.
+            EndSpace(commit: true);
+            skipFullRedraw = true;
+        }
         else if (_tapeGesture)
         {
             if (_tapeTap is { } t) ToggleTape(t);
@@ -2394,6 +2449,7 @@ public sealed class PageCanvas : ContentControl
             _tapeGesture = false;
             _tapeTap = null;
             if (_lasering) EndLaser();
+            EndSpace(commit: false);
             if (_drag != DragMode.None) EndDrag();
             if (_activeTool is { } tool)
             {
@@ -2418,6 +2474,7 @@ public sealed class PageCanvas : ContentControl
         _dragStartCenter = _dragStartBbox.Center;
         _origImageBoxes.Clear();
         _origTextBoxes.Clear();
+        _origTextFont.Clear();
         _origShapePoints.Clear();
         _origImageRot.Clear();
         _origTextRot.Clear();
@@ -2434,13 +2491,14 @@ public sealed class PageCanvas : ContentControl
             var t = Page.Texts.FirstOrDefault(z => z.Id == id);
             if (t is null) continue;
             _origTextBoxes[id] = Bbox.Of(t);
+            _origTextFont[id] = t.FontSize;
             _origTextRot[id] = t.Rotation;
         }
         foreach (var id in Context.SelectedShapeIds)
         {
             var sh = Page.Shapes.FirstOrDefault(z => z.Id == id);
             if (sh is null) continue;
-            _origShapePoints[id] = (sh.X1, sh.Y1, sh.X2, sh.Y2);
+            _origShapePoints[id] = (sh.X1, sh.Y1, sh.X2, sh.Y2, sh.X3, sh.Y3);
         }
         _dragStartRotation = Math.Atan2(p.Y - _dragStartCenter.Y, p.X - _dragStartCenter.X);
         _dragStartPoint = p;
@@ -2478,8 +2536,19 @@ public sealed class PageCanvas : ContentControl
             case DragMode.ResizeNE:
             case DragMode.ResizeSW:
             case DragMode.ResizeSE:
+            case DragMode.ResizeW:
+            case DragMode.ResizeE:
+            case DragMode.ResizeN:
+            case DragMode.ResizeS:
             {
                 var nb = ResizedBox(_drag, p);
+                if (SelectionIsTextOnly)
+                {
+                    // The outline follows the text as it will really be (its
+                    // height fits the rewrapped text), not the dragged box.
+                    if (UpdateTextResizeGhost(nb) is { } tb) PositionGhost(tb.X, tb.Y, tb.W, tb.H);
+                    break;
+                }
                 float sx = nb.W / Math.Max(1e-3f, _dragStartBbox.W);
                 float sy = nb.H / Math.Max(1e-3f, _dragStartBbox.H);
                 PositionGhost(
@@ -2487,6 +2556,7 @@ public sealed class PageCanvas : ContentControl
                     nb.Y + (_dragGhostBbox.Y - _dragStartBbox.Y) * sy,
                     _dragGhostBbox.W * sx,
                     _dragGhostBbox.H * sy);
+                UpdateTextResizeGhost(nb);
                 break;
             }
             case DragMode.Rotate:
@@ -2505,16 +2575,85 @@ public sealed class PageCanvas : ContentControl
     {
         var orig = _dragStartBbox;
         float left = orig.X, top = orig.Y, right = orig.Right, bottom = orig.Bottom;
+
+        // Text: corners scale the text as a whole (box and font together), so
+        // the box keeps its shape and the width alone decides the size.
+        if (SelectionIsTextOnly && mode is DragMode.ResizeNW or DragMode.ResizeNE
+                                         or DragMode.ResizeSW or DragMode.ResizeSE)
+        {
+            bool fromLeft = mode is DragMode.ResizeNW or DragMode.ResizeSW;
+            bool fromTop = mode is DragMode.ResizeNW or DragMode.ResizeNE;
+            float w = Math.Max(24, fromLeft ? orig.Right - p.X : p.X - orig.X);
+            float h = orig.H * w / Math.Max(1e-3f, orig.W);
+            float x = fromLeft ? orig.Right - w : orig.X;
+            float y = fromTop ? orig.Bottom - h : orig.Y;
+            return new Bbox(x, y, w, h);
+        }
+
         switch (mode)
         {
             case DragMode.ResizeNW: left = p.X; top = p.Y; break;
             case DragMode.ResizeNE: right = p.X; top = p.Y; break;
             case DragMode.ResizeSW: left = p.X; bottom = p.Y; break;
             case DragMode.ResizeSE: right = p.X; bottom = p.Y; break;
+            case DragMode.ResizeW: left = p.X; break;
+            case DragMode.ResizeE: right = p.X; break;
+            case DragMode.ResizeN: top = p.Y; break;
+            case DragMode.ResizeS: bottom = p.Y; break;
         }
-        if (right - left < 8) right = left + 8;
-        if (bottom - top < 8) bottom = top + 8;
+        float minW = mode is DragMode.ResizeW or DragMode.ResizeE ? 24 : 8;
+        if (right - left < minW)
+        {
+            if (mode is DragMode.ResizeW or DragMode.ResizeNW or DragMode.ResizeSW) left = right - minW;
+            else right = left + minW;
+        }
+        if (bottom - top < 8)
+        {
+            if (mode is DragMode.ResizeN or DragMode.ResizeNW or DragMode.ResizeNE) top = bottom - 8;
+            else bottom = top + 8;
+        }
         return new Bbox(left, top, right - left, bottom - top);
+    }
+
+    // A selected text box as a resize to selection box `nb` leaves it:
+    //   side handles — new width, text rewraps, font unchanged;
+    //   corners on text only — box and font scale together;
+    //   corners on a mixed selection — scaled with the rest, font by the
+    //   smaller of the two scales so it never overflows.
+    // The height always fits the text, so nothing is cut off and there is no
+    // empty space left at the bottom.
+    private TextElement ResizedText(TextElement t, Bbox ob, float origFont, Bbox nb, DragMode mode)
+    {
+        var orig = _dragStartBbox;
+        float sx = nb.W / Math.Max(1e-3f, orig.W);
+        float sy = nb.H / Math.Max(1e-3f, orig.H);
+        bool sides = mode is DragMode.ResizeW or DragMode.ResizeE or DragMode.ResizeN or DragMode.ResizeS;
+        float font = sides ? origFont
+                   : Math.Clamp(origFont * (SelectionIsTextOnly ? sx : Math.Min(sx, sy)), 6f, 400f);
+        var r = new TextElement
+        {
+            X = nb.X + (ob.X - orig.X) * sx,
+            Y = nb.Y + (ob.Y - orig.Y) * sy,
+            Width = Math.Max(font * 1.2, ob.W * sx),
+            Height = ob.H,
+            FontSize = font,
+            Rotation = t.Rotation, Text = t.Text, Color = t.Color,
+            FontFamily = t.FontFamily, Bold = t.Bold, Italic = t.Italic,
+        };
+        r.Height = FitTextHeight(r);
+        return r;
+    }
+
+    // Height a text box needs for its text at its width (at least one line).
+    private static double FitTextHeight(TextElement t)
+    {
+        var probe = new TextElement
+        {
+            Width = t.Width, Height = t.Height, FontSize = t.FontSize, FontFamily = t.FontFamily,
+            Bold = t.Bold, Italic = t.Italic,
+            Text = string.IsNullOrEmpty(t.Text) ? "Ag" : t.Text,
+        };
+        return Math.Max(t.FontSize * 1.3, PageRenderer.MeasureTextHeight(probe) + 4);
     }
 
     private void ApplyResize(DragMode mode, Vector2 p)
@@ -2542,11 +2681,8 @@ public sealed class PageCanvas : ContentControl
             if (!_origTextBoxes.TryGetValue(id, out var ob)) continue;
             var t = Page.Texts.FirstOrDefault(z => z.Id == id);
             if (t is null) continue;
-            t.X = newBox.X + (ob.X - orig.X) * sx;
-            t.Y = newBox.Y + (ob.Y - orig.Y) * sy;
-            t.Width = ob.W * sx;
-            t.Height = ob.H * sy;
-            t.FontSize = Math.Max(6f, t.FontSize * Math.Min(sx, sy));
+            var r = ResizedText(t, ob, _origTextFont.TryGetValue(id, out var f) ? f : t.FontSize, newBox, mode);
+            t.X = r.X; t.Y = r.Y; t.Width = r.Width; t.Height = r.Height; t.FontSize = r.FontSize;
         }
         // Shapes: scale each endpoint relative to the original selection bbox.
         foreach (var id in Context.SelectedShapeIds)
@@ -2558,6 +2694,11 @@ public sealed class PageCanvas : ContentControl
             sh.Y1 = newBox.Y + (op.Y1 - orig.Y) * sy;
             sh.X2 = newBox.X + (op.X2 - orig.X) * sx;
             sh.Y2 = newBox.Y + (op.Y2 - orig.Y) * sy;
+            if (sh.Kind == ShapeKind.Triangle)
+            {
+                sh.X3 = newBox.X + (op.X3 - orig.X) * sx;
+                sh.Y3 = newBox.Y + (op.Y3 - orig.Y) * sy;
+            }
         }
         // Strokes: scale all points relative to original bbox.
         foreach (var id in Context.SelectedStrokeIds)
@@ -2630,7 +2771,8 @@ public sealed class PageCanvas : ContentControl
                 ds.Transform = Matrix3x2.CreateTranslation(-box.X, -box.Y);
                 Renderer.DrawElements(ds, Page,
                     Context.SelectedStrokeIds, Context.SelectedShapeIds,
-                    Context.SelectedTextIds, Context.SelectedImageIds, _imageCache);
+                    IsResizeDrag(_drag) ? new List<string>() : Context.SelectedTextIds,
+                    Context.SelectedImageIds, _imageCache);
             }
 
             _dragGhostRotate = new RotateTransform();
@@ -2667,6 +2809,7 @@ public sealed class PageCanvas : ContentControl
             _overlay.Children.Add(_dragGhostBorder);
 
             _dragGhostBbox = box;
+            if (IsResizeDrag(_drag)) UpdateTextResizeGhost(_dragStartBbox);
 
             // Hide the originals (and the Win2D chrome — DrawSelectionVisuals
             // skips while _drag is set) with one partial redraw.
@@ -2700,8 +2843,82 @@ public sealed class PageCanvas : ContentControl
         _dragGhostBorder.Height = h;
     }
 
+    private static bool IsResizeDrag(DragMode m) =>
+        m is DragMode.ResizeNW or DragMode.ResizeNE or DragMode.ResizeSW or DragMode.ResizeSE
+          or DragMode.ResizeW or DragMode.ResizeE or DragMode.ResizeN or DragMode.ResizeS;
+
+    // Draws the selected text boxes as ApplyResize will leave them for the
+    // selection box `nb`: same position/size/font-size formula, text laid out
+    // and wrapped for real rather than stretched.
+    // Returns the resized text boxes' outline (null if nothing to draw).
+    private Bbox? UpdateTextResizeGhost(Bbox nb)
+    {
+        if (Context.SelectedTextIds.Count == 0) return null;
+        var texts = new List<TextElement>();
+        foreach (var id in Context.SelectedTextIds)
+        {
+            if (!_origTextBoxes.TryGetValue(id, out var ob)) continue;
+            var t = Page.Texts.FirstOrDefault(z => z.Id == id);
+            if (t is null) continue;
+            float font = _origTextFont.TryGetValue(id, out var f) ? f : t.FontSize;
+            texts.Add(ResizedText(t, ob, font, nb, _drag));
+        }
+        if (texts.Count == 0) return null;
+        var outline = Bbox.Of(texts[0]);
+        foreach (var t in texts.Skip(1)) outline = Bbox.Union(outline, Bbox.Of(t));
+
+        // Area to draw into: the boxes, grown for rotation and for text that
+        // runs past the bottom of its box.
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        foreach (var t in texts)
+        {
+            float r = t.Rotation != 0 ? 0.5f * MathF.Sqrt((float)(t.Width * t.Width + t.Height * t.Height)) : 0f;
+            float cx = (float)(t.X + t.Width / 2), cy = (float)(t.Y + t.Height / 2);
+            minX = Math.Min(minX, Math.Min((float)t.X, cx - r));
+            minY = Math.Min(minY, Math.Min((float)t.Y, cy - r));
+            maxX = Math.Max(maxX, Math.Max((float)(t.X + t.Width), cx + r));
+            maxY = Math.Max(maxY, Math.Max((float)(t.Y + t.Height), cy + r));
+        }
+        var box = new Bbox(minX - 4, minY - 4, maxX - minX + 8, maxY - minY + 8);
+        if (box.W < 1 || box.H < 1) return outline;
+
+        try
+        {
+            var device = TryGetCanvasDevice() ?? CanvasDevice.GetSharedDevice();
+            float scale = Math.Clamp(_canvas.DpiScale, 1f, 4f);
+            const float maxPixels = 8_000_000f;
+            if (box.W * box.H * scale * scale > maxPixels)
+                scale = Math.Max(0.25f, MathF.Sqrt(maxPixels / (box.W * box.H)));
+            var src = new CanvasImageSource(device, box.W, box.H, 96f * scale);
+            using (var ds = src.CreateDrawingSession(Colors.Transparent))
+            {
+                ds.Transform = Matrix3x2.CreateTranslation(-box.X, -box.Y);
+                foreach (var t in texts) Renderer.DrawTextElement(ds, t);
+            }
+            if (_textResizeGhost is null)
+            {
+                _textResizeGhost = new Image { Stretch = Stretch.Fill, IsHitTestVisible = false };
+                Canvas.SetZIndex(_textResizeGhost, 10);
+                _overlay.Children.Add(_textResizeGhost);
+            }
+            _textResizeGhost.Source = src;
+            _textResizeGhost.Width = box.W;
+            _textResizeGhost.Height = box.H;
+            Canvas.SetLeft(_textResizeGhost, box.X);
+            Canvas.SetTop(_textResizeGhost, box.Y);
+        }
+        catch (Exception ex)
+        {
+            // Preview only: the resize still applies on release.
+            App.LogError(ex, "UpdateTextResizeGhost");
+        }
+        return outline;
+    }
+
     private void TearDownDragGhost()
     {
+        if (_textResizeGhost is not null) _overlay.Children.Remove(_textResizeGhost);
+        _textResizeGhost = null;
         if (_dragGhost is not null) _overlay.Children.Remove(_dragGhost);
         if (_dragGhostBorder is not null) _overlay.Children.Remove(_dragGhostBorder);
         _dragGhost = null;
@@ -2771,6 +2988,10 @@ public sealed class PageCanvas : ContentControl
                 case DragMode.ResizeNE:
                 case DragMode.ResizeSW:
                 case DragMode.ResizeSE:
+                case DragMode.ResizeW:
+                case DragMode.ResizeE:
+                case DragMode.ResizeN:
+                case DragMode.ResizeS:
                     ApplyResize(mode, _lastDragPoint);
                     break;
                 case DragMode.Rotate:
@@ -2936,6 +3157,60 @@ public sealed class PageCanvas : ContentControl
         else _canvas.Invalidate();
         // Selection chrome hugs the ink; refresh it for the new extent.
         Context.SelectionChanged?.Invoke();
+    }
+
+    // True when the selection holds handwriting that can be turned into text.
+    public bool SelectionHasPenInk
+    {
+        get
+        {
+            if (Context.SelectedStrokeIds.Count == 0) return false;
+            var sel = new HashSet<string>(Context.SelectedStrokeIds);
+            return Page.Strokes.Any(s => s.Kind == StrokeKind.Pen && sel.Contains(s.Id));
+        }
+    }
+
+    // The selected pen strokes, in the order they were written (the handwriting
+    // recognizer relies on that order). Highlighter strokes are left out.
+    public List<Stroke> SelectedPenStrokes()
+    {
+        var sel = new HashSet<string>(Context.SelectedStrokeIds);
+        return Page.Strokes.Where(s => s.Kind == StrokeKind.Pen && sel.Contains(s.Id)).ToList();
+    }
+
+    // Swaps the selected pen ink for a text box holding `text`, placed where the
+    // ink was. Other selected items (highlighter, shapes, text, images) stay.
+    // One undoable mutation; the new text box ends up selected.
+    public bool ReplaceSelectedPenInkWithText(string text, Color color, float fontSize)
+    {
+        var pen = SelectedPenStrokes();
+        if (pen.Count == 0 || string.IsNullOrWhiteSpace(text)) return false;
+        bool hadOld = SelectionBbox(out var oldRegion);
+
+        var ink = Bbox.Of(pen[0]);
+        foreach (var s in pen.Skip(1)) ink = Bbox.Union(ink, Bbox.Of(s));
+
+        var ids = new HashSet<string>(pen.Select(s => s.Id));
+        Page.Strokes.RemoveAll(s => ids.Contains(s.Id));
+        Context.SelectedStrokeIds.RemoveAll(ids.Contains);
+
+        var t = new TextElement
+        {
+            X = ink.X, Y = ink.Y,
+            Width = Math.Max(ink.W + 24, 160),
+            Text = text.Trim(), Color = color,
+            FontSize = Math.Clamp(fontSize, 10f, 96f),
+        };
+        t.Height = Math.Max(PageRenderer.MeasureTextHeight(t) + 8, t.FontSize * 1.5);
+        Page.Texts.Add(t);
+        Context.SelectedTextIds.Add(t.Id);
+
+        Context.Mutated?.Invoke();
+        Context.SelectionChanged?.Invoke();
+        var dirty = Bbox.Of(t);
+        if (hadOld) dirty = Bbox.Union(dirty, oldRegion);
+        InvalidateSelectionRegion(dirty, pen.Max(s => s.Width));
+        return true;
     }
 
     public void DuplicateSelection(float offsetX = 24, float offsetY = 24)
@@ -3389,9 +3664,11 @@ public sealed class PageCanvas : ContentControl
         var t = Page.Texts.FirstOrDefault(x => x.Id == _editorTextId);
         if (commit && t is not null)
         {
-            t.Text = _editor.Text ?? "";
+            t.Text = (_editor.Text ?? "").Replace("\r\n", "\n").Replace('\r', '\n');
             t.Width = Math.Max(_editor.ActualWidth, t.Width);
-            t.Height = Math.Max(_editor.ActualHeight, t.Height);
+            // Fit the height to the text: grows for new lines, shrinks when
+            // text was deleted or the font made smaller.
+            t.Height = FitTextHeight(t);
         }
         if (commit && t is not null && string.IsNullOrWhiteSpace(t.Text))
         {
@@ -4064,19 +4341,26 @@ public sealed class PageCanvas : ContentControl
     // to resize all internal canvases to the new page dimensions.
     public void ResizeCanvas()
     {
-        double newW = Page.Width;
+        double newW = Page.Width, newH = Page.Height;
         _canvas.Width      = newW;
         _overlay.Width     = newW;
+        _canvas.Height     = newH;
+        _overlay.Height    = newH;
         var root = (Grid)Content;
         root.Width = newW;
+        root.Height = newH;
         Width = newW;
+        Height = newH;
 
         // Background placement changed — the hi-res crop rect is stale.
         ClearHiResBackground();
 
-        // Reposition right handle for new width.
+        // Reposition right handle for new width; both stay centred vertically.
         if (_rightExtHandle is not null)
             Canvas.SetLeft(_rightExtHandle, newW - ExtHandleWidth);
+        double centerY = (newH - ExtHandleHeight) / 2;
+        if (_leftExtHandle is not null) Canvas.SetTop(_leftExtHandle, centerY);
+        if (_rightExtHandle is not null) Canvas.SetTop(_rightExtHandle, centerY);
 
         _canvas.Invalidate();
     }

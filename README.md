@@ -48,6 +48,7 @@
 **🎯 Selection & editing**
 - Lasso and rectangle select; move, resize, rotate, duplicate, recolor and change line width of the selection
 - Type text or paste images straight onto the page
+- Convert handwriting to text: lasso it, check what was read, then swap the ink for a text box or copy the text
 - Stickers: save a lasso selection (a diagram, a stamp, a signature), optionally with the PDF behind it, or just a piece of a PDF, and drop a copy into any note
 - Screenshot tool: capture a region and copy, save or insert it into the page
 - Undo and redo for ink, page changes and templates
@@ -58,6 +59,7 @@
 - Share a note as a PDF or as images through the Windows share window (Mail, Teams, Nearby sharing, …)
 - Page templates: blank, grid, dots, lined, Cornell, with adjustable spacing
 - Widen a page to the left or right (it snaps to match neighbouring widened pages), or keep scrolling past the end to add a page
+- Make room to write: with the Page size tool, drag down inside a page to open blank space at that line (the PDF below moves down with it, e.g. between two exercises), or drag up to close it again. Saved and exported PDFs keep the space, and the PDF text stays selectable
 - Page sorter: reorder, delete and jump between pages; bookmark pages
 - Autosave and version history: preview an earlier version next to the note, then restore it if you want
 - `.yunote` files are SQLite, so every stroke stays editable after you close and reopen
@@ -72,6 +74,7 @@
 - Home screen with folders (with colors), pinned notes, a "continue where you left off" row, and sorting by date, name or folder
 - Trash and Archive, with restore
 - Tabs: keep several notes open in one window (**Ctrl+T**, **Ctrl+W**, **Ctrl+Tab**, or Ctrl+click a note on Home); each tab keeps its own undo history
+- Windows like a browser: drag tabs to reorder them, drag one out into its own window or onto another window's tabs, or right-click a tab to move it. Opening a note from File Explorer adds a tab to the YuNotes that's already open instead of starting a second copy
 - Side by side: open a second note read-only next to the one you're editing
 
 **🎤 Presenting**

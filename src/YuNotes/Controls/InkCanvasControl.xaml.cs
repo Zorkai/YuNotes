@@ -38,20 +38,6 @@ public sealed partial class InkCanvasControl : UserControl
     public event EventHandler<YuNotes.Tools.ToolKind>? MomentaryToolStart;
     public event EventHandler? MomentaryToolEnd;
     public event EventHandler? ActivePageScrolled;
-    // True while any page is showing a live (uncommitted) stroke.
-    public event EventHandler<bool>? LiveInkActiveChanged;
-    // Pages currently showing live ink. A stroke handed between pages can
-    // raise the new page's start before the old page's end, so count instead
-    // of forwarding each page's flag.
-    private int _liveInkPages;
-
-    private void OnPageLiveInkActiveChanged(object? sender, bool active)
-    {
-        bool was = _liveInkPages > 0;
-        _liveInkPages = Math.Max(0, _liveInkPages + (active ? 1 : -1));
-        bool now = _liveInkPages > 0;
-        if (now != was) LiveInkActiveChanged?.Invoke(this, now);
-    }
 
     public InkCanvasControl()
     {
@@ -288,12 +274,6 @@ public sealed partial class InkCanvasControl : UserControl
     {
         PagesPanel.Children.Clear();
         _pageCanvases.Clear();
-        // Discarded pages never report their live ink ending.
-        if (_liveInkPages > 0)
-        {
-            _liveInkPages = 0;
-            LiveInkActiveChanged?.Invoke(this, false);
-        }
         _pullZone = null;
         _pullRingHost = null;
         _addBtnWrapper = null;
@@ -344,9 +324,9 @@ public sealed partial class InkCanvasControl : UserControl
             canvas.MomentaryToolStart += (_, kind) => MomentaryToolStart?.Invoke(this, kind);
             canvas.MomentaryToolEnd += (_, __) => MomentaryToolEnd?.Invoke(this, EventArgs.Empty);
             canvas.RectSelectionCompleted += (_, __) => RectSelectionCompleted?.Invoke(this, EventArgs.Empty);
-            canvas.LiveInkActiveChanged += OnPageLiveInkActiveChanged;
             canvas.SelectionDragDropped += OnSelectionDragDropped;
             canvas.ExtensionDragCompleted += OnExtensionDragCompleted;
+            canvas.SpaceDragCompleted += OnSpaceDragCompleted;
             canvas.ExtendModeActive = ExtendModeActive;
             PagesPanel.Children.Add(canvas);
             _pageCanvases.Add(canvas);
@@ -1164,6 +1144,10 @@ public sealed partial class InkCanvasControl : UserControl
     public bool SelectionHasResizableWidth => ActivePageCanvas?.SelectionHasResizableWidth == true;
     public float? SelectionWidth() => ActivePageCanvas?.SelectionWidth();
     public void SetSelectionWidth(float width) => ActivePageCanvas?.SetSelectionWidth(width);
+    public bool SelectionHasPenInk => ActivePageCanvas?.SelectionHasPenInk == true;
+    public List<Stroke> SelectedPenStrokes() => ActivePageCanvas?.SelectedPenStrokes() ?? new();
+    public bool ReplaceSelectedPenInkWithText(string text, Windows.UI.Color color, float fontSize) =>
+        ActivePageCanvas?.ReplaceSelectedPenInkWithText(text, color, fontSize) == true;
     public byte[]? RenderRegionOfCurrentPage(float x, float y, float w, float h)
         => ActivePageCanvas?.RenderRegionToPng(x, y, w, h);
 
@@ -1651,6 +1635,19 @@ public sealed partial class InkCanvasControl : UserControl
         // Amount is the total desired extension (may be 0 = fully unextended).
         if (sender is not PageCanvas pc) return;
         CommitPageExtension(pc.Page, args.Side, args.Amount, pc);
+    }
+
+    // A Page size drag inside a page: open space below the row it started at
+    // (Delta > 0) or close inserted space above it (Delta < 0). One undo step.
+    private void OnSpaceDragCompleted(object? sender, (double Y, double Delta) args)
+    {
+        if (sender is not PageCanvas pc) return;
+        var page = pc.Page;
+        if (args.Delta > 0) PageGaps.Insert(page, args.Y, args.Delta);
+        else if (PageGaps.Remove(page, args.Y + args.Delta, args.Y) <= 0) return;
+        pc.ResizeCanvas();
+        UpdateSeparators();
+        DocumentMutated?.Invoke(this, page);
     }
 
     // Called by EditorPage when the dialog is used for precise control.

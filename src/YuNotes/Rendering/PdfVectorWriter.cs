@@ -109,7 +109,22 @@ public static class PdfVectorWriter
         double bgLeft = page.BackgroundLeft;
         double bgW = page.BackgroundContentWidth > 0 ? page.BackgroundContentWidth : w - bgLeft;
         if (page.BackgroundPng is { Length: > 0 } bg && bgW > 0)
-            DrawPng(gfx, bg, bgLeft, 0, bgW, h);
+        {
+            if (!PageGaps.Any(page)) DrawPng(gfx, bg, bgLeft, 0, bgW, h);
+            else
+            {
+                // Inserted space: draw the background once per piece, shifted
+                // to its row and clipped to it.
+                double bgH = PageGaps.BackgroundHeight(page);
+                foreach (var (srcY, srcH, dstY) in PageGaps.Segments(page))
+                {
+                    var st = gfx.Save();
+                    gfx.IntersectClip(new XRect(bgLeft, dstY, bgW, srcH));
+                    DrawPng(gfx, bg, bgLeft, dstY - srcY, bgW, bgH);
+                    gfx.Restore(st);
+                }
+            }
+        }
 
         var t = e.Template;
         if (t.SkipImportedPdf && PageRenderer.HasImportedPdf(page))
@@ -119,11 +134,37 @@ public static class PdfVectorWriter
             double pdfRight = bgLeft + bgW;
             if (bgLeft > 0.5) DrawTemplateClipped(gfx, w, h, t, new XRect(0, 0, bgLeft, h));
             if (w - pdfRight > 0.5) DrawTemplateClipped(gfx, w, h, t, new XRect(pdfRight, 0, w - pdfRight, h));
+            foreach (var (gy, gh) in PageGaps.GapRows(page))
+                DrawTemplateClipped(gfx, w, h, t, new XRect(bgLeft, gy, bgW, gh));
         }
         else
         {
             DrawTemplate(gfx, w, h, t);
         }
+    }
+
+    // On a page rebuilt from an imported PDF page (widened, or with space
+    // inserted): the template on the parts YuNotes added — the strips beside
+    // the PDF and the inserted space — never over the PDF itself, matching
+    // what the editor shows. Drawn under the notes.
+    public static void DrawOwnedTemplate(XGraphics gfx, NotePage page, TemplateSettings t,
+                                         double targetWidth, double targetHeight)
+    {
+        double w = page.Width, h = page.Height;
+        if (t.Kind == TemplateKind.Blank || !(w > 0) || !(h > 0) || !IsFinite(w) || !IsFinite(h)) return;
+        double bgLeft = page.BackgroundLeft;
+        double bgW = page.BackgroundContentWidth > 0 ? page.BackgroundContentWidth : w - bgLeft;
+        double pdfRight = bgLeft + bgW;
+        var state = gfx.Save();
+        try
+        {
+            gfx.ScaleTransform(targetWidth / w, targetHeight / h);
+            if (bgLeft > 0.5) DrawTemplateClipped(gfx, w, h, t, new XRect(0, 0, bgLeft, h));
+            if (w - pdfRight > 0.5) DrawTemplateClipped(gfx, w, h, t, new XRect(pdfRight, 0, w - pdfRight, h));
+            foreach (var (gy, gh) in PageGaps.GapRows(page))
+                DrawTemplateClipped(gfx, w, h, t, new XRect(bgLeft, gy, bgW, gh));
+        }
+        finally { gfx.Restore(state); }
     }
 
     private static void DrawTemplateClipped(XGraphics gfx, double w, double h, TemplateSettings t, XRect clip)

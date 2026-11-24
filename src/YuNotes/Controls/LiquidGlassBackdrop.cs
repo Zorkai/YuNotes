@@ -28,18 +28,18 @@ namespace YuNotes.Controls;
 /// so the host keeps today's acrylic look. When activated it swaps the
 /// Background for a SpriteVisual whose effect brush samples the live backdrop:
 ///
-///   backdrop → GaussianBlur → Saturation ┬→ tint overlay            (glass body)
-///                                        └→ Transform2D zoom → edge-masked  (refraction)
+///   backdrop → GaussianBlur → Saturation → tint overlay   (glass body)
+///   backdrop → lighter blur → edge-masked                  (clearer rim band)
 ///   + Win2D-drawn rim/sheen surface, all alpha-masked to the rounded rect.
 ///
 /// The whole graph lives on the compositor thread: after setup there is no
 /// per-frame CPU work, and the GPU cost is in the same class as the in-app
 /// AcrylicBrush it replaces (one blur of a panel-sized region). The three mask
 /// surfaces are tiny and redrawn only on resize / theme / DPI changes.
-/// True per-pixel displacement maps (the React lib's SVG feDisplacementMap)
-/// aren't in the composition-supported effect set, so the edge refraction uses
-/// the same approximation the lib's "standard" map encodes: edge pixels sample
-/// toward the center (a magnifying rim), masked to a band along the border.
+/// The rim band samples the live backdrop with less blur than the body. It
+/// used to show a magnified live capture of the canvas instead, but that
+/// capture didn't follow the canvas's scroll/zoom (it showed page that wasn't
+/// behind the toolbar) and re-rendered on every ink change, so it was dropped.
 /// </summary>
 public sealed partial class LiquidGlassBackdrop : Grid
 {
@@ -51,21 +51,16 @@ public sealed partial class LiquidGlassBackdrop : Grid
     // anchored dark even when floating over a white page, instead of flipping
     // to silver. Light theme keeps the unmodified backdrop.
     private const float DarkBackdropExposure = -1.8f;
-    private const float RefractionZoom = 1.22f;  // edge band magnification
     private const float EdgeBandWidth = 15f;     // refraction band along the rim
     private const float RimStrokeWidth = 1.5f;
 
     private bool _active;
     private Brush? _inactiveBackground;
-    private Vector2 _lastSourceOffset = new(float.NaN);
 
     private CanvasDevice? _device;
     private CompositionGraphicsDevice? _gfx;
     private SpriteVisual? _visual;
     private CompositionEffectBrush? _brush;
-    private CompositionVisualSurface? _visualSurface;  // live capture feeding the refraction
-    private CompositionBrush? _refractionBrush;        // zoomed brush over _visualSurface
-    private bool _refractionPaused;
     private CompositionDrawingSurface? _edgeSurface;   // refraction band alpha
     private CompositionDrawingSurface? _rimSurface;    // specular border + sheen
 
@@ -81,37 +76,6 @@ public sealed partial class LiquidGlassBackdrop : Grid
         ActualThemeChanged += (_, __) => Rebuild();
         Loaded += OnLoaded;
         Unloaded += OnUnloaded;
-    }
-
-    /// <summary>
-    /// Element whose live rendering feeds the magnified edge-refraction band
-    /// (typically the canvas the glass floats over). Backdrop brushes cannot be
-    /// transformed by the compositor, so true refraction needs a
-    /// CompositionVisualSurface capture of the content behind the panel. When
-    /// null the edge band falls back to an untransformed, clearer backdrop.
-    /// Must not be an ancestor of this control.
-    /// </summary>
-    public UIElement? RefractionSource { get; set; }
-
-    /// <summary>
-    /// Suspends the live refraction capture (e.g. while a stroke is being
-    /// drawn). The capture re-renders the whole source subtree whenever any of
-    /// it changes — ink drawn anywhere on the canvas, not just behind the
-    /// toolbar — which re-runs the edge blur every frame. That is invisible on
-    /// a desktop GPU but a steady per-frame cost on integrated laptop GPUs.
-    /// While paused the edge band samples the plain backdrop instead (the same
-    /// fallback used without a source), which the compositor only re-renders
-    /// when the region behind the toolbar itself changes.
-    /// </summary>
-    public bool RefractionPaused
-    {
-        get => _refractionPaused;
-        set
-        {
-            if (_refractionPaused == value) return;
-            _refractionPaused = value;
-            ApplyRefractionPause();
-        }
     }
 
     /// <summary>Switches between the glass effect and the plain Background brush.</summary>
@@ -141,19 +105,15 @@ public sealed partial class LiquidGlassBackdrop : Grid
     {
         _root = XamlRoot;
         if (_root is not null) _root.Changed += OnRootChanged;   // DPI / monitor moves
-        LayoutUpdated += OnLayoutUpdated;                        // tracks toolbar drags
         Rebuild();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e)
     {
         if (_root is not null) { _root.Changed -= OnRootChanged; _root = null; }
-        LayoutUpdated -= OnLayoutUpdated;
         // Loaded/Unloaded can arrive out of order; only tear down when truly unloaded.
         if (!IsLoaded) ReleaseVisual();
     }
-
-    private void OnLayoutUpdated(object? sender, object e) => UpdateRefractionOffset();
 
     private void OnRootChanged(XamlRoot sender, XamlRootChangedEventArgs args) => Rebuild();
 
@@ -238,7 +198,7 @@ public sealed partial class LiquidGlassBackdrop : Grid
         _edgeSurface = CreateSurface(pw, ph);
         _rimSurface = CreateSurface(pw, ph);
 
-        // Refraction band: opaque at the rim, fading to 0 inland. Fill the pill,
+        // Edge band: opaque at the rim, fading to 0 inland. Fill the pill,
         // then carve out a blurred interior so the falloff is smooth.
         float band = MathF.Min(EdgeBandWidth * scale, MathF.Min(pw, ph) / 3f);
         using (var ds = CanvasComposition.CreateDrawingSession(_edgeSurface))
@@ -328,12 +288,8 @@ public sealed partial class LiquidGlassBackdrop : Grid
             },
         };
 
-        // Edge refraction: the rim shows the content behind magnified toward the
-        // panel center, masked to a band along the border. Less blur than the
-        // body — a real glass rim bends light but stays clearer than the slab.
-        // The magnification lives on the brush bound to "backdrop2" (a scaled
-        // visual-surface brush), since the compositor rejects any Transform2D
-        // over a backdrop source.
+        // Edge band: the backdrop with less blur than the body, masked to a band
+        // along the border — a glass rim stays clearer than the slab.
         IGraphicsEffectSource edgeBackdrop = new GaussianBlurEffect
         {
             Source = new CompositionEffectSourceParameter("backdrop2"),
@@ -365,67 +321,9 @@ public sealed partial class LiquidGlassBackdrop : Grid
         _brush?.Dispose();
         _brush = factory.CreateBrush();
         _brush.SetSourceParameter("backdrop", compositor.CreateBackdropBrush());
-        _refractionBrush = CreateRefractionBrush(compositor, w, h);
-        ApplyRefractionPause();
+        _brush.SetSourceParameter("backdrop2", compositor.CreateBackdropBrush());
         _brush.SetSourceParameter("edge", CreateMaskBrush(compositor, _edgeSurface!));
         _brush.SetSourceParameter("rim", CreateMaskBrush(compositor, _rimSurface!));
-    }
-
-    /// <summary>
-    /// Brush feeding the magnified edge band: a live visual-surface capture of
-    /// <see cref="RefractionSource"/> aligned with this panel, zoomed toward the
-    /// center. Without a source, an unzoomed backdrop (the band then just shows
-    /// the backdrop with less blur — still glassy, no lens bend).
-    /// </summary>
-    private CompositionBrush CreateRefractionBrush(Compositor compositor, float w, float h)
-    {
-        _visualSurface?.Dispose(); _visualSurface = null;
-        if (RefractionSource is null) return compositor.CreateBackdropBrush();
-
-        _visualSurface = compositor.CreateVisualSurface();
-        _visualSurface.SourceVisual = ElementCompositionPreview.GetElementVisual(RefractionSource);
-        _visualSurface.SourceSize = new Vector2(w, h);
-        _lastSourceOffset = new Vector2(float.NaN);
-        UpdateRefractionOffset();
-
-        var brush = compositor.CreateSurfaceBrush(_visualSurface);
-        brush.Stretch = CompositionStretch.None;   // 1:1, centered by default ratios
-        brush.CenterPoint = new Vector2(w / 2f, h / 2f);
-        brush.Scale = new Vector2(RefractionZoom);
-        return brush;
-    }
-
-    private void ApplyRefractionPause()
-    {
-        if (_brush is null || _refractionBrush is null) return;
-        bool live = !_refractionPaused && _visualSurface is not null;
-        if (_visualSurface is not null)
-        {
-            // Detaching the source stops the capture outright, rather than
-            // relying on an unbound surface not being re-rendered.
-            _visualSurface.SourceVisual = live && RefractionSource is not null
-                ? ElementCompositionPreview.GetElementVisual(RefractionSource)
-                : null;
-        }
-        _brush.SetSourceParameter("backdrop2", live
-            ? _refractionBrush
-            : _brush.Compositor.CreateBackdropBrush());
-        if (live) UpdateRefractionOffset();
-    }
-
-    /// <summary>
-    /// Keeps the captured region aligned with the panel as it is dragged or
-    /// re-docked. Called from LayoutUpdated; the transform compare makes the
-    /// no-change case (e.g. layout passes caused by unrelated elements) cheap.
-    /// </summary>
-    private void UpdateRefractionOffset()
-    {
-        if (_visualSurface is null || RefractionSource is null || !IsLoaded || _refractionPaused) return;
-        var origin = TransformToVisual(RefractionSource).TransformPoint(new Point(0, 0));
-        var offset = new Vector2((float)origin.X, (float)origin.Y);
-        if (offset == _lastSourceOffset) return;
-        _lastSourceOffset = offset;
-        _visualSurface.SourceOffset = offset;
     }
 
     private static CompositionSurfaceBrush CreateMaskBrush(Compositor compositor, CompositionDrawingSurface surface)
@@ -442,8 +340,6 @@ public sealed partial class LiquidGlassBackdrop : Grid
         ElementCompositionPreview.SetElementChildVisual(this, null);
         _visual?.Dispose(); _visual = null;
         _brush?.Dispose(); _brush = null;
-        _visualSurface?.Dispose(); _visualSurface = null;
-        _refractionBrush = null;
         DisposeSurfaces();
         _builtSize = default;
     }

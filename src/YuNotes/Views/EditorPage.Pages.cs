@@ -857,6 +857,7 @@ public sealed partial class EditorPage
                       SkipImportedPdf = t.SkipImportedPdf }
                 : null
         };
+        clone.Gaps.AddRange(PageGaps.Clone(src.Gaps));
 
         foreach (var s in src.Strokes)
         {

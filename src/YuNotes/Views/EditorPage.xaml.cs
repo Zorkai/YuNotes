@@ -92,8 +92,8 @@ public sealed partial class EditorPage : Page
         // for it (text is written as real PDF text with embedded fonts).
         _ = Task.Run(Rendering.PdfFontResolver.EnsureIndexed);
         // GoBack reverses the drill-in animation the note was opened with.
-        BackBtn.Click += async (_, __) => { if (await ConfirmLeaveAsync()) MainWindow.GoBack(); };
-        SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>(
+        BackBtn.Click += async (_, __) => { if (await ConfirmLeaveAsync()) MainWindow.GoBack(this); };
+        SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>(this, 
             null, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
         SaveStateBtn.Click += async (_, __) => await SaveAsync();
         StickersItem.Click += (_, __) => FlyoutBase.ShowAttachedFlyout(AddMenuShell);
@@ -196,9 +196,6 @@ public sealed partial class EditorPage : Page
         // path (ColorPicker / WidthPicker rebuild) was making every gesture feel slow.
         // RectSelectionCompleted is no longer used (copy-as-image is now a toolbar button).
 
-        // Live glass refraction re-captures the whole canvas on every change;
-        // freeze it to the plain backdrop while a stroke is being drawn.
-        Canvas.LiveInkActiveChanged += (_, active) => ToolbarGlass.RefractionPaused = active;
         Canvas.MomentaryToolStart += (_, kind) =>
         {
             if (_selected == kind) return;
@@ -279,6 +276,7 @@ public sealed partial class EditorPage : Page
         InitTabs();
         InitShare();
         InitStickers();
+        InitInkToText();
         for (var k = VirtualKey.Number1; k <= VirtualKey.Number5; k++)
             KeyboardAccelerators.Add(new KeyboardAccelerator { Key = k, Modifiers = VirtualKeyModifiers.Control });
         foreach (var a in KeyboardAccelerators) a.Invoked += OnAccelerator;
@@ -346,7 +344,7 @@ public sealed partial class EditorPage : Page
         Loaded += (_, __) =>
         {
             MainWindow.SetDragRegion(TopBarDragRegion);
-            TopBarGrid.Padding = new Thickness(6, 2, 6 + MainWindow.CaptionButtonInset, 2);
+            TopBarGrid.Padding = new Thickness(6, 2, 6 + MainWindow.CaptionButtonInset(this), 2);
             UpdateTitlePassthrough();
         };
         Unloaded += (_, __) => SetTitlePassthrough(null);
@@ -354,8 +352,8 @@ public sealed partial class EditorPage : Page
         // Switching windows (Alt+Tab, touchpad swipe, clicking elsewhere) can cut
         // a pen/mouse gesture off without a release, leaving the canvas stuck in
         // it so the pen draws nothing. Reset input when the window loses focus.
-        Loaded += (_, __) => { if (App.MainWindow is { } w) { w.Activated -= OnWindowActivated; w.Activated += OnWindowActivated; } };
-        Unloaded += (_, __) => { if (App.MainWindow is { } w) w.Activated -= OnWindowActivated; };
+        Loaded += (_, __) => { if (MainWindow.Of(this) is { } w) { w.Activated -= OnWindowActivated; w.Activated += OnWindowActivated; } };
+        Unloaded += (_, __) => { if (MainWindow.Of(this) is { } w) w.Activated -= OnWindowActivated; };
 
         // Click-to-rename title.
         // The title moves (not just resizes) when toolbar buttons beside it
@@ -396,7 +394,6 @@ public sealed partial class EditorPage : Page
         ApplyToolbarScaleForWidth(ActualWidth > 0 ? ActualWidth : 1200);
         ApplyToolbarOrder();
         ApplyToolbarVisibility();
-        ToolbarGlass.RefractionSource = Canvas;
         ToolbarGlass.IsGlassActive = s.LiquidGlassEnabled;
         if (_doc is not null) ZoomPanel.Visibility = s.HideZoomBar ? Visibility.Collapsed : Visibility.Visible;
 
@@ -406,10 +403,15 @@ public sealed partial class EditorPage : Page
         RefreshPasteAffordance();
     }
 
+    private void SetWindowTitle(string title)
+    {
+        if (MainWindow.Of(this) is { } w) w.Title = title;
+    }
+
     protected override void OnNavigatedFrom(NavigationEventArgs e)
     {
         base.OnNavigatedFrom(e);
-        App.MainWindow!.Title = "YuNotes";
+        SetWindowTitle("YuNotes");
         if (_presenting) ExitPresentation();
         Windows.ApplicationModel.DataTransfer.Clipboard.ContentChanged -= OnClipboardChanged;
         SaveLastPage();
@@ -472,10 +474,10 @@ public sealed partial class EditorPage : Page
             };
             await dlg.ShowAsync();
             // Close the tab that failed; go Home only if it was the last one.
-            int failed = s_tabs.FindIndex(t => SamePath(t.Path, path));
-            if (failed >= 0) s_tabs.RemoveAt(failed);
-            if (s_tabs.Count == 0) { s_activeTab = -1; MainWindow.GoBack(); }
-            else ActivateTab(Math.Min(Math.Max(failed, 0), s_tabs.Count - 1));
+            int failed = _tabs.FindIndex(t => SamePath(t.Path, path));
+            if (failed >= 0) _tabs.RemoveAt(failed);
+            if (_tabs.Count == 0) { _activeTab = -1; MainWindow.GoBack(this); }
+            else ActivateTab(Math.Min(Math.Max(failed, 0), _tabs.Count - 1));
         }
         finally
         {
@@ -528,7 +530,7 @@ public sealed partial class EditorPage : Page
     {
         try
         {
-            MainWindow.SetTitleBarPassthrough(
+            MainWindow.SetTitleBarPassthrough(this, 
                 rect is { } r ? new[] { r } : Array.Empty<Windows.Graphics.RectInt32>());
             // Cache only on success so a failed attempt is retried on the next
             // layout pass instead of being treated as applied.
@@ -630,7 +632,7 @@ public sealed partial class EditorPage : Page
             }
         }
 
-        App.MainWindow!.Title = $"YuNotes — {System.IO.Path.GetFileName(_doc.Info.FilePath)}";
+        SetWindowTitle($"YuNotes — {System.IO.Path.GetFileName(_doc.Info.FilePath)}");
         SyncActiveTabFromDoc();
         // Persist the new embedded title.
         _doc.IsDirty = true;
@@ -649,7 +651,7 @@ public sealed partial class EditorPage : Page
         _doc = d;
         var fileName = System.IO.Path.GetFileName(d.Info.FilePath);
         if (string.IsNullOrEmpty(fileName)) fileName = d.Info.Title;
-        App.MainWindow!.Title = $"YuNotes — {fileName}";
+        SetWindowTitle($"YuNotes — {fileName}");
         TopBarTitle.Text = d.Info.Title;
         UpdateSaveStateUi();
         var settings = App.Services.Settings.Current;
@@ -715,6 +717,9 @@ public sealed partial class EditorPage : Page
                             // in page-space — shift all text runs to match.
                             if (p.BackgroundLeft > 0)
                                 foreach (var r in p.TextRuns) r.X += p.BackgroundLeft;
+                            // Likewise below space inserted into the page.
+                            if (PageGaps.Any(p))
+                                foreach (var r in p.TextRuns) r.Y = PageGaps.ToPage(p, r.Y);
                         }
                     }
                     // PDF text arrived after the note opened: refresh an open search.
@@ -848,7 +853,7 @@ public sealed partial class EditorPage : Page
                 if (!_presenting) ShowNewTabPicker();
                 args.Handled = true; break;
             case VirtualKey.W when sender.Modifiers == VirtualKeyModifiers.Control:
-                if (!_presenting) _ = CloseTabAsync(s_activeTab);
+                if (!_presenting) _ = CloseTabAsync(_activeTab);
                 args.Handled = true; break;
             case VirtualKey.Tab when sender.Modifiers.HasFlag(VirtualKeyModifiers.Control):
                 if (!_presenting) _ = CycleTabAsync(sender.Modifiers.HasFlag(VirtualKeyModifiers.Shift) ? -1 : +1);
@@ -897,7 +902,7 @@ public sealed partial class EditorPage : Page
 
     private void InitPicker(object picker)
     {
-        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow);
+        var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(MainWindow.Of(this));
         WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
     }
 

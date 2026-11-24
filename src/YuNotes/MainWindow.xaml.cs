@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
 using Microsoft.UI;
 using Microsoft.UI.Composition.SystemBackdrops;
 using Microsoft.UI.Windowing;
@@ -16,8 +19,59 @@ public sealed partial class MainWindow : Window
 {
     private readonly AppWindow _appWindow;
 
-    public MainWindow()
+    // ─── Windows ────────────────────────────────────────────────────────────────
+    // YuNotes can have several windows, each with its own set of editor tabs.
+    // A note is open in at most one window: opening it again (from Home, the
+    // + menu or Explorer) switches to the window and tab that already has it.
+
+    private static readonly List<MainWindow> s_windows = new();
+
+    // Every open window, most recently used last.
+    public static IReadOnlyList<MainWindow> All => s_windows;
+
+    // The window the user last worked in.
+    public static MainWindow? Active => s_windows.Count > 0 ? s_windows[^1] : null;
+
+    // This window's editor tabs. They outlive the editor page, so going Home
+    // and back keeps them.
+    internal EditorTabs Tabs { get; }
+
+    // The window an element (or a page, through its frame) belongs to.
+    public static MainWindow? Of(UIElement? element)
     {
+        if (element is Microsoft.UI.Xaml.Controls.Page { Frame: { } f }
+            && s_windows.FirstOrDefault(w => ReferenceEquals(w.RootFrame, f)) is { } byFrame)
+            return byFrame;
+        if (element?.XamlRoot is { } root
+            && s_windows.FirstOrDefault(w => ReferenceEquals(w.Content?.XamlRoot, root)) is { } byRoot)
+            return byRoot;
+        return Active;
+    }
+
+    // The window and tab holding `path`, if any window has it open.
+    internal static (MainWindow Window, OpenTab Tab)? FindOpenTab(string path)
+    {
+        foreach (var w in s_windows)
+            if (w.Tabs.Find(path) is { } t) return (w, t);
+        return null;
+    }
+
+    public MainWindow() : this(null) { }
+
+    // `tabs`: start in the editor with these tabs (a tab dragged out of another
+    // window), instead of on Home.
+    internal MainWindow(EditorTabs? tabs)
+    {
+        Tabs = tabs ?? new EditorTabs();
+        s_windows.Add(this);
+        Activated += (_, e) =>
+        {
+            if (e.WindowActivationState == WindowActivationState.Deactivated) return;
+            s_windows.Remove(this);
+            s_windows.Add(this);
+        };
+        Closed += (_, __) => s_windows.Remove(this);
+
         InitializeComponent();
         Title = "YuNotes";
 
@@ -68,8 +122,59 @@ public sealed partial class MainWindow : Window
             e.Handled = true;
         };
 
-        RootFrame.Navigate(typeof(HomePage));
+        if (tabs is not null && tabs.List.Count > 0) RootFrame.Navigate(typeof(EditorPage), EditorResume.Instance);
+        else RootFrame.Navigate(typeof(HomePage));
     }
+
+    // Opens a note file (from Explorer or a second launch of YuNotes): switches
+    // to it where it is already open, otherwise adds it as a tab in the window
+    // last used.
+    public static void OpenFile(string path)
+    {
+        if (FindOpenTab(path) is { } open)
+        {
+            open.Window.ShowTab(open.Tab.Path);
+            return;
+        }
+        var w = Active ?? new MainWindow();
+        if (w.RootFrame.Content is EditorPage editor) _ = editor.OpenInNewTabAsync(path);
+        else w.NavigateTo<EditorPage>(new EditorTabRequest(path), new SuppressNavigationTransitionInfo());
+        w.BringToFront();
+    }
+
+    // Brings this window forward and shows the tab holding `path`.
+    internal void ShowTab(string path)
+    {
+        if (RootFrame.Content is EditorPage editor) _ = editor.SwitchToPathAsync(path);
+        else NavigateTo<EditorPage>(new EditorTabRequest(path), new SuppressNavigationTransitionInfo());
+        BringToFront();
+    }
+
+    public void BringToFront()
+    {
+        if (_appWindow.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } op) op.Restore();
+        Activate();
+        SetForegroundWindow(WindowNative.GetWindowHandle(this));
+    }
+
+    // Places the window with its top-left corner near the mouse pointer (a tab
+    // dragged out lands where it was dropped), at the given size.
+    internal void PlaceAtCursor(Windows.Graphics.SizeInt32 size)
+    {
+        if (size.Width > 200 && size.Height > 200) _appWindow.Resize(size);
+        if (GetCursorPos(out var p)) _appWindow.Move(new Windows.Graphics.PointInt32(p.X - 120, p.Y - 16));
+    }
+
+    internal Windows.Graphics.SizeInt32 Size => _appWindow.Size;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X, Y; }
+
+    [DllImport("user32.dll")]
+    private static extern bool GetCursorPos(out POINT p);
+
+    [DllImport("user32.dll")]
+    private static extern bool SetForegroundWindow(IntPtr hwnd);
 
     // Set once the user has resolved the unsaved-changes prompt (Save or Don't save),
     // so the re-issued Close() sails through instead of re-prompting.
@@ -112,15 +217,25 @@ public sealed partial class MainWindow : Window
     // it (NavigationThemeTransition reverses it for NavigationMode.Back).
     private readonly System.Collections.Generic.Stack<NavigationTransitionInfo?> _transitionStack = new();
 
-    public static void Navigate<T>(object? parameter = null, NavigationTransitionInfo? transition = null)
+    // Navigates the window `owner` sits in.
+    public static void Navigate<T>(UIElement owner, object? parameter = null, NavigationTransitionInfo? transition = null)
+        where T : Microsoft.UI.Xaml.Controls.Page
+        => Of(owner)?.NavigateTo<T>(parameter, transition);
+
+    public void NavigateTo<T>(object? parameter = null, NavigationTransitionInfo? transition = null)
         where T : Microsoft.UI.Xaml.Controls.Page
     {
-        if (App.MainWindow is MainWindow mw)
+        // A note that is already open in another window: go there instead of
+        // opening a second, separately edited copy.
+        if (typeof(T) == typeof(EditorPage) && EditorPage.PathOf(parameter) is { } path
+            && FindOpenTab(path) is { } open && !ReferenceEquals(open.Window, this))
         {
-            mw._navTheme.DefaultNavigationTransitionInfo = transition ?? new EntranceNavigationTransitionInfo();
-            mw._transitionStack.Push(transition);
-            mw.RootFrame.Navigate(typeof(T), parameter);
+            open.Window.ShowTab(open.Tab.Path);
+            return;
         }
+        _navTheme.DefaultNavigationTransitionInfo = transition ?? new EntranceNavigationTransitionInfo();
+        _transitionStack.Push(transition);
+        RootFrame.Navigate(typeof(T), parameter);
     }
 
     // The system caption buttons are drawn over our content; keep their chrome
@@ -151,7 +266,7 @@ public sealed partial class MainWindow : Window
     // as the window drag region while that page is shown.
     public static void SetDragRegion(UIElement element)
     {
-        if (App.MainWindow is MainWindow mw) mw.SetTitleBar(element);
+        if (Of(element) is MainWindow mw) mw.SetTitleBar(element);
     }
 
     // Carves interactive rects out of the SetTitleBar drag region so they get
@@ -160,9 +275,9 @@ public sealed partial class MainWindow : Window
     // AppWindow resolved from this window's HWND in the constructor: going
     // through App.MainWindow.AppWindow instead threw a NullReferenceException
     // on every editor open, leaving the title unclickable.
-    public static void SetTitleBarPassthrough(params Windows.Graphics.RectInt32[] rects)
+    public static void SetTitleBarPassthrough(UIElement owner, params Windows.Graphics.RectInt32[] rects)
     {
-        if (App.MainWindow is not MainWindow mw) return;
+        if (Of(owner) is not MainWindow mw) return;
         var src = Microsoft.UI.Input.InputNonClientPointerSource.GetForWindowId(mw._appWindow.Id)
                   ?? throw new InvalidOperationException(
                          $"InputNonClientPointerSource.GetForWindowId returned null for window {mw._appWindow.Id.Value}");
@@ -172,29 +287,26 @@ public sealed partial class MainWindow : Window
     // Presentation mode: full screen hides the taskbar and caption buttons;
     // switching back to the overlapped presenter restores the previous size
     // and maximized state.
-    public static void SetFullScreen(bool on)
+    public static void SetFullScreen(UIElement owner, bool on)
     {
-        if (App.MainWindow is not MainWindow mw) return;
+        if (Of(owner) is not MainWindow mw) return;
         mw._appWindow.SetPresenter(on ? AppWindowPresenterKind.FullScreen : AppWindowPresenterKind.Overlapped);
     }
 
     // Width in DIPs the caption buttons occupy at the window's top-right. Pages
     // pad their top bars by this so content doesn't sit under min/max/close.
-    public static double CaptionButtonInset
+    public static double CaptionButtonInset(UIElement owner)
     {
-        get
-        {
-            if (App.MainWindow is not MainWindow mw) return 138;
-            var tb = mw._appWindow.TitleBar;
-            double scale = mw.RootGrid.XamlRoot?.RasterizationScale ?? 1.0;
-            if (tb is null || tb.RightInset <= 0 || scale <= 0) return 138;
-            return tb.RightInset / scale;
-        }
+        if (Of(owner) is not MainWindow mw) return 138;
+        var tb = mw._appWindow.TitleBar;
+        double scale = mw.RootGrid.XamlRoot?.RasterizationScale ?? 1.0;
+        if (tb is null || tb.RightInset <= 0 || scale <= 0) return 138;
+        return tb.RightInset / scale;
     }
 
-    public static void GoBack()
+    public static void GoBack(UIElement owner)
     {
-        if (App.MainWindow is MainWindow mw)
+        if (Of(owner) is MainWindow mw)
         {
             if (mw.RootFrame.CanGoBack)
             {

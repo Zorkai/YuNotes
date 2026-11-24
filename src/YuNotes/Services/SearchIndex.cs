@@ -489,7 +489,7 @@ public sealed class SearchIndex
             if (readInk)
                 page.Boxes.AddRange(await HandwritingRecognizer.RecognizeAsync(p.Strokes).ConfigureAwait(false));
             if (p.SourcePageIndex is int si && si >= 0 && si < pdfPages.Count)
-                page.Boxes.AddRange(PdfBoxes(pdfPages[si], p.BackgroundLeft));
+                page.Boxes.AddRange(PdfBoxes(pdfPages[si], p.BackgroundLeft, p));
             page.Boxes.AddRange(TypedBoxes(p.Texts));
             if (BookmarkBox(p) is { } bm) page.Boxes.Add(bm);
             entry.Pages.Add(page);
@@ -497,11 +497,15 @@ public sealed class SearchIndex
         return entry;
     }
 
-    public static List<TextBox> PdfBoxes(IEnumerable<TextRun> runs, double shiftX) =>
+    // `page`: place the words where the page shows them, below any space
+    // inserted above them.
+    public static List<TextBox> PdfBoxes(IEnumerable<TextRun> runs, double shiftX, NotePage? page = null) =>
         runs.Select(r => new TextBox
         {
             T = r.Text, K = TextSource.Pdf,
-            X = (float)(r.X + shiftX), Y = (float)r.Y, W = (float)r.Width, H = (float)r.Height,
+            X = (float)(r.X + shiftX),
+            Y = (float)(page is not null && page.Gaps.Count > 0 ? PageGaps.ToPage(page, r.Y) : r.Y),
+            W = (float)r.Width, H = (float)r.Height,
         }).ToList();
 
     // A page's bookmark label is searchable too; its match marks the page's

@@ -171,7 +171,7 @@ public sealed partial class SettingsPage : Page
         _toastTimer.IsRepeating = false;
         _toastTimer.Tick += (_, _) => HideToast();
 
-        BackBtn.Click += (_, _) => { Commit(); MainWindow.GoBack(); };
+        BackBtn.Click += (_, _) => { Commit(); MainWindow.GoBack(this); };
         UndoBtn.Click += (_, _) => UndoLast();
         Unloaded += (_, _) => Commit();
 
@@ -236,7 +236,7 @@ public sealed partial class SettingsPage : Page
         Loaded += async (_, _) =>
         {
             MainWindow.SetDragRegion(HeaderDragRegion);
-            HeaderGrid.Padding = new Thickness(12, 0, 12 + MainWindow.CaptionButtonInset, 0);
+            HeaderGrid.Padding = new Thickness(12, 0, 12 + MainWindow.CaptionButtonInset(this), 0);
             await FillHandwritingLanguagesAsync();
             LoadIntoUi();
             _committed = App.Services.Settings.Snapshot();
@@ -1237,7 +1237,7 @@ public sealed partial class SettingsPage : Page
     {
         var p = new FolderPicker();
         p.FileTypeFilter.Add("*");
-        WinRT.Interop.InitializeWithWindow.Initialize(p, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
+        WinRT.Interop.InitializeWithWindow.Initialize(p, WinRT.Interop.WindowNative.GetWindowHandle(MainWindow.Of(this)));
         var f = await p.PickSingleFolderAsync();
         if (f is not null && f.Path != FolderBox.Text) { FolderBox.Text = f.Path; OnChanged(FolderBox); }
     }
@@ -1426,7 +1426,7 @@ public sealed partial class SettingsPage : Page
             var save = new FileSavePicker();
             save.FileTypeChoices.Add("Text file", new List<string> { ".txt" });
             save.SuggestedFileName = $"YuNotes-debug-{DateTime.Now:yyyyMMdd-HHmmss}";
-            WinRT.Interop.InitializeWithWindow.Initialize(save, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
+            WinRT.Interop.InitializeWithWindow.Initialize(save, WinRT.Interop.WindowNative.GetWindowHandle(MainWindow.Of(this)));
             var file = await save.PickSaveFileAsync();
             if (file is null) return;
             var body = $"YuNotes debug info {DateTime.Now:O}\n\nPointer log:\n{_log}\n";

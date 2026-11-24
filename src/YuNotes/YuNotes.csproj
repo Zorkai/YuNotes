@@ -29,6 +29,9 @@
     <AppxBundle>Never</AppxBundle>
     <AppxSymbolPackageEnabled>false</AppxSymbolPackageEnabled>
     <GenerateAppxPackageOnBuild>false</GenerateAppxPackageOnBuild>
+    <!-- Program.cs supplies Main, so a second launch (e.g. opening a file from
+         Explorer) can hand its file to the YuNotes that's already running. -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
