@@ -38,6 +38,20 @@ public sealed partial class InkCanvasControl : UserControl
     public event EventHandler<YuNotes.Tools.ToolKind>? MomentaryToolStart;
     public event EventHandler? MomentaryToolEnd;
     public event EventHandler? ActivePageScrolled;
+    // True while any page is showing a live (uncommitted) stroke.
+    public event EventHandler<bool>? LiveInkActiveChanged;
+    // Pages currently showing live ink. A stroke handed between pages can
+    // raise the new page's start before the old page's end, so count instead
+    // of forwarding each page's flag.
+    private int _liveInkPages;
+
+    private void OnPageLiveInkActiveChanged(object? sender, bool active)
+    {
+        bool was = _liveInkPages > 0;
+        _liveInkPages = Math.Max(0, _liveInkPages + (active ? 1 : -1));
+        bool now = _liveInkPages > 0;
+        if (now != was) LiveInkActiveChanged?.Invoke(this, now);
+    }
 
     public InkCanvasControl()
     {
@@ -271,6 +285,12 @@ public sealed partial class InkCanvasControl : UserControl
     {
         PagesPanel.Children.Clear();
         _pageCanvases.Clear();
+        // Discarded pages never report their live ink ending.
+        if (_liveInkPages > 0)
+        {
+            _liveInkPages = 0;
+            LiveInkActiveChanged?.Invoke(this, false);
+        }
         _pullZone = null;
         _pullRingHost = null;
         if (Document is null || _renderer is null || _palm is null || _router is null) return;
@@ -314,6 +334,7 @@ public sealed partial class InkCanvasControl : UserControl
             canvas.MomentaryToolStart += (_, kind) => MomentaryToolStart?.Invoke(this, kind);
             canvas.MomentaryToolEnd += (_, __) => MomentaryToolEnd?.Invoke(this, EventArgs.Empty);
             canvas.RectSelectionCompleted += (_, __) => RectSelectionCompleted?.Invoke(this, EventArgs.Empty);
+            canvas.LiveInkActiveChanged += OnPageLiveInkActiveChanged;
             canvas.SelectionDragDropped += OnSelectionDragDropped;
             canvas.ExtensionDragCompleted += OnExtensionDragCompleted;
             canvas.ExtendModeActive = ExtendModeActive;

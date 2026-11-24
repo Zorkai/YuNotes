@@ -64,6 +64,8 @@ public sealed partial class LiquidGlassBackdrop : Grid
     private SpriteVisual? _visual;
     private CompositionEffectBrush? _brush;
     private CompositionVisualSurface? _visualSurface;  // live capture feeding the refraction
+    private CompositionBrush? _refractionBrush;        // zoomed brush over _visualSurface
+    private bool _refractionPaused;
     private CompositionDrawingSurface? _edgeSurface;   // refraction band alpha
     private CompositionDrawingSurface? _rimSurface;    // specular border + sheen
 
@@ -90,6 +92,27 @@ public sealed partial class LiquidGlassBackdrop : Grid
     /// Must not be an ancestor of this control.
     /// </summary>
     public UIElement? RefractionSource { get; set; }
+
+    /// <summary>
+    /// Suspends the live refraction capture (e.g. while a stroke is being
+    /// drawn). The capture re-renders the whole source subtree whenever any of
+    /// it changes — ink drawn anywhere on the canvas, not just behind the
+    /// toolbar — which re-runs the edge blur every frame. That is invisible on
+    /// a desktop GPU but a steady per-frame cost on integrated laptop GPUs.
+    /// While paused the edge band samples the plain backdrop instead (the same
+    /// fallback used without a source), which the compositor only re-renders
+    /// when the region behind the toolbar itself changes.
+    /// </summary>
+    public bool RefractionPaused
+    {
+        get => _refractionPaused;
+        set
+        {
+            if (_refractionPaused == value) return;
+            _refractionPaused = value;
+            ApplyRefractionPause();
+        }
+    }
 
     /// <summary>Switches between the glass effect and the plain Background brush.</summary>
     public bool IsGlassActive
@@ -342,7 +365,8 @@ public sealed partial class LiquidGlassBackdrop : Grid
         _brush?.Dispose();
         _brush = factory.CreateBrush();
         _brush.SetSourceParameter("backdrop", compositor.CreateBackdropBrush());
-        _brush.SetSourceParameter("backdrop2", CreateRefractionBrush(compositor, w, h));
+        _refractionBrush = CreateRefractionBrush(compositor, w, h);
+        ApplyRefractionPause();
         _brush.SetSourceParameter("edge", CreateMaskBrush(compositor, _edgeSurface!));
         _brush.SetSourceParameter("rim", CreateMaskBrush(compositor, _rimSurface!));
     }
@@ -371,6 +395,24 @@ public sealed partial class LiquidGlassBackdrop : Grid
         return brush;
     }
 
+    private void ApplyRefractionPause()
+    {
+        if (_brush is null || _refractionBrush is null) return;
+        bool live = !_refractionPaused && _visualSurface is not null;
+        if (_visualSurface is not null)
+        {
+            // Detaching the source stops the capture outright, rather than
+            // relying on an unbound surface not being re-rendered.
+            _visualSurface.SourceVisual = live && RefractionSource is not null
+                ? ElementCompositionPreview.GetElementVisual(RefractionSource)
+                : null;
+        }
+        _brush.SetSourceParameter("backdrop2", live
+            ? _refractionBrush
+            : _brush.Compositor.CreateBackdropBrush());
+        if (live) UpdateRefractionOffset();
+    }
+
     /// <summary>
     /// Keeps the captured region aligned with the panel as it is dragged or
     /// re-docked. Called from LayoutUpdated; the transform compare makes the
@@ -378,7 +420,7 @@ public sealed partial class LiquidGlassBackdrop : Grid
     /// </summary>
     private void UpdateRefractionOffset()
     {
-        if (_visualSurface is null || RefractionSource is null || !IsLoaded) return;
+        if (_visualSurface is null || RefractionSource is null || !IsLoaded || _refractionPaused) return;
         var origin = TransformToVisual(RefractionSource).TransformPoint(new Point(0, 0));
         var offset = new Vector2((float)origin.X, (float)origin.Y);
         if (offset == _lastSourceOffset) return;
@@ -401,6 +443,7 @@ public sealed partial class LiquidGlassBackdrop : Grid
         _visual?.Dispose(); _visual = null;
         _brush?.Dispose(); _brush = null;
         _visualSurface?.Dispose(); _visualSurface = null;
+        _refractionBrush = null;
         DisposeSurfaces();
         _builtSize = default;
     }

@@ -153,6 +153,9 @@ public sealed partial class EditorPage : Page
         // path (ColorPicker / WidthPicker rebuild) was making every gesture feel slow.
         // RectSelectionCompleted is no longer used (copy-as-image is now a toolbar button).
 
+        // Live glass refraction re-captures the whole canvas on every change;
+        // freeze it to the plain backdrop while a stroke is being drawn.
+        Canvas.LiveInkActiveChanged += (_, active) => ToolbarGlass.RefractionPaused = active;
         Canvas.MomentaryToolStart += (_, kind) =>
         {
             if (_selected == kind) return;

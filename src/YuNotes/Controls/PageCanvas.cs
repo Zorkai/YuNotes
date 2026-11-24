@@ -76,6 +76,7 @@ public sealed class PageCanvas : ContentControl
     // window per frame (~half the drawing-time GPU cost; see
     // prototypes/InkPerfLab).
     private LiveInkSurface? _liveInk;
+    private bool _liveInkActive;   // last value raised through LiveInkActiveChanged
 
     // ── Hi-res PDF background (zoomed in) ───────────────────────────────────
     // The imported background PNG is rasterized at 300 DPI (2× the coord
@@ -274,6 +275,11 @@ public sealed class PageCanvas : ContentControl
     public event EventHandler<ToolKind>? MomentaryToolStart;
     public event EventHandler? MomentaryToolEnd;
     public event EventHandler? RectSelectionCompleted;
+
+    // Raised when a live stroke starts (true) and when it is committed,
+    // cancelled or dropped (false). EditorPage pauses the toolbar's live glass
+    // refraction in between so drawing doesn't re-blur it every frame.
+    public event EventHandler<bool>? LiveInkActiveChanged;
 
     // Raised when a Move drag is released. InkCanvasControl uses it to hand the
     // selection to whichever page the pointer ended over (a cross-page move);
@@ -475,6 +481,15 @@ public sealed class PageCanvas : ContentControl
     {
         CancelLiveInkSync();
         _liveInk?.Clear();
+        ReportLiveInkActive();
+    }
+
+    private void ReportLiveInkActive()
+    {
+        bool active = _liveInk?.IsActive == true;
+        if (active == _liveInkActive) return;
+        _liveInkActive = active;
+        LiveInkActiveChanged?.Invoke(this, active);
     }
 
     private void SyncLiveInkSurface(Stroke s)
@@ -492,6 +507,7 @@ public sealed class PageCanvas : ContentControl
             alpha = (byte)Math.Min(140, alpha == 255 ? 110 : alpha);
         _liveInk.Sync(s, Color.FromArgb(alpha, s.Color.R, s.Color.G, s.Color.B),
             (float)Page.Width, (float)Page.Height);
+        ReportLiveInkActive();   // also catches a device-lost Clear inside Sync
     }
 
     // Prediction lead: extrapolate up to TWO samples ahead (never less than
