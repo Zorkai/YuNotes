@@ -69,7 +69,7 @@ public sealed partial class EditorPage
             KeyboardAccelerators.Add(a);
         }
 
-        MainWindow.SetFullScreen(true);
+        MainWindow.SetFullScreen(this, true);
         Canvas.AddPagesAllowed = false;   // no "+" or pull-to-add while presenting
         SelectTool(ToolKind.Laser);
         UpdatePresentPageLabel(page);
@@ -95,7 +95,7 @@ public sealed partial class EditorPage
 
         Canvas.ClearLaser();
         Canvas.AddPagesAllowed = true;
-        MainWindow.SetFullScreen(false);
+        MainWindow.SetFullScreen(this, false);
         SelectTool(_toolBeforePresent);
 
         // Back to the zoom the user had, on the page they ended on.

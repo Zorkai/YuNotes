@@ -26,7 +26,10 @@ public sealed class PdfContainerService
     // Pages are only cloned for reuse from a container written the same way —
     // an older file's full-page raster flattens get re-written as vectors once.
     private const string FlattenFormatKey = "/YuNotesFlatten";
-    private const string FlattenFormat = "vector-1";
+    // vector-2: widened imported pages are written at their full width (they
+    // were squeezed into the original page size before), so pages saved by
+    // vector-1 are re-rendered once instead of reused.
+    private const string FlattenFormat = "vector-2";
 
     // Each pages entry is drawn as vectors onto a white page (PdfVectorWriter); a
     // null entry yields a blank white page.
@@ -61,20 +64,37 @@ public sealed class PdfContainerService
     public void WriteWithSource(PageVectorExport?[] overlays, double[] widths, double[] heights,
                                 int?[] sourceIndices, byte[] sourcePdfBytes,
                                 byte[]? embeddedData, string outputPath,
-                                int?[]? reuseIndices = null, byte[]? previousContainer = null)
+                                int?[]? reuseIndices = null, byte[]? previousContainer = null,
+                                System.Collections.Generic.IReadOnlyList<YuNotes.Models.NotePage>? notePages = null)
     {
         using var prev = OpenPrevious(previousContainer, reuseIndices);
         using var source = OpenSource(sourcePdfBytes);
         using var doc = new PdfDocument();
+        // Opened only if a page was widened or had space inserted (see AddRebuiltSourcePage).
+        MemoryStream? formStream = null;
+        XPdfForm? form = null;
 
         for (int i = 0; i < overlays.Length; i++)
         {
             if (TryReusePage(doc, prev, reuseIndices, i)) continue;
             PdfPage page;
             var srcIdx = sourceIndices[i];
-            if (srcIdx is int idx && idx >= 0 && idx < source.PageCount)
+            if (srcIdx is int idx && idx >= 0 && idx < source.PageCount
+                && notePages is not null && i < notePages.Count && NeedsRebuiltPage(notePages[i]))
             {
-                page = doc.AddPage(source.Pages[idx]);   // clones the source page's vector content
+                formStream ??= new MemoryStream(sourcePdfBytes, 0, sourcePdfBytes.Length, writable: false, publiclyVisible: true);
+                form ??= XPdfForm.FromStream(formStream);
+                page = AddRebuiltSourcePage(doc, source.Pages[idx], form, idx, notePages[i]);
+                if (overlays[i] is { } withTemplate)
+                {
+                    using var tg = XGraphics.FromPdfPage(page, XGraphicsPdfPageOptions.Append);
+                    PdfVectorWriter.DrawOwnedTemplate(tg, notePages[i], withTemplate.Template,
+                                                      page.Width.Point, page.Height.Point);
+                }
+            }
+            else if (srcIdx is int idx2 && idx2 >= 0 && idx2 < source.PageCount)
+            {
+                page = doc.AddPage(source.Pages[idx2]);   // clones the source page's vector content
             }
             else
             {
@@ -92,6 +112,50 @@ public sealed class PdfContainerService
         }
 
         Finish(doc, embeddedData, sourcePdfBytes, outputPath);
+        form?.Dispose();
+        formStream?.Dispose();
+    }
+
+    // A source page that no longer has the original's size: widened to the
+    // left/right, or with blank space inserted. Cloning the original page
+    // would keep its old size and squeeze the notes into it, so these get a
+    // new page at the same scale as the original — wider and/or taller.
+    private static bool NeedsRebuiltPage(YuNotes.Models.NotePage note)
+    {
+        if (YuNotes.Models.PageGaps.Any(note)) return true;
+        if (note.BackgroundLeft > 0.5) return true;
+        return note.BackgroundContentWidth > 0
+            && note.Width - note.BackgroundLeft - note.BackgroundContentWidth > 0.5;
+    }
+
+    // The new page for NeedsRebuiltPage: the original page is drawn onto it
+    // (still as vectors, so its text stays selectable) at the PDF's place in
+    // the widened page, once per piece when space was inserted — each piece
+    // shifted down past the space above it and clipped to its own rows.
+    private static PdfPage AddRebuiltSourcePage(PdfDocument doc, PdfPage src, XPdfForm form, int srcIndex,
+                                              YuNotes.Models.NotePage note)
+    {
+        double srcW = src.Width.Point, srcH = src.Height.Point;
+        double bgLeft = note.BackgroundLeft;
+        double bgW = note.BackgroundContentWidth > 0 ? note.BackgroundContentWidth : note.Width - bgLeft;
+        double bgH = YuNotes.Models.PageGaps.BackgroundHeight(note);
+        if (!(bgW > 0) || !(bgH > 0)) return doc.AddPage(src);
+        double sx = srcW / bgW, sy = srcH / bgH;   // points per page unit
+
+        var page = doc.AddPage();
+        page.Width = XUnit.FromPoint(note.Width * sx);
+        page.Height = XUnit.FromPoint(note.Height * sy);
+        form.PageIndex = srcIndex;
+        using var gfx = XGraphics.FromPdfPage(page);
+        gfx.DrawRectangle(XBrushes.White, 0, 0, page.Width.Point, page.Height.Point);
+        foreach (var (segY, segH, dstY) in YuNotes.Models.PageGaps.Segments(note))
+        {
+            var st = gfx.Save();
+            gfx.IntersectClip(new XRect(bgLeft * sx, dstY * sy, bgW * sx, segH * sy));
+            gfx.DrawImage(form, bgLeft * sx, (dstY - segY) * sy, srcW, srcH);
+            gfx.Restore(st);
+        }
+        return page;
     }
 
     private static void Finish(PdfDocument doc, byte[]? embeddedData, byte[]? sourcePdfBytes, string outputPath)

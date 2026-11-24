@@ -128,8 +128,8 @@ public sealed partial class EditorPage
             await Task.Run(() => App.Services.Versions.Restore(path, version));
             // Reopen the note fresh from the restored file (in this same tab).
             DropCachedTab(path);
-            if (ActiveTab is not null) ActivateTab(s_activeTab);
-            else { MainWindow.GoBack(); MainWindow.Navigate<EditorPage>(path); }
+            if (ActiveTab is not null) ActivateTab(_activeTab);
+            else { MainWindow.GoBack(this); MainWindow.Navigate<EditorPage>(this, path); }
         }
         catch (Exception ex) { await Notify("Restore failed", ex.Message); }
     }

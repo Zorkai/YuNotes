@@ -124,7 +124,7 @@ public sealed partial class HomePage
         btn.Click += (_, __) =>
         {
             TouchRecent(hit.Path);
-            MainWindow.Navigate<EditorPage>(new EditorOpenRequest(hit.Path, hit.Match.PageIndex, query),
+            MainWindow.Navigate<EditorPage>(this, new EditorOpenRequest(hit.Path, hit.Match.PageIndex, query),
                                             new DrillInNavigationTransitionInfo());
         };
         return btn;

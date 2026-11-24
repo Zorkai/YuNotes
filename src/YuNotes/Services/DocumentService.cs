@@ -195,7 +195,7 @@ public sealed class DocumentService
             var srcIdx = new int?[doc.Pages.Count];
             for (int i = 0; i < doc.Pages.Count; i++) srcIdx[i] = doc.Pages[i].SourcePageIndex;
             container.WriteWithSource(pages, widths, heights, srcIdx, src, blob, pdfPath,
-                                      reusePageIndices, previousContainer);
+                                      reusePageIndices, previousContainer, new List<NotePage>(doc.Pages));
         }
         else
         {
@@ -238,6 +238,7 @@ public sealed class DocumentService
                 TemplateOverride = CloneTemplate(p.TemplateOverride),
                 Bookmark = p.Bookmark
             };
+            np.Gaps.AddRange(PageGaps.Clone(p.Gaps));
             foreach (var st in p.Strokes)
             {
                 var sc = new Stroke { Id = st.Id, Kind = st.Kind, Color = st.Color, Width = st.Width, PressureMode = st.PressureMode };
@@ -521,8 +522,8 @@ public sealed class DocumentService
         using (var cmd = conn.CreateCommand())
         {
             cmd.CommandText = forIndex
-                ? "SELECT id,idx,width,height,NULL AS background_png,template_json,source_page_index,background_left,background_width,bookmark FROM page ORDER BY idx"
-                : "SELECT id,idx,width,height,background_png,template_json,source_page_index,background_left,background_width,bookmark FROM page ORDER BY idx";
+                ? "SELECT id,idx,width,height,NULL AS background_png,template_json,source_page_index,background_left,background_width,bookmark,gaps_json FROM page ORDER BY idx"
+                : "SELECT id,idx,width,height,background_png,template_json,source_page_index,background_left,background_width,bookmark,gaps_json FROM page ORDER BY idx";
             using var r = cmd.ExecuteReader();
             while (r.Read())
             {
@@ -543,6 +544,7 @@ public sealed class DocumentService
                 if (!r.IsDBNull(7)) p.BackgroundLeft = r.GetDouble(7);
                 if (!r.IsDBNull(8)) p.BackgroundContentWidth = r.GetDouble(8);
                 if (!r.IsDBNull(9)) p.Bookmark = r.GetString(9);
+                if (!r.IsDBNull(10)) PageGaps.FromJson(p, r.GetString(10));
                 doc.Pages.Add(p);
                 pagesById[p.Id] = p;
             }
@@ -676,8 +678,8 @@ public sealed class DocumentService
             p.Index = i;
             using (var cmd = conn.CreateCommand())
             {
-                cmd.CommandText = @"INSERT INTO page(id,idx,width,height,background_png,template_json,source_page_index,background_left,background_width,bookmark)
-                                    VALUES($id,$i,$w,$h,$bg,$tpl,$src,$bl,$bw,$bm)";
+                cmd.CommandText = @"INSERT INTO page(id,idx,width,height,background_png,template_json,source_page_index,background_left,background_width,bookmark,gaps_json)
+                                    VALUES($id,$i,$w,$h,$bg,$tpl,$src,$bl,$bw,$bm,$gaps)";
                 cmd.Parameters.AddWithValue("$id", p.Id);
                 cmd.Parameters.AddWithValue("$i", p.Index);
                 cmd.Parameters.AddWithValue("$w", p.Width);
@@ -689,6 +691,7 @@ public sealed class DocumentService
                 cmd.Parameters.AddWithValue("$bl", p.BackgroundLeft);
                 cmd.Parameters.AddWithValue("$bw", p.BackgroundContentWidth);
                 cmd.Parameters.AddWithValue("$bm", (object?)p.Bookmark ?? DBNull.Value);
+                cmd.Parameters.AddWithValue("$gaps", (object?)PageGaps.ToJson(p) ?? DBNull.Value);
                 cmd.ExecuteNonQuery();
             }
             foreach (var s in p.Strokes)
@@ -766,6 +769,7 @@ public sealed class DocumentService
         try { Exec(c, "ALTER TABLE page ADD COLUMN background_left REAL DEFAULT 0"); } catch { }
         try { Exec(c, "ALTER TABLE page ADD COLUMN background_width REAL DEFAULT 0"); } catch { }
         try { Exec(c, "ALTER TABLE page ADD COLUMN bookmark TEXT"); } catch { }
+        try { Exec(c, "ALTER TABLE page ADD COLUMN gaps_json TEXT"); } catch { }
         Exec(c, @"CREATE TABLE IF NOT EXISTS stroke(
             id TEXT PRIMARY KEY, page_id TEXT, data BLOB)");
         Exec(c, @"CREATE INDEX IF NOT EXISTS idx_stroke_page ON stroke(page_id)");

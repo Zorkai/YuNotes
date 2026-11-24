@@ -170,18 +170,45 @@ public sealed class PageRenderer
                 // when it fully covers the dirty region the base blit underneath is
                 // entirely painted over — skip the expensive cubic upscale of the
                 // full-page bitmap.
-                bool hiResCoversClip = hiResBackground is not null && hiResRect is { } cover &&
+                bool gaps = PageGaps.Any(page);
+                bool hiResCoversClip = !gaps && hiResBackground is not null && hiResRect is { } cover &&
                                        clip is { } cr &&
                                        cover.X <= cr.X + 0.01 && cover.Y <= cr.Y + 0.01 &&
                                        cover.Right >= cr.Right - 0.01 && cover.Bottom >= cr.Bottom - 0.01;
+                // Inserted space splits the background into pieces, each drawn
+                // at its own row; without gaps this is one piece, the whole page.
+                var segments = PageGaps.Segments(page);
+                double bgH = PageGaps.BackgroundHeight(page);
                 if (!hiResCoversClip)
                 {
-                    // Cubic resampling keeps PDF text edges noticeably cleaner than
-                    // the default linear filter when the bitmap is scaled.
-                    ds.DrawImage(backgroundBitmap, new Rect(bgLeft, 0, bgW, page.Height),
-                                 backgroundBitmap.Bounds, 1f, CanvasImageInterpolation.HighQualityCubic);
+                    var bmpH = backgroundBitmap.Bounds.Height;
+                    var bmpW = backgroundBitmap.Bounds.Width;
+                    foreach (var (srcY, srcH, dstY) in segments)
+                    {
+                        if (clip is { } sc && (dstY > sc.Bottom || dstY + srcH < sc.Y)) continue;
+                        // Cubic resampling keeps PDF text edges noticeably cleaner than
+                        // the default linear filter when the bitmap is scaled.
+                        ds.DrawImage(backgroundBitmap, new Rect(bgLeft, dstY, bgW, srcH),
+                                     new Rect(0, srcY / bgH * bmpH, bmpW, srcH / bgH * bmpH),
+                                     1f, CanvasImageInterpolation.HighQualityCubic);
+                    }
                 }
-                if (hiResBackground is not null && hiResRect is { } hr)
+                if (hiResBackground is not null && hiResRect is { } hg && gaps)
+                {
+                    // The crop covers background rows hg.Y..hg.Bottom: draw the part
+                    // of it that falls in each piece.
+                    var px = hiResBackground.Bounds;
+                    foreach (var (srcY, srcH, dstY) in segments)
+                    {
+                        double a = Math.Max(hg.Y, srcY), b = Math.Min(hg.Bottom, srcY + srcH);
+                        if (b <= a) continue;
+                        ds.DrawImage(hiResBackground,
+                            new Rect(hg.X, dstY + (a - srcY), hg.Width, b - a),
+                            new Rect(0, (a - hg.Y) / hg.Height * px.Height, px.Width, (b - a) / hg.Height * px.Height),
+                            1f, CanvasImageInterpolation.HighQualityCubic);
+                    }
+                }
+                else if (hiResBackground is not null && hiResRect is { } hr)
                 {
                     // The crop is rendered at the backing-store scale, so this blit
                     // is normally ~1:1, where linear is visually identical to (and
@@ -209,6 +236,10 @@ public sealed class PageRenderer
                         _templates.DrawTemplate(ds, totalWidth, page.Height, template);
                 if (totalWidth - pdfRight > 0.5f)
                     using (ds.CreateLayer(1f, new Rect(pdfRight, 0, totalWidth - pdfRight, page.Height)))
+                        _templates.DrawTemplate(ds, totalWidth, page.Height, template);
+                // Inserted space is YuNotes' own too.
+                foreach (var (gy, gh) in PageGaps.GapRows(page))
+                    using (ds.CreateLayer(1f, new Rect(pdfLeft, gy, Math.Max(0, pdfRight - pdfLeft), gh)))
                         _templates.DrawTemplate(ds, totalWidth, page.Height, template);
             }
             else
@@ -750,6 +781,20 @@ public sealed class PageRenderer
             FontStyle = t.Italic ? Windows.UI.Text.FontStyle.Italic : Windows.UI.Text.FontStyle.Normal,
             WordWrapping = CanvasWordWrapping.Wrap
         };
+    }
+
+    // Height the text box needs to show all of its text at its current width,
+    // laid out exactly as DrawText lays it out.
+    public static double MeasureTextHeight(TextElement t)
+    {
+        if (!IsFinite(t.Width) || t.Width <= 0) return t.Height;
+        try
+        {
+            using var fmt = CreateTextFormat(t);
+            using var layout = new CanvasTextLayout(CanvasDevice.GetSharedDevice(), t.Text ?? "", fmt, (float)t.Width, 100000f);
+            return layout.LayoutBounds.Height;
+        }
+        catch { return t.Height; }
     }
 
     private void DrawText(CanvasDrawingSession ds, TextElement t)

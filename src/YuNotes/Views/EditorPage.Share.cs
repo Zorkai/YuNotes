@@ -23,7 +23,7 @@ public sealed partial class EditorPage
 
     // DataTransferManager is per window: hook DataRequested once, and hand it
     // whatever the latest Share prepared.
-    private static bool s_shareHooked;
+    private static readonly HashSet<IntPtr> s_shareHooked = new();
     private static (string Title, IReadOnlyList<IStorageItem> Files)? s_pendingShare;
     private bool _sharing;
 
@@ -100,12 +100,11 @@ public sealed partial class EditorPage
             foreach (var p in paths) files.Add(await StorageFile.GetFileFromPathAsync(p));
             s_pendingShare = (title, files);
 
-            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow);
-            if (!s_shareHooked)
+            var hwnd = WinRT.Interop.WindowNative.GetWindowHandle(MainWindow.Of(this));
+            if (s_shareHooked.Add(hwnd))
             {
                 var dtm = DataTransferManagerInterop.GetForWindow(hwnd);
                 dtm.DataRequested += OnShareDataRequested;
-                s_shareHooked = true;
             }
             DataTransferManagerInterop.ShowShareUIForWindow(hwnd);
         }

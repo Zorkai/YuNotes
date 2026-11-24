@@ -673,6 +673,7 @@ public sealed partial class EditorPage
         if (Canvas.HasSelection)
         {
             SyncSelectionColorPicker();
+            SelToTextBtn.Visibility = Canvas.SelectionHasPenInk ? Visibility.Visible : Visibility.Collapsed;
             SelectionActions.Visibility = Visibility.Visible;
             PositionSelectionActions();
         }

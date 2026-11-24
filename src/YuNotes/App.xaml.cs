@@ -9,7 +9,9 @@ namespace YuNotes;
 
 public partial class App : Application
 {
-    public static Window? MainWindow { get; private set; }
+    // The window the user last worked in (YuNotes can have several).
+    public static Window? MainWindow => YuNotes.MainWindow.Active;
+    private static Microsoft.UI.Dispatching.DispatcherQueue? s_ui;
     public static ServiceContainer Services { get; } = new();
 
     public static string CrashLogPath { get; } = Path.Combine(
@@ -47,35 +49,91 @@ public partial class App : Application
         DebugSettings.BindingFailed += (_, ev) => Append($"[BindingFailed] {ev.Message}");
 
         Services.Initialize();
-        MainWindow = new MainWindow();
-        MainWindow.Activate();
+        s_ui = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        var first = new MainWindow();
+        first.Activate();
 
         // If Explorer launched us via a file association (.pdf / .yunote), open
         // that file in the editor on top of the home page.
-        TryOpenActivationFile();
+        try
+        {
+            var path = FileFromActivation(Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs())
+                       ?? FileFromCommandLine(Environment.GetCommandLineArgs(), skipFirst: true);
+            if (path is not null) YuNotes.MainWindow.OpenFile(path);
+        }
+        catch (Exception ex) { LogError(ex, "OnLaunched file activation"); }
+
+        // Later launches hand their activation to this instance (see Program).
+        Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().Activated += (_, a) =>
+            s_ui?.TryEnqueue(() => OnRedirected(a));
 
         // Background update check (no-op when turned off in Settings).
         _ = YuNotes.Services.UpdateService.CheckOnStartupAsync();
     }
 
-    // When the app is started by opening an associated file, Windows delivers the
-    // file through the AppLifecycle activation args (not OnLaunched's args). Read
-    // them and route the path through the normal editor-open flow.
-    private static void TryOpenActivationFile()
+    // Another launch of YuNotes: open its file as a tab in the window last
+    // used, or, for a plain launch, a new window (like a browser does).
+    private static void OnRedirected(Microsoft.Windows.AppLifecycle.AppActivationArguments args)
     {
         try
         {
-            var activation = Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().GetActivatedEventArgs();
-            if (activation?.Kind == Microsoft.Windows.AppLifecycle.ExtendedActivationKind.File
-                && activation.Data is Windows.ApplicationModel.Activation.IFileActivatedEventArgs fileArgs
-                && fileArgs.Files.Count > 0
-                && fileArgs.Files[0] is Windows.Storage.StorageFile file
-                && !string.IsNullOrEmpty(file.Path))
-            {
-                YuNotes.MainWindow.Navigate<Views.EditorPage>(file.Path);
-            }
+            var path = FileFromActivation(args);
+            if (path is not null) { YuNotes.MainWindow.OpenFile(path); return; }
+            var w = new MainWindow();
+            w.Activate();
+            w.BringToFront();
         }
-        catch (Exception ex) { LogError(ex, "OnLaunched file activation"); }
+        catch (Exception ex) { LogError(ex, "Redirected activation"); }
+    }
+
+    // When the app is started by opening an associated file, packaged YuNotes
+    // gets the file in File activation args; unpackaged YuNotes gets it on the
+    // command line (Launch activation).
+    private static string? FileFromActivation(Microsoft.Windows.AppLifecycle.AppActivationArguments? activation)
+    {
+        if (activation is null) return null;
+        if (activation.Kind == Microsoft.Windows.AppLifecycle.ExtendedActivationKind.File
+            && activation.Data is Windows.ApplicationModel.Activation.IFileActivatedEventArgs fileArgs
+            && fileArgs.Files.Count > 0
+            && !string.IsNullOrEmpty(fileArgs.Files[0].Path))
+            return fileArgs.Files[0].Path;
+        if (activation.Kind == Microsoft.Windows.AppLifecycle.ExtendedActivationKind.Launch
+            && activation.Data is Windows.ApplicationModel.Activation.ILaunchActivatedEventArgs launch
+            && !string.IsNullOrWhiteSpace(launch.Arguments))
+            return FileFromCommandLine(SplitCommandLine(launch.Arguments), skipFirst: false);
+        return null;
+    }
+
+    private static string? FileFromCommandLine(System.Collections.Generic.IEnumerable<string> args, bool skipFirst)
+    {
+        foreach (var a in skipFirst ? System.Linq.Enumerable.Skip(args, 1) : args)
+        {
+            var p = a.Trim().Trim('"');
+            if ((p.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase) || p.EndsWith(".yunote", StringComparison.OrdinalIgnoreCase))
+                && File.Exists(p))
+                return Path.GetFullPath(p);
+        }
+        return null;
+    }
+
+    // Splits a command line into arguments, keeping quoted paths with spaces whole.
+    private static System.Collections.Generic.List<string> SplitCommandLine(string line)
+    {
+        var result = new System.Collections.Generic.List<string>();
+        var cur = new System.Text.StringBuilder();
+        bool quoted = false;
+        foreach (char c in line)
+        {
+            if (c == '"') { quoted = !quoted; continue; }
+            if (char.IsWhiteSpace(c) && !quoted)
+            {
+                if (cur.Length > 0) { result.Add(cur.ToString()); cur.Clear(); }
+                continue;
+            }
+            cur.Append(c);
+        }
+        if (cur.Length > 0) result.Add(cur.ToString());
+        return result;
     }
 
     private static void Append(string detail)

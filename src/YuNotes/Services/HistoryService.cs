@@ -189,6 +189,7 @@ internal sealed class DocSnapshot
                 BackgroundContentWidth = p.BackgroundContentWidth,
                 TemplateOverride = CloneTemplate(p.TemplateOverride),
                 Bookmark = p.Bookmark,
+                Gaps = PageGaps.Clone(p.Gaps),
             };
             foreach (var st in p.Strokes)
             {
@@ -279,6 +280,8 @@ internal sealed class DocSnapshot
             p.BackgroundContentWidth = ps.BackgroundContentWidth;
             p.TemplateOverride = CloneTemplate(ps.TemplateOverride);
             p.Bookmark = ps.Bookmark;
+            p.Gaps.Clear();
+            p.Gaps.AddRange(PageGaps.Clone(ps.Gaps));
 
             p.Strokes.Clear();
             foreach (var st in ps.Strokes)
@@ -341,6 +344,7 @@ internal sealed class PageSnapshot
     public double BackgroundContentWidth;
     public TemplateSettings? TemplateOverride;
     public string? Bookmark;
+    public List<PageGap> Gaps = new();
     public List<Stroke> Strokes = new();
     public List<ShapeElement> Shapes = new();
     public List<TextElement> Texts = new();

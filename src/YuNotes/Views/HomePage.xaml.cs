@@ -155,7 +155,7 @@ public sealed partial class HomePage : Page
         // Top-bar action buttons
         NewBtn.Click    += async (_, __) => await NewNoteAsync();
         OpenBtn.Click   += async (_, __) => await OpenExistingAsync();
-        SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>(
+        SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>(this, 
             null, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
 
         // Folder section
@@ -250,7 +250,7 @@ public sealed partial class HomePage : Page
             Services.UpdateService.StatusChanged += ShowUpdateNotice;
             ShowUpdateNotice();
             MainWindow.SetDragRegion(HeaderDragRegion);
-            HeaderBar.Padding = new Thickness(4, 0, 12 + MainWindow.CaptionButtonInset, 0);
+            HeaderBar.Padding = new Thickness(4, 0, 12 + MainWindow.CaptionButtonInset(this), 0);
             ApplyNavSelection();
             ApplySortSelection();
             LoadFolderTree();
@@ -878,7 +878,7 @@ public sealed partial class HomePage : Page
         var doc  = App.Services.Documents.CreatePdf(path, title, App.Services.PdfContainer, selectedTemplate,
                                                        sizePicker.Spacing);
         TouchRecent(doc.Info.FilePath);
-        MainWindow.Navigate<EditorPage>(doc, new DrillInNavigationTransitionInfo());
+        MainWindow.Navigate<EditorPage>(this, doc, new DrillInNavigationTransitionInfo());
     }
 
     private async Task OpenExistingAsync()
@@ -886,7 +886,7 @@ public sealed partial class HomePage : Page
         var picker = new FileOpenPicker();
         picker.FileTypeFilter.Add(".pdf");
         WinRT.Interop.InitializeWithWindow.Initialize(
-            picker, WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow));
+            picker, WinRT.Interop.WindowNative.GetWindowHandle(MainWindow.Of(this)));
         var file = await picker.PickSingleFileAsync();
         if (file is null) return;
         TouchRecent(file.Path);
@@ -895,9 +895,9 @@ public sealed partial class HomePage : Page
 
     // Navigates immediately; EditorPage opens the document on a background
     // thread so the drill-in transition plays over the editor shell.
-    private static void OpenPath(string path)
+    private void OpenPath(string path)
     {
-        MainWindow.Navigate<EditorPage>(path, new SuppressNavigationTransitionInfo());
+        MainWindow.Navigate<EditorPage>(this, path, new SuppressNavigationTransitionInfo());
     }
 
     private async void RecentList_ItemClick(object sender, ItemClickEventArgs e)
@@ -910,7 +910,7 @@ public sealed partial class HomePage : Page
             // Ctrl+click opens the note in a new editor tab.
             var ctrl = Microsoft.UI.Input.InputKeyboardSource.GetKeyStateForCurrentThread(Windows.System.VirtualKey.Control);
             if (ctrl.HasFlag(Windows.UI.Core.CoreVirtualKeyStates.Down))
-                MainWindow.Navigate<EditorPage>(new EditorTabRequest(r.Path), new SuppressNavigationTransitionInfo());
+                MainWindow.Navigate<EditorPage>(this, new EditorTabRequest(r.Path), new SuppressNavigationTransitionInfo());
             else
                 OpenPath(r.Path);
         }

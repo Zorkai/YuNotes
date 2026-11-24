@@ -496,7 +496,7 @@
                     </Grid>
                     <ToggleButton x:Name="ToolExtend"
                                   Style="{StaticResource ToolToggleButtonStyle}"
-                                  ToolTipService.ToolTip="Page width — extend a page left or right">
+                                  ToolTipService.ToolTip="Page size — drag a side handle to widen a page; drag down inside a page to add writing space, up to remove it">
                         <FontIcon Glyph="&#xf72c;" FontSize="18" />
                     </ToggleButton>
                     <Border x:Name="Sep2" Background="{ThemeResource AppBorderBrush}" Width="1" Height="22" Margin="6,0"/>
@@ -571,6 +571,11 @@
                 <Border x:Name="SelColorSep" Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" VerticalAlignment="Center" />
                 <Button x:Name="SelDuplicateBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Duplicate (Ctrl+D)">
                     <FontIcon Glyph="&#xe14d;" />
+                </Button>
+                <Button x:Name="SelToTextBtn" Style="{StaticResource ToolButtonStyle}"
+                        ToolTipService.ToolTip="Convert handwriting to text"
+                        AutomationProperties.Name="Convert handwriting to text">
+                    <FontIcon Glyph="&#xf6f1;" />
                 </Button>
                 <Button x:Name="SelSaveStickerBtn" Style="{StaticResource ToolButtonStyle}"
                         ToolTipService.ToolTip="Save as sticker, to drop into any note"
@@ -962,7 +967,7 @@
             <TabView x:Name="TabStrip" Grid.Row="1" Visibility="Collapsed"
                      Padding="8,0,8,0" Height="38"
                      TabWidthMode="SizeToContent" CloseButtonOverlayMode="OnPointerOver"
-                     IsAddTabButtonVisible="False" CanReorderTabs="False" CanDragTabs="False">
+                     IsAddTabButtonVisible="False" CanReorderTabs="True" CanDragTabs="True" AllowDropTabs="True">
                 <TabView.TabStripFooter>
                     <Button x:Name="TabAddBtn" Style="{StaticResource TopBarButtonStyle}"
                             Width="32" Height="30" Margin="4,0,0,0"
