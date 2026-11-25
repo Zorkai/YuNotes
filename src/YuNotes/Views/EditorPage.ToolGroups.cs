@@ -211,7 +211,10 @@ public sealed partial class EditorPage
                         Item("Use tape", "", () => SelectTool(ToolKind.Tape)),
                         new MenuFlyoutSeparator(),
                         Item("Cover all tape", "", () => Canvas.SetAllTapeRevealed(false)),
-                        Item("Reveal all tape", "", () => Canvas.SetAllTapeRevealed(true))));
+                        Item("Reveal all tape", "", () => Canvas.SetAllTapeRevealed(true)),
+                        new MenuFlyoutSeparator(),
+                        Item("Quiz me (F6)", "", () => StartQuiz()),
+                        Item("Flashcards", "", () => _ = ShowFlashcardsAsync(null))));
                     break;
             }
         }

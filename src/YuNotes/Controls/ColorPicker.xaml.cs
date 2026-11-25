@@ -156,6 +156,8 @@ public sealed partial class ColorPickerControl : UserControl
                 };
             }
             if (tooltip is not null) ToolTipService.SetToolTip(swatch, tooltip);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(swatch,
+                (tooltip ?? $"Color #{c.R:X2}{c.G:X2}{c.B:X2}") + (active ? ", selected" : ""));
             var captured = c;
             swatch.Click += (_, __) =>
             {
@@ -179,6 +181,7 @@ public sealed partial class ColorPickerControl : UserControl
             Content = new FontIcon { Glyph = "", FontSize = 14 },
         };
         ToolTipService.SetToolTip(custom, "Custom color");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(custom, "Custom color");
         custom.Click += async (_, __) =>
         {
             ColorFlyout.Hide();

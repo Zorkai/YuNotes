@@ -25,6 +25,17 @@ public sealed class PenFavorite
     public bool Pressure { get; set; }
 }
 
+// Where a note was left: zoom, the page at the top of the view and how far
+// down / across that page the view was (page units, unzoomed). Page-relative
+// so it survives a different window size.
+public sealed class NoteView
+{
+    public double Zoom { get; set; } = 1;
+    public int Page { get; set; }
+    public double OffsetInPage { get; set; }
+    public double HorizontalOffset { get; set; }
+}
+
 public sealed class AppSettings
 {
     public List<string> PenPresetColors { get; set; } = new()
@@ -108,7 +119,12 @@ public sealed class AppSettings
 
     // Layout
     public ToolbarPosition ToolbarPosition { get; set; } = ToolbarPosition.Top;
+    // Old three-step size; only read when ToolbarScale is unset (settings
+    // saved before the size slider). See ToolbarMetrics.ScaleOf.
     public ToolbarSize ToolbarSize { get; set; } = ToolbarSize.Normal;
+    // Floating toolbar size as a scale (ToolbarMetrics.DefaultScale = 100 %).
+    // Null = not chosen yet: falls back to ToolbarSize.
+    public double? ToolbarScale { get; set; }
     // Free-drag offset of the floating toolbar from its docked anchor (persisted
     // so a moved toolbar reopens where the user left it). Reset when the dock
     // side changes, since the anchor moves.
@@ -147,6 +163,14 @@ public sealed class AppSettings
     // Per-document last-viewed page index (keyed by file path), so reopening a
     // document returns to where you left off.
     public Dictionary<string, int> LastPageByDocument { get; set; } = new();
+    // Per-document zoom and spot on the page (keyed by file path), so a note
+    // reopens exactly where and how large it was left. See NoteView.
+    public Dictionary<string, NoteView> NoteViews { get; set; } = new();
+    // Study mode: tape strips (ids) the user last got wrong, per note (file
+    // path). Shown as a marker on the strip and studied first. See StudyDeck.
+    public Dictionary<string, List<string>> StudyMissed { get; set; } = new();
+    // Editor zoom lock: pinch and Ctrl+wheel stop zooming (scrolling still works).
+    public bool ZoomLocked { get; set; } = false;
 
     // Locations
     public string DocumentsFolder { get; set; } = "";

@@ -37,13 +37,36 @@ public sealed partial class EditorPage
         var previewsPanel = new ItemsControl();
         previewsPanel.ItemsPanel = MakeWrap();
         var items = new List<UIElement>();
+        ContentDialog? dlg = null;
+        // The page's own custom template (if it has one) starts selected.
+        var pageCustom = Services.TemplateLibrary.Find(Canvas.ActivePage);
+        var customRow = new CustomTemplateRow(this, () => dlg, pageCustom?.Id);
+        bool customSelected = pageCustom is not null;
+        RadioButtons? scopeChoice = null;
+        void HighlightBuiltIn()
+        {
+            foreach (Button candidate in previewsPanel.Items.OfType<Button>())
+            {
+                var b = (Border)candidate.Content;
+                var match = !customSelected && (TemplateKind)candidate.Tag == selected;
+                b.BorderThickness = new Thickness(match ? 2.5 : 1);
+                b.BorderBrush = match
+                    ? (Brush)Application.Current.Resources["AppAccentBrush"]
+                    : (Brush)Application.Current.Resources["AppBorderBrush"];
+            }
+            sizePicker.View.Visibility = customSelected ? Visibility.Collapsed : Visibility.Visible;
+            if (scopeChoice is not null) scopeChoice.Visibility = sizePicker.View.Visibility;
+            if (dlg is not null)
+                dlg.SecondaryButtonText = customSelected ? "Apply to all blank pages" : "Apply to all pages";
+        }
+        customRow.Selected += t => { customSelected = t is not null; HighlightBuiltIn(); };
         foreach (var k in kinds)
         {
             var preview = BuildTemplatePreview(k, 110, 140);
             var border = new Border
             {
-                BorderThickness = new Thickness(selected == k ? 2.5 : 1),
-                BorderBrush = selected == k
+                BorderThickness = new Thickness(!customSelected && selected == k ? 2.5 : 1),
+                BorderBrush = !customSelected && selected == k
                     ? (Brush)Application.Current.Resources["AppAccentBrush"]
                     : (Brush)Application.Current.Resources["AppBorderBrush"],
                 CornerRadius = new CornerRadius(8),
@@ -64,19 +87,14 @@ public sealed partial class EditorPage
                 Content = border,
                 Tag = k
             };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(btn, $"{k} template");
             btn.Click += (s, _) =>
             {
                 selected = (TemplateKind)((Button)s).Tag;
+                customSelected = false;
+                customRow.ClearSelection();
                 sizePicker.SetKind(selected);
-                foreach (Button candidate in previewsPanel.Items.OfType<Button>())
-                {
-                    var b = (Border)candidate.Content;
-                    var match = (TemplateKind)candidate.Tag == selected;
-                    b.BorderThickness = new Thickness(match ? 2.5 : 1);
-                    b.BorderBrush = match
-                        ? (Brush)Application.Current.Resources["AppAccentBrush"]
-                        : (Brush)Application.Current.Resources["AppBorderBrush"];
-                }
+                HighlightBuiltIn();
             };
             items.Add(btn);
         }
@@ -85,6 +103,7 @@ public sealed partial class EditorPage
         var root = new StackPanel { Spacing = 12, MinWidth = 540 };
         root.Children.Add(new TextBlock { Text = "Choose a template, then apply to the current page or to every page.", Foreground = (Brush)Application.Current.Resources["AppTextSecondaryBrush"] });
         root.Children.Add(previewsPanel);
+        root.Children.Add(customRow.View);
         root.Children.Add(sizePicker.View);
 
         // Where to draw — only asked when the note has imported PDF pages, since
@@ -92,7 +111,6 @@ public sealed partial class EditorPage
         // "Safe areas" = YuNotes blank pages + page-extension strips, never over
         // the imported PDF content itself.
         bool hasPdfPages = _doc.Pages.Any(IsPdfPage);
-        RadioButtons? scopeChoice = null;
         if (hasPdfPages)
         {
             var effective = Canvas.ActivePage?.TemplateOverride ?? _doc.Template;
@@ -111,19 +129,36 @@ public sealed partial class EditorPage
             root.Children.Add(scopeChoice);
         }
 
-        var dlg = new ContentDialog
+        dlg = new ContentDialog
         {
             Title = "Page template",
-            Content = root,
+            Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto },
             PrimaryButtonText = "Apply to current page",
             SecondaryButtonText = "Apply to all pages",
             CloseButtonText = "Cancel",
             XamlRoot = this.XamlRoot,
             DefaultButton = ContentDialogButton.Primary
         };
-        var res = await dlg.ShowAsync();
+        HighlightBuiltIn();
+        var res = await customRow.ShowHostAsync(dlg);
         if (res == ContentDialogResult.None) return;
+        if (customSelected && customRow.Current is { } custom)
+        {
+            await ApplyCustomTemplateAsync(custom, allPages: res == ContentDialogResult.Secondary);
+            return;
+        }
         bool skipImportedPdf = scopeChoice?.SelectedIndex == 0;
+        // A built-in template replaces custom-template paper on the pages it goes on.
+        bool removedPaper = false;
+        foreach (var p in res == ContentDialogResult.Primary
+                     ? new[] { Canvas.ActivePage }.OfType<NotePage>()
+                     : _doc.Pages)
+        {
+            if (Services.TemplateLibrary.Find(p) is null) continue;
+            p.BackgroundPng = null;
+            removedPaper = true;
+        }
+        if (removedPaper) Canvas.Rebuild();
 
         if (res == ContentDialogResult.Primary)
         {
@@ -154,6 +189,47 @@ public sealed partial class EditorPage
         Canvas.RefreshTemplates();
         Canvas.InvalidateAll();
         App.Services.History.RecordMutation();
+    }
+
+    // A custom template is paper (a background image), so it only goes on
+    // pages that have none of their own: never over an imported PDF page.
+    private async Task ApplyCustomTemplateAsync(Services.CustomTemplate t, bool allPages)
+    {
+        if (_doc is null) return;
+        var targets = allPages
+            ? _doc.Pages.Where(Services.TemplateLibrary.CanTakeTemplate).ToList()
+            : new[] { Canvas.ActivePage }.OfType<NotePage>().Where(Services.TemplateLibrary.CanTakeTemplate).ToList();
+        if (targets.Count == 0)
+        {
+            await Notify("Template not applied",
+                allPages
+                    ? "Every page in this note is an imported PDF page. Custom templates go on blank pages; add one with Add → Blank page."
+                    : "This page is an imported PDF page. Custom templates go on blank pages.");
+            return;
+        }
+        foreach (var p in targets)
+        {
+            Services.TemplateLibrary.ApplyTo(p, t);
+            p.TemplateOverride = new TemplateSettings { Kind = TemplateKind.Blank };   // no lines over the paper
+            _doc.MarkFlattenDirty(p);
+        }
+        Canvas.Rebuild();
+        App.Services.History.RecordPageListChange();
+        UpdateHistoryUi();
+        MarkPageSetChanged();
+        if (_pagePanelOpen) _ = RefreshPagePanelAsync();
+        int skipped = allPages ? _doc.Pages.Count - targets.Count : 0;
+        ShowToast(skipped > 0
+            ? $"Applied to {targets.Count} pages (PDF pages kept as they are)"
+            : targets.Count == 1 ? "Template applied" : $"Applied to {targets.Count} pages");
+    }
+
+    // New page after a page with custom-template paper: same paper.
+    private static void ContinueTemplate(NotePage newPage, NotePage? previous)
+    {
+        if (Services.TemplateLibrary.Find(previous) is not { } t) return;
+        Services.TemplateLibrary.ApplyTo(newPage, t);
+        newPage.TemplateOverride = new TemplateSettings { Kind = TemplateKind.Blank };
     }
 
     private static ItemsPanelTemplate MakeWrap() =>

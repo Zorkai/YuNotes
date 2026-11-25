@@ -38,7 +38,8 @@ public sealed class DocumentService
     private DocumentInfo ReadSqliteInfo(string path)
     {
         using var conn = OpenConn(path);
-        EnsureSchema(conn);
+        // Home lists a note from a newer YuNotes too (read only, nothing written).
+        EnsureSchema(conn, readOnly: true);
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT id,title,created_at,modified_at,page_count,source_pdf_path FROM document LIMIT 1";
         using var r = cmd.ExecuteReader();
@@ -443,7 +444,8 @@ public sealed class DocumentService
     // Create a new YuNotes .pdf with a single blank page, ready to draw on. The PDF
     // also carries the SQLite editable state embedded inside it.
     public Document CreatePdf(string path, string title, PdfContainerService container,
-                              TemplateKind template = TemplateKind.Blank, double? templateSpacing = null)
+                              TemplateKind template = TemplateKind.Blank, double? templateSpacing = null,
+                              Action<NotePage>? setupFirstPage = null)
     {
         if (File.Exists(path)) File.Delete(path);
         var doc = new Document();
@@ -452,6 +454,9 @@ public sealed class DocumentService
         doc.Template.Kind = template;
         if (templateSpacing is double sp) doc.Template.Spacing = sp;
         doc.Pages.Add(new NotePage { Index = 0 });
+        // e.g. a custom template's paper. It goes into the editable data now;
+        // the visible PDF page shows it after the first full save.
+        setupFirstPage?.Invoke(doc.Pages[0]);
 
         var tempSqlite = Path.Combine(Path.GetTempPath(), $"yunotes-{Guid.NewGuid():N}.sqlite");
         try
@@ -481,7 +486,9 @@ public sealed class DocumentService
     public Document Open(string path, bool forIndex = false)
     {
         using var conn = OpenConn(path);
-        EnsureSchema(conn);
+        // The search index only reads; opening a note to edit it must not touch
+        // a file from a newer YuNotes (saving would drop what this one doesn't know).
+        EnsureSchema(conn, readOnly: forIndex);
         var doc = new Document();
         doc.Info.FilePath = path;
 
@@ -752,35 +759,110 @@ public sealed class DocumentService
         cmd.ExecuteNonQuery();
     }
 
-    private static void EnsureSchema(SqliteConnection c)
+    // ── File format ─────────────────────────────────────────────────────────
+    // A .yunote file (and the data embedded in a YuNotes .pdf) is a SQLite
+    // database whose format version is kept in PRAGMA user_version.
+    //   0 — files from before versioning: whatever columns that build added.
+    //   1 — everything up to and including page.gaps_json (inserted space).
+    // To change the format: bump CurrentSchemaVersion and add one step to
+    // MigrateTo that upgrades from the previous version. Steps run in order,
+    // inside one transaction, so a file is never left half-upgraded.
+    public const int CurrentSchemaVersion = 1;
+
+    // Brings the file up to CurrentSchemaVersion. A file from a newer YuNotes
+    // is refused (NewerFileFormatException) unless readOnly, where it is read
+    // as it is and left untouched — this build must never write to it, since
+    // rewriting it would drop whatever the newer format stores.
+    private static void EnsureSchema(SqliteConnection c, bool readOnly = false)
     {
-        Exec(c, @"CREATE TABLE IF NOT EXISTS document(
-            id TEXT PRIMARY KEY, title TEXT, created_at TEXT, modified_at TEXT,
-            page_count INTEGER, template_json TEXT, thumbnail BLOB, source_pdf_path TEXT)");
-        // Add columns for files created with older schemas (idempotent).
-        try { Exec(c, "ALTER TABLE document ADD COLUMN thumbnail BLOB"); } catch { }
-        try { Exec(c, "ALTER TABLE document ADD COLUMN source_pdf_path TEXT"); } catch { }
-        try { Exec(c, "ALTER TABLE document ADD COLUMN flatten_json TEXT"); } catch { }
-        Exec(c, @"CREATE TABLE IF NOT EXISTS page(
-            id TEXT PRIMARY KEY, idx INTEGER, width REAL, height REAL, background_png BLOB,
-            template_json TEXT, source_page_index INTEGER)");
-        try { Exec(c, "ALTER TABLE page ADD COLUMN template_json TEXT"); } catch { }
-        try { Exec(c, "ALTER TABLE page ADD COLUMN source_page_index INTEGER"); } catch { }
-        try { Exec(c, "ALTER TABLE page ADD COLUMN background_left REAL DEFAULT 0"); } catch { }
-        try { Exec(c, "ALTER TABLE page ADD COLUMN background_width REAL DEFAULT 0"); } catch { }
-        try { Exec(c, "ALTER TABLE page ADD COLUMN bookmark TEXT"); } catch { }
-        try { Exec(c, "ALTER TABLE page ADD COLUMN gaps_json TEXT"); } catch { }
-        Exec(c, @"CREATE TABLE IF NOT EXISTS stroke(
-            id TEXT PRIMARY KEY, page_id TEXT, data BLOB)");
-        Exec(c, @"CREATE INDEX IF NOT EXISTS idx_stroke_page ON stroke(page_id)");
-        Exec(c, @"CREATE TABLE IF NOT EXISTS shape_element(
-            id TEXT PRIMARY KEY, page_id TEXT, json TEXT)");
-        Exec(c, @"CREATE INDEX IF NOT EXISTS idx_shape_page ON shape_element(page_id)");
-        Exec(c, @"CREATE TABLE IF NOT EXISTS text_element(
-            id TEXT PRIMARY KEY, page_id TEXT, json TEXT)");
-        Exec(c, @"CREATE INDEX IF NOT EXISTS idx_text_page ON text_element(page_id)");
-        Exec(c, @"CREATE TABLE IF NOT EXISTS image_element(
-            id TEXT PRIMARY KEY, page_id TEXT, x REAL, y REAL, w REAL, h REAL, png BLOB)");
-        Exec(c, @"CREATE INDEX IF NOT EXISTS idx_image_page ON image_element(page_id)");
+        int version = ReadSchemaVersion(c);
+        if (version > CurrentSchemaVersion)
+        {
+            if (readOnly) return;
+            throw new NewerFileFormatException(version, CurrentSchemaVersion);
+        }
+        if (version == CurrentSchemaVersion) return;
+
+        using var tx = c.BeginTransaction();
+        for (int v = version + 1; v <= CurrentSchemaVersion; v++) MigrateTo(c, v);
+        Exec(c, $"PRAGMA user_version = {CurrentSchemaVersion}");
+        tx.Commit();
+    }
+
+    public static int ReadSchemaVersion(SqliteConnection c)
+    {
+        using var cmd = c.CreateCommand();
+        cmd.CommandText = "PRAGMA user_version";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private static void MigrateTo(SqliteConnection c, int version)
+    {
+        switch (version)
+        {
+            case 1:
+                // Creates a new file, or brings any pre-versioning file up to
+                // date. Those files can be missing any of the columns added over
+                // time, so each ADD COLUMN is allowed to find it already there.
+                Exec(c, @"CREATE TABLE IF NOT EXISTS document(
+                    id TEXT PRIMARY KEY, title TEXT, created_at TEXT, modified_at TEXT,
+                    page_count INTEGER, template_json TEXT, thumbnail BLOB, source_pdf_path TEXT)");
+                AddColumn(c, "document", "thumbnail BLOB");
+                AddColumn(c, "document", "source_pdf_path TEXT");
+                AddColumn(c, "document", "flatten_json TEXT");
+                Exec(c, @"CREATE TABLE IF NOT EXISTS page(
+                    id TEXT PRIMARY KEY, idx INTEGER, width REAL, height REAL, background_png BLOB,
+                    template_json TEXT, source_page_index INTEGER)");
+                AddColumn(c, "page", "template_json TEXT");
+                AddColumn(c, "page", "source_page_index INTEGER");
+                AddColumn(c, "page", "background_left REAL DEFAULT 0");
+                AddColumn(c, "page", "background_width REAL DEFAULT 0");
+                AddColumn(c, "page", "bookmark TEXT");
+                AddColumn(c, "page", "gaps_json TEXT");
+                Exec(c, @"CREATE TABLE IF NOT EXISTS stroke(
+                    id TEXT PRIMARY KEY, page_id TEXT, data BLOB)");
+                Exec(c, @"CREATE INDEX IF NOT EXISTS idx_stroke_page ON stroke(page_id)");
+                Exec(c, @"CREATE TABLE IF NOT EXISTS shape_element(
+                    id TEXT PRIMARY KEY, page_id TEXT, json TEXT)");
+                Exec(c, @"CREATE INDEX IF NOT EXISTS idx_shape_page ON shape_element(page_id)");
+                Exec(c, @"CREATE TABLE IF NOT EXISTS text_element(
+                    id TEXT PRIMARY KEY, page_id TEXT, json TEXT)");
+                Exec(c, @"CREATE INDEX IF NOT EXISTS idx_text_page ON text_element(page_id)");
+                Exec(c, @"CREATE TABLE IF NOT EXISTS image_element(
+                    id TEXT PRIMARY KEY, page_id TEXT, x REAL, y REAL, w REAL, h REAL, png BLOB)");
+                Exec(c, @"CREATE INDEX IF NOT EXISTS idx_image_page ON image_element(page_id)");
+                break;
+            default:
+                throw new InvalidOperationException($"No migration to file format {version}.");
+        }
+    }
+
+    // ADD COLUMN unless the table already has it (pre-versioning files differ).
+    private static void AddColumn(SqliteConnection c, string table, string columnDef)
+    {
+        string name = columnDef.Split(' ')[0];
+        using (var cmd = c.CreateCommand())
+        {
+            cmd.CommandText = $"SELECT COUNT(*) FROM pragma_table_info('{table}') WHERE name = $n";
+            cmd.Parameters.AddWithValue("$n", name);
+            if (Convert.ToInt32(cmd.ExecuteScalar()) > 0) return;
+        }
+        Exec(c, $"ALTER TABLE {table} ADD COLUMN {columnDef}");
+    }
+}
+
+// A note saved by a newer YuNotes than this one. It is not opened for editing
+// (or saved over), because this version would lose whatever the newer one
+// stores that it doesn't know about.
+public sealed class NewerFileFormatException : IOException
+{
+    public int FileVersion { get; }
+    public int SupportedVersion { get; }
+
+    public NewerFileFormatException(int fileVersion, int supportedVersion)
+        : base("This note was saved by a newer version of YuNotes. Update YuNotes to open it.")
+    {
+        FileVersion = fileVersion;
+        SupportedVersion = supportedVersion;
     }
 }

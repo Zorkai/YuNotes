@@ -11,6 +11,11 @@ public sealed class FolderInfo
     // "#RRGGBB" from FolderColors.Palette. Null on folders saved before colors
     // existed; the home page assigns one the next time it syncs the registry.
     public string? Color { get; set; }
+    // Template new notes in this folder start with: a TemplateKind name
+    // ("Grid") or "custom:<id>" for a template from the TemplateLibrary.
+    // Null = Blank, like everywhere else.
+    public string? DefaultTemplate { get; set; }
+    public double? DefaultTemplateSpacing { get; set; }
 }
 
 // Fixed palette of folder colors — mid-tone hues that read on both the light

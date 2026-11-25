@@ -31,6 +31,7 @@ public sealed partial class EditorPage
         // Use the pre-extension width so extended PDF pages don't dictate new-page size.
         double newW = last?.BackgroundContentWidth > 0 ? last.BackgroundContentWidth : last?.Width ?? 1240;
         var newPage = new NotePage { Index = _doc.Pages.Count, Width = newW, Height = last?.Height ?? 1754 };
+        ContinueTemplate(newPage, last);
         _doc.Pages.Add(newPage);
         Canvas.Rebuild();
         App.Services.History.RecordPageListChange();   // undoable: undo removes the page
@@ -133,6 +134,7 @@ public sealed partial class EditorPage
             Content = new FontIcon { Glyph = "", FontSize = 24 }
         };
         ToolTipService.SetToolTip(addCard, "Add page");
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(addCard, "Add page");
         addCard.Click += (_, __) => AddBlankPage();
         PageListPanel.Children.Add(addCard);
     }
@@ -202,6 +204,7 @@ public sealed partial class EditorPage
             Content = new FontIcon { Glyph = "", FontSize = 11, Foreground = new SolidColorBrush(Colors.White) },
             Flyout = BuildPageMenuFlyout(index)
         };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(menuBtn, $"Page {index + 1} options");
         cardGrid.Children.Add(menuBtn);
 
         // Delete button (top-left, visible in edit mode only)
@@ -220,6 +223,7 @@ public sealed partial class EditorPage
                 Content = new FontIcon { Glyph = "", FontSize = 14, Foreground = new SolidColorBrush(Colors.White) },
                 Tag = index
             };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(delBtn, $"Delete page {index + 1}");
             delBtn.Click += async (_, __) =>
             {
                 int i = (int)((Button)delBtn).Tag;
@@ -298,6 +302,7 @@ public sealed partial class EditorPage
             HorizontalAlignment = HorizontalAlignment.Center,
             Tag = index
         };
+        Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(clickBtn, $"Go to page {index + 1}");
         clickBtn.Content = stack;
 
         // Navigation click — suppressed when a drag or selection gesture just finished.
@@ -900,6 +905,9 @@ public sealed partial class EditorPage
         var last = _doc.Pages.LastOrDefault();
         double newW = last?.BackgroundContentWidth > 0 ? last.BackgroundContentWidth : last?.Width ?? 1240;
         var newPage = new NotePage { Index = index, Width = newW, Height = last?.Height ?? 1754 };
+        // Same paper as the page it goes after (or before, at the very top).
+        ContinueTemplate(newPage, index > 0 ? _doc.Pages[Math.Min(index, _doc.Pages.Count) - 1]
+                                            : _doc.Pages.FirstOrDefault());
         _doc.Pages.Insert(index, newPage);
         for (int i = 0; i < _doc.Pages.Count; i++) _doc.Pages[i].Index = i;
         Canvas.Rebuild();

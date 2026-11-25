@@ -168,26 +168,9 @@ public sealed partial class EditorPage
         // (compact segmented groups) — it isn't scaled here.
 
         // ── Floating drawing toolbar — scales with window width AND ToolbarSize ──
-        double btn, icon, colorBtn, chip, chipDot;
-        if (pageWidth >= 1200)      { btn = 44; icon = 24; colorBtn = 30; chip = 36; chipDot = 22; }
-        else if (pageWidth >= 1000) { btn = 38; icon = 21; colorBtn = 26; chip = 32; chipDot = 18; }
-        else if (pageWidth >= 800)  { btn = 32; icon = 18; colorBtn = 22; chip = 28; chipDot = 14; }
-        else                        { btn = 28; icon = 16; colorBtn = 20; chip = 24; chipDot = 12; }
-
-        double scale = App.Services.Settings.Current.ToolbarSize switch
-        {
-            Models.ToolbarSize.Small  => 0.65,
-            Models.ToolbarSize.Large  => 1.00,
-            _                         => 0.78   // Normal
-        };
-        if (scale != 1.0)
-        {
-            btn      = Math.Round(btn      * scale);
-            icon     = Math.Round(icon     * scale);
-            colorBtn = Math.Round(colorBtn * scale);
-            chip     = Math.Round(chip     * scale);
-            chipDot  = Math.Round(chipDot  * scale);
-        }
+        // Same numbers as the live preview in Settings (ToolbarMetrics).
+        var m = Models.ToolbarMetrics.For(pageWidth, Models.ToolbarMetrics.ScaleOf(App.Services.Settings.Current));
+        double btn = m.Button, icon = m.Icon, colorBtn = m.ColorButton, chip = m.Chip, chipDot = m.ChipDot;
 
         Control[] floatingBtns = {
             ToolHand, ToolPen, ToolHighlighter, ToolEraser, ToolText, ToolImage, ToolPaste, ToolShape, ToolRuler, ToolSelect, ToolExtend,

@@ -20,6 +20,7 @@ on:
     branches: [main]
     paths:
       - 'src/**'
+      - 'tests/**'
       - 'Directory.Build.props'
       - 'YuNotes.sln'
       - '.github/workflows/release.yml'
@@ -50,6 +51,12 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '8.0.x'
+
+      # Unit tests (tests/YuNotes.Tests) run before anything is built for
+      # release: a failing test stops the workflow, so nothing is published.
+      - name: Run tests
+        shell: pwsh
+        run: dotnet test tests/YuNotes.Tests -c Release --logger "console;verbosity=normal"
 
       - name: Work out version
         id: ver

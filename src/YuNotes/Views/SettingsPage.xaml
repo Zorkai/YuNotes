@@ -84,7 +84,7 @@
                                                  ToolTipService.ToolTip="Changed from default" />
                                         <HyperlinkButton x:Name="ResetLink" Content="Reset" Padding="4,0" MinHeight="0"
                                                          FontSize="{StaticResource FontSizeCaption}" VerticalAlignment="Center"
-                                                         Visibility="Collapsed" ToolTipService.ToolTip="Back to default" />
+                                                         Visibility="Collapsed" ToolTipService.ToolTip="Back to default" AutomationProperties.Name="Back to default" />
                                     </StackPanel>
                                     <TextBlock x:Name="DescriptionText" Text="{TemplateBinding Description}"
                                                Style="{StaticResource RowHintStyle}" />
@@ -154,7 +154,7 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Spacing="8">
-                    <Button x:Name="BackBtn" Style="{StaticResource ToolButtonStyle}" VerticalAlignment="Center">
+                    <Button x:Name="BackBtn" AutomationProperties.Name="Back" Style="{StaticResource ToolButtonStyle}" VerticalAlignment="Center">
                         <FontIcon Glyph="&#xe5c4;" />
                     </Button>
                     <TextBlock Text="Settings" Style="{StaticResource H2Style}" VerticalAlignment="Center" />
@@ -163,11 +163,11 @@
                      non-client space (controls overlapping it lose input), so it only
                      covers the empty middle column. -->
                 <Border x:Name="HeaderDragRegion" Grid.Column="1" Background="Transparent" Margin="0,-6" />
-                <AutoSuggestBox x:Name="SettingsSearch" Grid.Column="2" Width="280"
+                <AutoSuggestBox x:Name="SettingsSearch" Grid.Column="2" Width="280" CornerRadius="16"
                                 PlaceholderText="Search settings (Ctrl+F)" QueryIcon="Find"
                                 VerticalAlignment="Center" />
                 <!-- Update status at a glance; opens the Updates page. -->
-                <Button x:Name="UpdateChip" Grid.Column="3" CornerRadius="14" Padding="10,4"
+                <Button x:Name="UpdateChip" AutomationProperties.Name="Updates" Grid.Column="3" CornerRadius="14" Padding="10,4"
                         VerticalAlignment="Center" BorderThickness="1"
                         BorderBrush="{ThemeResource AppBorderBrush}"
                         Background="{ThemeResource AppSurfaceVariantBrush}">
@@ -476,12 +476,42 @@
                                         <ComboBoxItem Content="Right" />
                                     </ComboBox>
                                 </controls:SettingRow>
-                                <controls:SettingRow Title="Toolbar size" SettingKey="tbsize" Keywords="toolbar small normal large">
-                                    <ComboBox x:Name="ToolbarSizeCombo" Width="200">
-                                        <ComboBoxItem Content="Small" />
-                                        <ComboBoxItem Content="Normal" />
-                                        <ComboBoxItem Content="Large" />
-                                    </ComboBox>
+                                <controls:SettingRow Title="Toolbar size" SettingKey="tbsize" Stacked="True"
+                                                     Description="Drag to resize the floating drawing toolbar. The preview shows it at the size it will have in this window."
+                                                     Keywords="toolbar size small normal large bigger smaller scale buttons">
+                                    <StackPanel Spacing="10">
+                                        <Grid ColumnSpacing="14">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="56" />
+                                            </Grid.ColumnDefinitions>
+                                            <FontIcon Glyph="&#xe3d3;" FontSize="14" VerticalAlignment="Center"
+                                                      Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                            <Slider x:Name="ToolbarSizeSlider" Grid.Column="1" VerticalAlignment="Center"
+                                                    Minimum="60" Maximum="160" StepFrequency="5" SmallChange="5" LargeChange="10"
+                                                    TickFrequency="20" TickPlacement="Outside" IsThumbToolTipEnabled="False"
+                                                    AutomationProperties.Name="Toolbar size" />
+                                            <FontIcon Grid.Column="2" Glyph="&#xe3d3;" FontSize="22" VerticalAlignment="Center"
+                                                      Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                            <TextBlock x:Name="ToolbarSizeLabel" Grid.Column="3" Text="100%"
+                                                       VerticalAlignment="Center" HorizontalAlignment="Right"
+                                                       FontWeight="SemiBold" Foreground="{ThemeResource AppAccentBrush}" />
+                                        </Grid>
+                                        <!-- Live preview: a stand-in for the floating toolbar on a
+                                             piece of page, rebuilt at the exact sizes the editor uses. -->
+                                        <Border x:Name="ToolbarSizePreviewHost" CornerRadius="12" Padding="16" MinHeight="96"
+                                                Background="White" BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1">
+                                            <Border x:Name="ToolbarSizePreview" HorizontalAlignment="Center" VerticalAlignment="Center"
+                                                    Background="{ThemeResource AppToolbarBrush}"
+                                                    BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1"
+                                                    Padding="6,4">
+                                                <StackPanel x:Name="ToolbarSizePreviewRow" Orientation="Horizontal" Spacing="2"
+                                                            VerticalAlignment="Center" />
+                                            </Border>
+                                        </Border>
+                                    </StackPanel>
                                 </controls:SettingRow>
                                 <controls:SettingRow Title="Drawing tools" SettingKey="drawtools" Stacked="True"
                                                      Description="Drag rows to reorder. Unchecked tools are hidden but still work through shortcuts and pen buttons. Tools in a group show its name."
@@ -516,7 +546,7 @@
                                                      Keywords="toolbar group groups folder combine merge tools icon">
                                     <StackPanel Spacing="8">
                                         <StackPanel x:Name="ToolGroupsPanel" Spacing="6" />
-                                        <Button x:Name="NewToolGroupBtn" Padding="12,6" CornerRadius="8">
+                                        <Button x:Name="NewToolGroupBtn" AutomationProperties.Name="New tool group" Padding="12,6" CornerRadius="8">
                                             <StackPanel Orientation="Horizontal" Spacing="6">
                                                 <FontIcon Glyph="&#xe145;" FontSize="16"
                                                           FontFamily="{StaticResource MaterialIconsFamily}" />
@@ -579,6 +609,30 @@
                                                      Keywords="autosave delay seconds">
                                     <NumberBox x:Name="AutosaveDelayBox" Width="140" Minimum="0.5" Maximum="120"
                                                SmallChange="0.5" LargeChange="5" SpinButtonPlacementMode="Inline" />
+                                </controls:SettingRow>
+                            </StackPanel>
+                        </Border>
+                        <Border Style="{StaticResource GroupCardStyle}">
+                            <StackPanel>
+                                <controls:SettingRow Title="Back up everything"
+                                                     Description="Save your notes, folders, tags, pins, stickers, templates and settings into one .zip file. Trash is left out."
+                                                     Keywords="backup back up export zip archive copy save all">
+                                    <Button x:Name="BackupBtn" CornerRadius="8">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon Glyph="&#xe2c4;" FontSize="16" />
+                                            <TextBlock Text="Back up…" />
+                                        </StackPanel>
+                                    </Button>
+                                </controls:SettingRow>
+                                <controls:SettingRow Title="Restore from a backup"
+                                                     Description="Bring back what's in a backup. Nothing you have now is overwritten: a note that differs comes back as a copy marked (restored)."
+                                                     Keywords="restore backup import zip recover">
+                                    <Button x:Name="RestoreBackupBtn" CornerRadius="8">
+                                        <StackPanel Orientation="Horizontal" Spacing="6">
+                                            <FontIcon Glyph="&#xe929;" FontSize="16" />
+                                            <TextBlock Text="Restore…" />
+                                        </StackPanel>
+                                    </Button>
                                 </controls:SettingRow>
                             </StackPanel>
                         </Border>

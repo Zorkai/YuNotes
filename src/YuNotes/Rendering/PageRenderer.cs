@@ -472,6 +472,7 @@ public sealed class PageRenderer
             minX = rb.X; minY = rb.Y; maxX = rb.Right; maxY = rb.Bottom;
         }
         float pad = s.StrokeWidth * 0.5f + 2f + ShapeGeometry.Overhang(s);
+        if (s.Kind == ShapeKind.Tape) pad += StudyMarkMargin;   // study outline and dot sit outside the strip
         return RectIntersects(clip, minX - pad, minY - pad, maxX + pad, maxY + pad);
     }
 
@@ -479,6 +480,31 @@ public sealed class PageRenderer
     // EditorContext), and whether to leave tape out entirely (image export).
     public Func<string, bool>? IsTapeRevealed { get; set; }
     public bool HideTape { get; set; }
+    // Study mode: the strip being asked right now (outlined), and strips the
+    // user last got wrong (a small dot in the corner). On screen only.
+    public Func<string, bool>? IsTapeFocused { get; set; }
+    public Func<string, bool>? IsTapeMissed { get; set; }
+
+    // Kept outside DrawTape's bounds by StudyMarkMargin; the canvas redraws
+    // that much around a strip when its study state changes.
+    public const float StudyMarkMargin = 12f;
+    private static readonly Windows.UI.Color StudyFocusColor = Windows.UI.Color.FromArgb(255, 0x37, 0x8A, 0xDD);
+    private static readonly Windows.UI.Color StudyMissedColor = Windows.UI.Color.FromArgb(255, 0xE2, 0x4B, 0x4A);
+
+    private static void DrawStudyMarks(CanvasDrawingSession ds, float x, float y, float w, float h, bool focused, bool missed)
+    {
+        if (focused)
+        {
+            const float gap = 5f;
+            ds.DrawRoundedRectangle(x - gap, y - gap, w + gap * 2, h + gap * 2, 8, 8, StudyFocusColor, 3f);
+        }
+        if (missed)
+        {
+            float cx = x + w, cy = y;
+            ds.FillCircle(cx, cy, 6.5f, Microsoft.UI.Colors.White);
+            ds.FillCircle(cx, cy, 5f, StudyMissedColor);
+        }
+    }
 
     public void DrawShape(CanvasDrawingSession ds, ShapeElement s)
     {
@@ -537,7 +563,12 @@ public sealed class PageRenderer
                 break;
 
             case ShapeKind.Tape:
-                if (!HideTape) DrawTape(ds, s, x, y, w, h, IsTapeRevealed?.Invoke(s.Id) == true);
+                if (!HideTape)
+                {
+                    DrawTape(ds, s, x, y, w, h, IsTapeRevealed?.Invoke(s.Id) == true);
+                    DrawStudyMarks(ds, x, y, w, h,
+                        IsTapeFocused?.Invoke(s.Id) == true, IsTapeMissed?.Invoke(s.Id) == true);
+                }
                 break;
 
             case ShapeKind.Triangle:

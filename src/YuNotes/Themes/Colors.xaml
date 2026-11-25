@@ -129,5 +129,29 @@
             <StaticResource x:Key="ToolTipForeground" ResourceKey="AppTextPrimaryBrush" />
             <StaticResource x:Key="ToolTipBorderBrush" ResourceKey="AppBorderBrush" />
         </ResourceDictionary>
+        <!-- Windows contrast themes (Settings > Accessibility > Contrast themes).
+             Every app colour maps to the user's chosen system colours: no
+             translucency, no tints. Keys left out here (checked tool toggles,
+             menus, flyouts, dialogs, tooltips) fall back to WinUI's own
+             high-contrast styles, which already follow those colours. -->
+        <ResourceDictionary x:Key="HighContrast">
+            <SolidColorBrush x:Key="AppBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="AppSurfaceBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="AppSurfaceVariantBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="AppAccentBrush" Color="{ThemeResource SystemColorHighlightColor}" />
+            <SolidColorBrush x:Key="AppAccentSoftBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="AppSuccessBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="AppTextPrimaryBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="AppTextSecondaryBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="AppBorderBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="AppSeparatorBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="AppChromeHairlineBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="PageSeparatorBrush" Color="{ThemeResource SystemColorWindowTextColor}" />
+            <SolidColorBrush x:Key="AppToolbarBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="CanvasBackgroundBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="AppPopupCardBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <SolidColorBrush x:Key="AppPopupAcrylicBrush" Color="{ThemeResource SystemColorWindowColor}" />
+            <CornerRadius x:Key="OverlayCornerRadius">14</CornerRadius>
+        </ResourceDictionary>
     </ResourceDictionary.ThemeDictionaries>
 </ResourceDictionary>

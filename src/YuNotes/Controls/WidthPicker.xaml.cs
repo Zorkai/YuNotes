@@ -91,6 +91,7 @@ public sealed partial class WidthPickerControl : UserControl
                 HorizontalContentAlignment = HorizontalAlignment.Center,
                 VerticalContentAlignment = VerticalAlignment.Center
             };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(chip, $"Width {w:0.#}" + (isActive ? ", selected" : ""));
             var captured = w;
             chip.Click += (_, __) =>
             {

@@ -140,6 +140,7 @@ public sealed partial class SettingsPage
                 BorderThickness = new Thickness(isGroup ? 1 : 0),
             };
             ToolTipService.SetToolTip(b, tip);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(b, tip);
             return b;
         }
         foreach (var t in _drawingTools.Where(t => t.IsVisible))
@@ -153,6 +154,7 @@ public sealed partial class SettingsPage
         if (ToolbarPreviewPanel.Children.Count == 0)
             ToolbarPreviewPanel.Children.Add(new TextBlock { Text = "All tools are hidden.", FontSize = 12,
                                                               Foreground = (Brush)res["AppTextSecondaryBrush"] });
+        RebuildToolbarSizePreview();   // same tools, shown at the chosen size
     }
 
     private async Task EditToolGroupAsync(ToolGroup? existing)

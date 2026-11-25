@@ -51,6 +51,12 @@
     <Manifest Include="$(ApplicationManifest)" />
   </ItemGroup>
 
+  <!-- The unit tests (tests/YuNotes.Tests) also check internal helpers such as
+       ShapeRecognizer. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="YuNotes.Tests" />
+  </ItemGroup>
+
   <PropertyGroup Condition="'$(DisableHasPackageAndPublishMenuAddedByProject)'!='true' and '$(EnableMsixTooling)'=='true'">
     <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
   </PropertyGroup>

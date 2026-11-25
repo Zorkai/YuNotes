@@ -15,7 +15,7 @@
             Padding="0"
             BorderThickness="2"
             BorderBrush="{ThemeResource AppBorderBrush}"
-            ToolTipService.ToolTip="Color"
+            ToolTipService.ToolTip="Color" AutomationProperties.Name="Color"
             VerticalAlignment="Center">
         <Button.Flyout>
             <Flyout x:Name="ColorFlyout" Placement="Bottom"

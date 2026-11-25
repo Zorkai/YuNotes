@@ -96,6 +96,7 @@ public sealed partial class EditorPage : Page
         SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>(this, 
             null, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
         SaveStateBtn.Click += async (_, __) => await SaveAsync();
+        SaveBtn.Click += async (_, __) => await SaveAsync();
         StickersItem.Click += (_, __) => FlyoutBase.ShowAttachedFlyout(AddMenuShell);
 
         UndoBtn.Click += (_, __) => DoUndo();
@@ -280,6 +281,9 @@ public sealed partial class EditorPage : Page
         for (var k = VirtualKey.Number1; k <= VirtualKey.Number5; k++)
             KeyboardAccelerators.Add(new KeyboardAccelerator { Key = k, Modifiers = VirtualKeyModifiers.Control });
         foreach (var a in KeyboardAccelerators) a.Invoked += OnAccelerator;
+        InitZoomMenu();   // after: its shortcuts have their own handlers
+        InitTopBarFit();
+        InitStudy();
 
         ColorPicker.ColorChanged += (_, c) =>
         {
@@ -394,7 +398,9 @@ public sealed partial class EditorPage : Page
         ApplyToolbarScaleForWidth(ActualWidth > 0 ? ActualWidth : 1200);
         ApplyToolbarOrder();
         ApplyToolbarVisibility();
-        ToolbarGlass.IsGlassActive = s.LiquidGlassEnabled;
+        // Glass (blur, tint, sheen) is off under a Windows contrast theme: the
+        // toolbar then uses the theme's plain window colour like everything else.
+        ToolbarGlass.IsGlassActive = s.LiquidGlassEnabled && !s_accessibility.HighContrast;
         if (_doc is not null) ZoomPanel.Visibility = s.HideZoomBar ? Visibility.Collapsed : Visibility.Visible;
 
         // Show the paste button whenever the clipboard holds an image, and keep it in
@@ -402,6 +408,8 @@ public sealed partial class EditorPage : Page
         Windows.ApplicationModel.DataTransfer.Clipboard.ContentChanged += OnClipboardChanged;
         RefreshPasteAffordance();
     }
+
+    private static readonly Windows.UI.ViewManagement.AccessibilitySettings s_accessibility = new();
 
     private void SetWindowTitle(string title)
     {
@@ -413,8 +421,10 @@ public sealed partial class EditorPage : Page
         base.OnNavigatedFrom(e);
         SetWindowTitle("YuNotes");
         if (_presenting) ExitPresentation();
+        ExitStudy();
         Windows.ApplicationModel.DataTransfer.Clipboard.ContentChanged -= OnClipboardChanged;
-        SaveLastPage();
+        SaveView();
+        SaveLastPage(force: true);
         // Left with "Don't save": the tab must not keep the discarded edits.
         if (_doc is { IsDirty: true }) DropActiveTabDocument();
         // Stop the debounce so a queued tick can't fire a save after the user
@@ -425,7 +435,9 @@ public sealed partial class EditorPage : Page
 
     // Records the page the user is currently viewing so reopening this document
     // returns there. Called on scroll-settle and on leaving the editor.
-    private void SaveLastPage()
+    // force: save settings even when the page is unchanged (on leaving, so
+    // the view stored by SaveView reaches the disk).
+    private void SaveLastPage(bool force = false)
     {
         if (_doc is null || string.IsNullOrEmpty(_doc.Info.FilePath)) return;
         var page = Canvas.ActivePage;
@@ -433,7 +445,7 @@ public sealed partial class EditorPage : Page
         int idx = _doc.Pages.IndexOf(page);
         if (idx < 0) return;
         var map = App.Services.Settings.Current.LastPageByDocument;
-        if (map.TryGetValue(_doc.Info.FilePath, out var cur) && cur == idx) return;   // unchanged
+        if (!force && map.TryGetValue(_doc.Info.FilePath, out var cur) && cur == idx) return;   // unchanged
         map[_doc.Info.FilePath] = idx;
         App.Services.Settings.Save();
     }
@@ -442,6 +454,7 @@ public sealed partial class EditorPage : Page
     private void RestoreLastPage()
     {
         if (_doc is null || string.IsNullOrEmpty(_doc.Info.FilePath)) return;
+        if (RestoreView()) return;
         if (!App.Services.Settings.Current.LastPageByDocument.TryGetValue(_doc.Info.FilePath, out var idx)) return;
         if (idx > 0 && idx < _doc.Pages.Count) Canvas.ScrollToPageDeferred(idx);
     }
@@ -786,6 +799,7 @@ public sealed partial class EditorPage : Page
     {
         UndoBtn.IsEnabled = App.Services.History.CanUndo;
         RedoBtn.IsEnabled = App.Services.History.CanRedo;
+        UpdateStudyButton();   // tape added or removed
     }
 
     // After any page add/move/delete/duplicate. These ops never set IsDirty
@@ -863,6 +877,7 @@ public sealed partial class EditorPage : Page
                 args.Handled = true; break;
             case VirtualKey.Escape:
                 if (_presenting) { ExitPresentation(); args.Handled = true; break; }
+                if (_studying && Canvas.Context.EditingTextId is null) { ExitStudy(); args.Handled = true; break; }
                 Canvas.ClearSelectionArea();
                 Canvas.ClearSelection();
                 Canvas.ClearTextSelection();

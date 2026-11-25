@@ -66,11 +66,15 @@ public sealed partial class EditorPage
         Canvas.Focus(FocusState.Programmatic);
     }
 
-    private static string InkSignature(NotePage p)
+    private static string InkSignature(NotePage p) => Services.SearchIndex.InkSignature(p);
+
+    // Handwriting the Home search index already read for this note: pages whose
+    // ink still matches are found at once instead of being read again.
+    private void SeedInkWordsFromIndex()
     {
-        int pts = 0;
-        foreach (var s in p.Strokes) pts += s.Points.Count;
-        return $"{p.Strokes.Count}:{pts}:{(p.Strokes.Count > 0 ? p.Strokes[^1].Id : "")}";
+        if (_doc?.Info.FilePath is not { Length: > 0 } path) return;
+        foreach (var (pageId, known) in App.Services.Search.HandwritingFor(path))
+            if (!_inkWords.ContainsKey(pageId)) _inkWords[pageId] = known;
     }
 
     private async void RunSearch()
@@ -88,25 +92,43 @@ public sealed partial class EditorPage
 
         // Instant pass with what is already known, then read any handwriting
         // that hasn't been recognized yet (or changed) and update.
+        SeedInkWordsFromIndex();
         ComputeMatches(q, keepPosition: false);
         var doc = _doc;
+        // Read the pages nearest the one in view first: on a long note the
+        // matches you're about to step to show up soonest.
+        int here = Canvas.ActivePage is { } ap ? Math.Max(0, doc.Pages.IndexOf(ap)) : 0;
         var stale = !Services.HandwritingRecognizer.IsAvailable ? new List<NotePage>()
-            : doc.Pages.Where(p => p.Strokes.Any(s => s.Kind == StrokeKind.Pen) &&
-                                   !(_inkWords.TryGetValue(p.Id, out var c) && c.Sig == InkSignature(p)))
+            : doc.Pages.Select((p, i) => (p, i))
+                       .Where(x => x.p.Strokes.Any(s => s.Kind == StrokeKind.Pen) &&
+                                   !(_inkWords.TryGetValue(x.p.Id, out var c) && c.Sig == InkSignature(x.p)))
+                       .OrderBy(x => Math.Abs(x.i - here))
+                       .Select(x => x.p)
                        .ToList();
         if (stale.Count == 0) { _pendingSearch = null; return; }
         _searchReading = true;
         UpdateSearchUi();
         try
         {
+            // Matches are recounted at most every 200 ms (and once at the end),
+            // not after every page: recounting walks the whole note.
+            var sinceUpdate = System.Diagnostics.Stopwatch.StartNew();
+            bool unshown = false;
             foreach (var p in stale)
             {
                 var sig = InkSignature(p);
                 var words = await Services.HandwritingRecognizer.RecognizeAsync(p.Strokes.ToList());
                 if (version != _searchVersion || !ReferenceEquals(doc, _doc)) return;
                 _inkWords[p.Id] = (sig, words);
-                ComputeMatches(q, keepPosition: true);
+                unshown = true;
+                if (sinceUpdate.ElapsedMilliseconds >= 200)
+                {
+                    ComputeMatches(q, keepPosition: true);
+                    sinceUpdate.Restart();
+                    unshown = false;
+                }
             }
+            if (unshown) ComputeMatches(q, keepPosition: true);
         }
         finally
         {

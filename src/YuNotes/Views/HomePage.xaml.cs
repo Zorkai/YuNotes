@@ -205,6 +205,7 @@ public sealed partial class HomePage : Page
         // Selection — move to folder
         MoveToFolderBtn.Click += async (_, __) => await MoveToFolderAsync();
         TagsBtn.Click         += async (_, __) => await EditTagsForSelectedAsync();
+        InitSelectionExtras();
         InitSmartFolders();
 
         // Sort bar
@@ -581,6 +582,9 @@ public sealed partial class HomePage : Page
             TagsBtn.Visibility         = (inTrash || inArchive) ? Visibility.Collapsed : Visibility.Visible;
             ArchiveBtn.Visibility      = (inTrash || inArchive) ? Visibility.Collapsed : Visibility.Visible;
             DeleteBtnLabel.Text        = (inTrash || inArchive) ? "Delete permanently" : "Move to Trash";
+            var live = (inTrash || inArchive) ? Visibility.Collapsed : Visibility.Visible;
+            SelectMoreSep.Visibility = PinSelectedItem.Visibility = UnpinSelectedItem.Visibility = live;
+            _selectAnchor = -1;
         }
         else
         {
@@ -599,6 +603,7 @@ public sealed partial class HomePage : Page
             HeaderNormal.Visibility       = Visibility.Visible;
             HeaderSelect.Visibility       = Visibility.Collapsed;
         }
+        FitHeader();
     }
 
     // ── Refresh / load notes ──────────────────────────────────────────────────
@@ -797,20 +802,52 @@ public sealed partial class HomePage : Page
     private async Task NewNoteAsync()
     {
         var box = new TextBox { Text = "Untitled", Width = 320 };
+        var folder = (_activeSection == NavSection.Folders && _selectedFolderPath is not null)
+            ? _selectedFolderPath
+            : App.Services.Settings.Current.DocumentsFolder;
+        var folderInfo = App.Services.Settings.Current.Folders.FirstOrDefault(f =>
+            string.Equals(f.Path, folder, StringComparison.OrdinalIgnoreCase));
+
+        // Starts on the folder's default template, if it has one.
+        var selectedTemplate = TemplateKind.Blank;
+        var defaultCustom = Services.TemplateLibrary.FromKey(folderInfo?.DefaultTemplate);
+        if (defaultCustom is null && Enum.TryParse<TemplateKind>(folderInfo?.DefaultTemplate, out var defKind))
+            selectedTemplate = defKind;
+        bool customSelected = defaultCustom is not null;
 
         // Template picker — selectable preview cards (same previews as the editor).
-        var selectedTemplate = TemplateKind.Blank;
         var accent = (Brush)Application.Current.Resources["AppAccentBrush"];
         var border = (Brush)Application.Current.Resources["AppBorderBrush"];
         var previewRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
-        var sizePicker = new TemplateSizePicker(selectedTemplate, TemplateSizePicker.DefaultSpacing);
+        var sizePicker = new TemplateSizePicker(selectedTemplate,
+            folderInfo?.DefaultTemplateSpacing ?? TemplateSizePicker.DefaultSpacing);
+        ContentDialog? dlg = null;
+        var customRow = new CustomTemplateRow(this, () => dlg, defaultCustom?.Id);
+
+        void HighlightBuiltIn()
+        {
+            foreach (Button cand in previewRow.Children.OfType<Button>())
+            {
+                var b = (Border)cand.Content;
+                bool match = !customSelected && (TemplateKind)cand.Tag == selectedTemplate;
+                b.BorderThickness = new Thickness(match ? 2.5 : 1);
+                b.BorderBrush = match ? accent : border;
+            }
+            sizePicker.View.Visibility = customSelected ? Visibility.Collapsed : Visibility.Visible;
+        }
+        customRow.Selected += t =>
+        {
+            customSelected = t is not null;
+            HighlightBuiltIn();
+        };
 
         foreach (TemplateKind k in (TemplateKind[])Enum.GetValues(typeof(TemplateKind)))
         {
+            bool isSel = !customSelected && k == selectedTemplate;
             var card = new Border
             {
-                BorderThickness = new Thickness(k == selectedTemplate ? 2.5 : 1),
-                BorderBrush = k == selectedTemplate ? accent : border,
+                BorderThickness = new Thickness(isSel ? 2.5 : 1),
+                BorderBrush = isSel ? accent : border,
                 CornerRadius = new CornerRadius(8),
                 Padding = new Thickness(6),
                 Background = (Brush)Application.Current.Resources["AppSurfaceBrush"],
@@ -834,17 +871,14 @@ public sealed partial class HomePage : Page
                 Content = card,
                 Tag = k
             };
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(btn, $"{k} template");
             btn.Click += (s, _) =>
             {
                 selectedTemplate = (TemplateKind)((Button)s).Tag;
+                customSelected = false;
+                customRow.ClearSelection();
                 sizePicker.SetKind(selectedTemplate);
-                foreach (Button cand in previewRow.Children.OfType<Button>())
-                {
-                    var b = (Border)cand.Content;
-                    bool match = (TemplateKind)cand.Tag == selectedTemplate;
-                    b.BorderThickness = new Thickness(match ? 2.5 : 1);
-                    b.BorderBrush = match ? accent : border;
-                }
+                HighlightBuiltIn();
             };
             previewRow.Children.Add(btn);
         }
@@ -859,24 +893,60 @@ public sealed partial class HomePage : Page
             VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
             Content = previewRow
         });
+        root.Children.Add(customRow.View);
         root.Children.Add(sizePicker.View);
-
-        var dlg = new ContentDialog
+        // Only inside a folder: remember this choice for the folder's next notes.
+        CheckBox? makeDefault = null;
+        if (folderInfo is not null)
         {
-            Title = "New note", Content = root,
+            makeDefault = new CheckBox
+            {
+                Content = $"Use this template for new notes in “{folderInfo.Name}”",
+                IsChecked = folderInfo.DefaultTemplate is not null,
+            };
+            root.Children.Add(makeDefault);
+        }
+        HighlightBuiltIn();
+
+        dlg = new ContentDialog
+        {
+            Title = "New note", Content = new ScrollViewer { Content = root, VerticalScrollBarVisibility = ScrollBarVisibility.Auto },
             PrimaryButtonText = "Create", CloseButtonText = "Cancel",
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = this.XamlRoot
         };
-        if (await dlg.ShowAsync() != ContentDialogResult.Primary) return;
+        if (await customRow.ShowHostAsync(dlg) != ContentDialogResult.Primary) return;
         var title  = string.IsNullOrWhiteSpace(box.Text) ? "Untitled" : box.Text.Trim();
-        var folder = (_activeSection == NavSection.Folders && _selectedFolderPath is not null)
-            ? _selectedFolderPath
-            : App.Services.Settings.Current.DocumentsFolder;
+        var custom = customSelected ? customRow.Current : null;
+
+        if (folderInfo is not null && makeDefault is not null)
+        {
+            if (makeDefault.IsChecked == true)
+            {
+                folderInfo.DefaultTemplate = custom is not null
+                    ? Services.TemplateLibrary.KeyFor(custom)
+                    : selectedTemplate.ToString();
+                folderInfo.DefaultTemplateSpacing = custom is null ? sizePicker.Spacing : null;
+            }
+            else
+            {
+                folderInfo.DefaultTemplate = null;
+                folderInfo.DefaultTemplateSpacing = null;
+            }
+            App.Services.Settings.Save();
+        }
+
         Directory.CreateDirectory(folder);
         var path = UniquePath(folder, title, ".pdf");
-        var doc  = App.Services.Documents.CreatePdf(path, title, App.Services.PdfContainer, selectedTemplate,
-                                                       sizePicker.Spacing);
+        var doc  = App.Services.Documents.CreatePdf(path, title, App.Services.PdfContainer,
+            custom is null ? selectedTemplate : TemplateKind.Blank, sizePicker.Spacing,
+            custom is null ? null : page => Services.TemplateLibrary.ApplyTo(page, custom));
+        if (custom is not null)
+        {
+            // The PDF pages other apps see get the paper on the first full save.
+            doc.IsDirty = true;
+            doc.MarkFlattenDirty(null);
+        }
         TouchRecent(doc.Info.FilePath);
         MainWindow.Navigate<EditorPage>(this, doc, new DrillInNavigationTransitionInfo());
     }

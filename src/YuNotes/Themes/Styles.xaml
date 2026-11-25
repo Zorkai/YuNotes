@@ -463,7 +463,7 @@
         <Setter Property="Background" Value="Transparent" />
         <Setter Property="BorderBrush" Value="{ThemeResource AppBorderBrush}" />
         <Setter Property="BorderThickness" Value="1" />
-        <Setter Property="CornerRadius" Value="10" />
+        <Setter Property="CornerRadius" Value="17" />
         <Setter Property="Padding" Value="0" />
         <Setter Property="VerticalAlignment" Value="Center" />
     </Style>
@@ -481,7 +481,7 @@
     <Style x:Key="TopBarButtonStyle" TargetType="Button" BasedOn="{StaticResource ToolButtonStyle}">
         <Setter Property="Width" Value="38" />
         <Setter Property="Height" Value="34" />
-        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="CornerRadius" Value="17" />
     </Style>
 
     <!-- The "+ Add" pill: text + chevron, so it auto-sizes and uses the UI font
@@ -498,7 +498,7 @@
     <Style x:Key="ShotActionButtonStyle" TargetType="Button" BasedOn="{StaticResource ToolButtonStyle}">
         <Setter Property="Width" Value="NaN" />
         <Setter Property="Height" Value="34" />
-        <Setter Property="CornerRadius" Value="8" />
+        <Setter Property="CornerRadius" Value="17" />
         <Setter Property="Padding" Value="11,0" />
         <Setter Property="FontFamily" Value="{ThemeResource ContentControlThemeFontFamily}" />
     </Style>

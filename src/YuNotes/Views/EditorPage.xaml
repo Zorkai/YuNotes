@@ -57,7 +57,7 @@
                         <TextBlock x:Name="RefTitle" Grid.Column="1" VerticalAlignment="Center"
                                    FontWeight="SemiBold" TextTrimming="CharacterEllipsis" />
                         <Button x:Name="RefOpenBtn" Grid.Column="2" Content="Open to edit" Padding="10,4" CornerRadius="8"
-                                ToolTipService.ToolTip="Open this note in the editor" />
+                                ToolTipService.ToolTip="Open this note in the editor" AutomationProperties.Name="Open this note in the editor" />
                         <Button x:Name="RefCloseBtn" Grid.Column="3" Padding="6,4" CornerRadius="8"
                                 ToolTipService.ToolTip="Close side-by-side view"
                                 AutomationProperties.Name="Close side-by-side view">
@@ -127,12 +127,12 @@
                     </Border>
                     <Border x:Name="Sep1" Background="{ThemeResource AppBorderBrush}"
                             Width="1" Height="28" Margin="3,0" />
-                    <ToggleButton x:Name="ToolHand" Style="{StaticResource ToolToggleButtonStyle}" ToolTipService.ToolTip="Hand (pan)">
+                    <ToggleButton x:Name="ToolHand" Style="{StaticResource ToolToggleButtonStyle}" ToolTipService.ToolTip="Hand (pan)" AutomationProperties.Name="Hand">
                         <FontIcon Glyph="&#xe925;" />
                     </ToggleButton>
                     <Grid x:Name="PenGroup" VerticalAlignment="Center">
                         <ToggleButton x:Name="ToolPen" Style="{StaticResource ToolToggleButtonStyle}"
-                                      ToolTipService.ToolTip="Pen" IsChecked="True">
+                                      ToolTipService.ToolTip="Pen" AutomationProperties.Name="Pen" IsChecked="True">
                             <FontIcon x:Name="PenIcon" Glyph="&#xf366;" />
                         </ToggleButton>
                         <Button x:Name="ToolPenChevron" Width="14" Height="14"
@@ -141,7 +141,7 @@
                                 Background="Transparent" BorderThickness="0"
                                 CornerRadius="3" Padding="0"
                                 Style="{StaticResource ToolChevronButtonStyle}"
-                                ToolTipService.ToolTip="Pen options">
+                                ToolTipService.ToolTip="Pen options" AutomationProperties.Name="Pen options">
                             <FontIcon x:Name="PenChevronIcon" Glyph="&#xe5cf;" FontSize="8"
                                       Foreground="{ThemeResource AppTextPrimaryBrush}" />
                             <Button.Flyout>
@@ -161,7 +161,7 @@
                                             </Grid.ColumnDefinitions>
                                             <ToggleButton x:Name="PenSolidItem" Grid.Column="0"
                                                           Style="{StaticResource OptionCardStyle}" IsChecked="True"
-                                                          ToolTipService.ToolTip="Constant-width stroke">
+                                                          ToolTipService.ToolTip="Constant-width stroke" AutomationProperties.Name="Constant-width stroke">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xf604;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Solid" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -169,7 +169,7 @@
                                             </ToggleButton>
                                             <ToggleButton x:Name="PenPressureItem" Grid.Column="1"
                                                           Style="{StaticResource OptionCardStyle}"
-                                                          ToolTipService.ToolTip="Width follows pen pressure">
+                                                          ToolTipService.ToolTip="Width follows pen pressure" AutomationProperties.Name="Width follows pen pressure">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xe3ae;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Pressure" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -191,12 +191,12 @@
                             </Button.Flyout>
                         </Button>
                     </Grid>
-                    <ToggleButton x:Name="ToolHighlighter" Style="{StaticResource ToolToggleButtonStyle}" ToolTipService.ToolTip="Highlighter">
+                    <ToggleButton x:Name="ToolHighlighter" Style="{StaticResource ToolToggleButtonStyle}" ToolTipService.ToolTip="Highlighter" AutomationProperties.Name="Highlighter">
                         <FontIcon x:Name="HighlighterIcon" Glyph="&#xf364;" />
                     </ToggleButton>
                     <Grid x:Name="EraserGroup" VerticalAlignment="Center">
                         <ToggleButton x:Name="ToolEraser" Style="{StaticResource ToolToggleButtonStyle}"
-                                      ToolTipService.ToolTip="Eraser">
+                                      ToolTipService.ToolTip="Eraser" AutomationProperties.Name="Eraser">
                             <FontIcon x:Name="EraserIcon" Glyph="&#xe6d0;" FontSize="18" />
                         </ToggleButton>
                         <Button x:Name="ToolEraserChevron" Width="14" Height="14"
@@ -205,7 +205,7 @@
                                 Background="Transparent" BorderThickness="0"
                                 CornerRadius="3" Padding="0"
                                 Style="{StaticResource ToolChevronButtonStyle}"
-                                ToolTipService.ToolTip="Eraser options">
+                                ToolTipService.ToolTip="Eraser options" AutomationProperties.Name="Eraser options">
                             <FontIcon x:Name="EraserChevronIcon" Glyph="&#xe5cf;" FontSize="8"
                                       Foreground="{ThemeResource AppTextPrimaryBrush}" />
                             <Button.Flyout>
@@ -221,7 +221,7 @@
                                             </Grid.ColumnDefinitions>
                                             <ToggleButton x:Name="EraserStrokeItem" Grid.Column="0"
                                                           Style="{StaticResource OptionCardStyle}" IsChecked="True"
-                                                          ToolTipService.ToolTip="Erase whole strokes">
+                                                          ToolTipService.ToolTip="Erase whole strokes" AutomationProperties.Name="Erase whole strokes">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xf747;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Stroke" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -229,7 +229,7 @@
                                             </ToggleButton>
                                             <ToggleButton x:Name="EraserPixelItem" Grid.Column="1"
                                                           Style="{StaticResource OptionCardStyle}"
-                                                          ToolTipService.ToolTip="Erase only what you touch">
+                                                          ToolTipService.ToolTip="Erase only what you touch" AutomationProperties.Name="Erase only what you touch">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xf3fc;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Pixel" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -241,21 +241,21 @@
                             </Button.Flyout>
                         </Button>
                     </Grid>
-                    <ToggleButton x:Name="ToolText" Style="{StaticResource ToolToggleButtonStyle}" ToolTipService.ToolTip="Text">
+                    <ToggleButton x:Name="ToolText" Style="{StaticResource ToolToggleButtonStyle}" ToolTipService.ToolTip="Text" AutomationProperties.Name="Text">
                         <FontIcon Glyph="&#xe262;" />
                     </ToggleButton>
-                    <ToggleButton x:Name="ToolImage" Style="{StaticResource ToolToggleButtonStyle}" ToolTipService.ToolTip="Image">
+                    <ToggleButton x:Name="ToolImage" Style="{StaticResource ToolToggleButtonStyle}" ToolTipService.ToolTip="Image" AutomationProperties.Name="Image">
                         <FontIcon Glyph="&#xe3f4;" />
                     </ToggleButton>
                     <!-- Appears only while the clipboard holds an image (Ctrl+V also pastes). -->
                     <Button x:Name="ToolPaste" Style="{StaticResource ToolButtonStyle}"
                             Visibility="Collapsed"
-                            ToolTipService.ToolTip="Paste image from clipboard (Ctrl+V)">
+                            ToolTipService.ToolTip="Paste image from clipboard (Ctrl+V)" AutomationProperties.Name="Paste image from clipboard">
                         <FontIcon Glyph="&#xe14f;" FontSize="18" />
                     </Button>
                     <Grid x:Name="ShapeGroup" VerticalAlignment="Center">
                         <ToggleButton x:Name="ToolShape" Style="{StaticResource ToolToggleButtonStyle}"
-                                      ToolTipService.ToolTip="Shape">
+                                      ToolTipService.ToolTip="Shape" AutomationProperties.Name="Shape">
                             <FontIcon x:Name="ShapeIcon" Glyph="&#xe574;" FontSize="18" />
                         </ToggleButton>
                         <Button x:Name="ToolShapeChevron" Width="14" Height="14"
@@ -264,7 +264,7 @@
                                 Background="Transparent" BorderThickness="0"
                                 CornerRadius="3" Padding="0"
                                 Style="{StaticResource ToolChevronButtonStyle}"
-                                ToolTipService.ToolTip="Shape options">
+                                ToolTipService.ToolTip="Shape options" AutomationProperties.Name="Shape options">
                             <FontIcon x:Name="ShapeChevronIcon" Glyph="&#xe5cf;" FontSize="8"
                                       Foreground="{ThemeResource AppTextPrimaryBrush}" />
                             <Button.Flyout>
@@ -286,7 +286,7 @@
                                             </Grid.RowDefinitions>
                                             <ToggleButton x:Name="ShapeArrowItem" Grid.Row="1" Grid.Column="0"
                                                           Style="{StaticResource OptionCardStyle}"
-                                                          ToolTipService.ToolTip="Arrow: the head is where you stop dragging">
+                                                          ToolTipService.ToolTip="Arrow: the head is where you stop dragging" AutomationProperties.Name="Arrow">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xe941;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Arrow" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -294,7 +294,7 @@
                                             </ToggleButton>
                                             <ToggleButton x:Name="ShapeAxesItem" Grid.Row="1" Grid.Column="1"
                                                           Style="{StaticResource OptionCardStyle}"
-                                                          ToolTipService.ToolTip="Coordinate axes with tick marks">
+                                                          ToolTipService.ToolTip="Coordinate axes with tick marks" AutomationProperties.Name="Coordinate axes with tick marks">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xe6e1;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Axes" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -302,34 +302,34 @@
                                             </ToggleButton>
                                             <ToggleButton x:Name="ShapeGridItem" Grid.Row="1" Grid.Column="2"
                                                           Style="{StaticResource OptionCardStyle}"
-                                                          ToolTipService.ToolTip="Grid or table; drag larger for more cells">
+                                                          ToolTipService.ToolTip="Grid or table; drag larger for more cells" AutomationProperties.Name="Grid or table">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xe3ec;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Grid" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
                                                 </StackPanel>
                                             </ToggleButton>
-                                            <ToggleButton x:Name="ShapeRectItem" Grid.Column="0"
+                                            <ToggleButton x:Name="ShapeRectItem" AutomationProperties.Name="Rectangle" Grid.Column="0"
                                                           Style="{StaticResource OptionCardStyle}" IsChecked="True">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xeb54;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Rectangle" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
                                                 </StackPanel>
                                             </ToggleButton>
-                                            <ToggleButton x:Name="ShapeEllipseItem" Grid.Column="1"
+                                            <ToggleButton x:Name="ShapeEllipseItem" AutomationProperties.Name="Ellipse" Grid.Column="1"
                                                           Style="{StaticResource OptionCardStyle}">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xef4a;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Ellipse" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
                                                 </StackPanel>
                                             </ToggleButton>
-                                            <ToggleButton x:Name="ShapeLineItem" Grid.Column="2"
+                                            <ToggleButton x:Name="ShapeLineItem" AutomationProperties.Name="Line" Grid.Column="2"
                                                           Style="{StaticResource OptionCardStyle}">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xf41e;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Line" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
                                                 </StackPanel>
                                             </ToggleButton>
-                                            <ToggleButton x:Name="ShapeTriangleItem" Grid.Column="3"
+                                            <ToggleButton x:Name="ShapeTriangleItem" AutomationProperties.Name="Triangle" Grid.Column="3"
                                                           Style="{StaticResource OptionCardStyle}">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xf0a8;" FontSize="22" HorizontalAlignment="Center" />
@@ -354,7 +354,7 @@
                                 Background="Transparent" BorderThickness="0"
                                 CornerRadius="3" Padding="0"
                                 Style="{StaticResource ToolChevronButtonStyle}"
-                                ToolTipService.ToolTip="Laser options">
+                                ToolTipService.ToolTip="Laser options" AutomationProperties.Name="Laser options">
                             <FontIcon x:Name="LaserChevronIcon" Glyph="&#xe5cf;" FontSize="8"
                                       Foreground="{ThemeResource AppTextPrimaryBrush}" />
                             <Button.Flyout>
@@ -370,7 +370,7 @@
                                             </Grid.ColumnDefinitions>
                                             <ToggleButton x:Name="LaserDotItem" Grid.Column="0"
                                                           Style="{StaticResource OptionCardStyle}"
-                                                          ToolTipService.ToolTip="A dot that shows only while you press">
+                                                          ToolTipService.ToolTip="A dot that shows only while you press" AutomationProperties.Name="A dot that shows only while you press">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xe061;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Dot" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -378,7 +378,7 @@
                                             </ToggleButton>
                                             <ToggleButton x:Name="LaserTrailItem" Grid.Column="1"
                                                           Style="{StaticResource OptionCardStyle}" IsChecked="True"
-                                                          ToolTipService.ToolTip="A line that fades shortly after you stop">
+                                                          ToolTipService.ToolTip="A line that fades shortly after you stop" AutomationProperties.Name="A line that fades shortly after you stop">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xf757;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Trail" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -402,7 +402,7 @@
                                 Background="Transparent" BorderThickness="0"
                                 CornerRadius="3" Padding="0"
                                 Style="{StaticResource ToolChevronButtonStyle}"
-                                ToolTipService.ToolTip="Tape options">
+                                ToolTipService.ToolTip="Tape options" AutomationProperties.Name="Tape options">
                             <FontIcon x:Name="TapeChevronIcon" Glyph="&#xe5cf;" FontSize="8"
                                       Foreground="{ThemeResource AppTextPrimaryBrush}" />
                             <Button.Flyout>
@@ -421,7 +421,7 @@
                                             </Grid.ColumnDefinitions>
                                             <Button x:Name="TapeCoverAllItem" Grid.Column="0" HorizontalAlignment="Stretch"
                                                     Padding="8,10" CornerRadius="10"
-                                                    ToolTipService.ToolTip="Hide everything under tape again">
+                                                    ToolTipService.ToolTip="Hide everything under tape again" AutomationProperties.Name="Hide everything under tape again">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xe8f5;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Cover all" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -429,7 +429,7 @@
                                             </Button>
                                             <Button x:Name="TapeRevealAllItem" Grid.Column="1" HorizontalAlignment="Stretch"
                                                     Padding="8,10" CornerRadius="10"
-                                                    ToolTipService.ToolTip="Show everything under tape">
+                                                    ToolTipService.ToolTip="Show everything under tape" AutomationProperties.Name="Show everything under tape">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xe8f4;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Reveal all" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -438,18 +438,40 @@
                                         </Grid>
                                         <TextBlock x:Name="TapeCountText" FontSize="{StaticResource FontSizeCaption}"
                                                    Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                                        <Grid ColumnSpacing="8">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Button x:Name="TapeQuizBtn" HorizontalAlignment="Stretch" Padding="8,8" CornerRadius="17"
+                                                    ToolTipService.ToolTip="Go through the strips one at a time (F6)"
+                                                    AutomationProperties.Name="Quiz me">
+                                                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
+                                                    <FontIcon Glyph="&#xe80c;" FontSize="16" />
+                                                    <TextBlock Text="Quiz me" FontSize="{StaticResource FontSizeCaption}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                            <Button x:Name="TapeCardsBtn" Grid.Column="1" HorizontalAlignment="Stretch" Padding="8,8" CornerRadius="17"
+                                                    ToolTipService.ToolTip="Study the strips as flashcards"
+                                                    AutomationProperties.Name="Flashcards">
+                                                <StackPanel Orientation="Horizontal" Spacing="6" HorizontalAlignment="Center">
+                                                    <FontIcon Glyph="&#xe41d;" FontSize="16" />
+                                                    <TextBlock Text="Flashcards" FontSize="{StaticResource FontSizeCaption}" VerticalAlignment="Center" />
+                                                </StackPanel>
+                                            </Button>
+                                        </Grid>
                                     </StackPanel>
                                 </Flyout>
                             </Button.Flyout>
                         </Button>
                     </Grid>
                     <ToggleButton x:Name="ToolRuler" Style="{StaticResource ToolToggleButtonStyle}"
-                                  ToolTipService.ToolTip="Ruler — drag to move, drag tip to rotate; pen snaps to the edge">
+                                  ToolTipService.ToolTip="Ruler — drag to move, drag tip to rotate; pen snaps to the edge" AutomationProperties.Name="Ruler">
                         <FontIcon Glyph="&#xe41c;" FontSize="18" />
                     </ToggleButton>
                     <Grid x:Name="SelectGroup" VerticalAlignment="Center">
                         <ToggleButton x:Name="ToolSelect" Style="{StaticResource ToolToggleButtonStyle}"
-                                      ToolTipService.ToolTip="Select">
+                                      ToolTipService.ToolTip="Select" AutomationProperties.Name="Select">
                             <FontIcon x:Name="SelectIcon" Glyph="&#xeb03;" FontSize="18" />
                         </ToggleButton>
                         <Button x:Name="ToolSelectChevron" Width="14" Height="14"
@@ -458,7 +480,7 @@
                                 Background="Transparent" BorderThickness="0"
                                 CornerRadius="3" Padding="0"
                                 Style="{StaticResource ToolChevronButtonStyle}"
-                                ToolTipService.ToolTip="Select options">
+                                ToolTipService.ToolTip="Select options" AutomationProperties.Name="Select options">
                             <FontIcon x:Name="SelectChevronIcon" Glyph="&#xe5cf;" FontSize="8"
                                       Foreground="{ThemeResource AppTextPrimaryBrush}" />
                             <Button.Flyout>
@@ -474,7 +496,7 @@
                                             </Grid.ColumnDefinitions>
                                             <ToggleButton x:Name="SelectLassoItem" Grid.Column="0"
                                                           Style="{StaticResource OptionCardStyle}" IsChecked="True"
-                                                          ToolTipService.ToolTip="Draw freely around elements">
+                                                          ToolTipService.ToolTip="Draw freely around elements" AutomationProperties.Name="Draw freely around elements">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xeb03;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Lasso" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -482,7 +504,7 @@
                                             </ToggleButton>
                                             <ToggleButton x:Name="SelectRectItem" Grid.Column="1"
                                                           Style="{StaticResource OptionCardStyle}"
-                                                          ToolTipService.ToolTip="Drag a rectangle">
+                                                          ToolTipService.ToolTip="Drag a rectangle" AutomationProperties.Name="Drag a rectangle">
                                                 <StackPanel Spacing="6">
                                                     <FontIcon Glyph="&#xe6d4;" FontSize="22" HorizontalAlignment="Center" />
                                                     <TextBlock Text="Rectangle" FontSize="{StaticResource FontSizeCaption}" HorizontalAlignment="Center" />
@@ -496,7 +518,7 @@
                     </Grid>
                     <ToggleButton x:Name="ToolExtend"
                                   Style="{StaticResource ToolToggleButtonStyle}"
-                                  ToolTipService.ToolTip="Page size — drag a side handle to widen a page; drag down inside a page to add writing space, up to remove it">
+                                  ToolTipService.ToolTip="Page size — drag a side handle to widen a page; drag down inside a page to add writing space, up to remove it" AutomationProperties.Name="Page size">
                         <FontIcon Glyph="&#xf72c;" FontSize="18" />
                     </ToggleButton>
                     <Border x:Name="Sep2" Background="{ThemeResource AppBorderBrush}" Width="1" Height="22" Margin="6,0"/>
@@ -569,7 +591,7 @@
                                       Margin="2,0"
                                       ToolTipService.ToolTip="Change width" />
                 <Border x:Name="SelColorSep" Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" VerticalAlignment="Center" />
-                <Button x:Name="SelDuplicateBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Duplicate (Ctrl+D)">
+                <Button x:Name="SelDuplicateBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Duplicate (Ctrl+D)" AutomationProperties.Name="Duplicate">
                     <FontIcon Glyph="&#xe14d;" />
                 </Button>
                 <Button x:Name="SelToTextBtn" Style="{StaticResource ToolButtonStyle}"
@@ -582,11 +604,11 @@
                         AutomationProperties.Name="Save as sticker">
                     <FontIcon Glyph="&#xe02e;" />
                 </Button>
-                <Button x:Name="SelDeleteBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Delete (Del)">
+                <Button x:Name="SelDeleteBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Delete (Del)" AutomationProperties.Name="Delete">
                     <FontIcon Glyph="&#xe872;" />
                 </Button>
                 <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" VerticalAlignment="Center" />
-                <Button x:Name="SelClearBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Clear selection (Esc)">
+                <Button x:Name="SelClearBtn" Style="{StaticResource ToolButtonStyle}" ToolTipService.ToolTip="Clear selection (Esc)" AutomationProperties.Name="Clear selection">
                     <FontIcon Glyph="&#xe5cd;" />
                 </Button>
             </StackPanel>
@@ -614,15 +636,15 @@
                            Foreground="{ThemeResource AppTextSecondaryBrush}" FontSize="12"
                            TextAlignment="Center" />
                 <Button x:Name="SearchPrevBtn" Style="{StaticResource ToolButtonStyle}"
-                        ToolTipService.ToolTip="Previous match" IsEnabled="False">
+                        ToolTipService.ToolTip="Previous match" AutomationProperties.Name="Previous match" IsEnabled="False">
                     <FontIcon Glyph="&#xe5ce;" FontSize="12" />
                 </Button>
                 <Button x:Name="SearchNextBtn" Style="{StaticResource ToolButtonStyle}"
-                        ToolTipService.ToolTip="Next match" IsEnabled="False">
+                        ToolTipService.ToolTip="Next match" AutomationProperties.Name="Next match" IsEnabled="False">
                     <FontIcon Glyph="&#xe5cf;" FontSize="12" />
                 </Button>
                 <Button x:Name="SearchCloseBtn" Style="{StaticResource ToolButtonStyle}"
-                        ToolTipService.ToolTip="Close">
+                        ToolTipService.ToolTip="Close" AutomationProperties.Name="Close">
                     <FontIcon Glyph="&#xe5cd;" FontSize="12" />
                 </Button>
             </StackPanel>
@@ -673,7 +695,7 @@
                                                 ShouldConstrainToRootBounds="True" />
                                 </Button.Flyout>
                             </Button>
-                            <ToggleButton x:Name="PageEditModeBtn"
+                            <ToggleButton x:Name="PageEditModeBtn" AutomationProperties.Name="Edit pages"
                                           Padding="8,3"
                                           CornerRadius="6"
                                           Background="Transparent"
@@ -705,7 +727,7 @@
                                     Width="28" Height="28" Padding="0"
                                     CornerRadius="6"
                                     Background="Transparent" BorderThickness="0"
-                                    ToolTipService.ToolTip="Delete selected pages">
+                                    ToolTipService.ToolTip="Delete selected pages" AutomationProperties.Name="Delete selected pages">
                                 <FontIcon Glyph="&#xE872;" FontSize="18"
                                           Foreground="#E03A3A" />
                             </Button>
@@ -713,7 +735,7 @@
                                     Width="28" Height="28" Padding="0"
                                     CornerRadius="6"
                                     Background="Transparent" BorderThickness="0"
-                                    ToolTipService.ToolTip="Clear selection">
+                                    ToolTipService.ToolTip="Clear selection" AutomationProperties.Name="Clear selection">
                                 <FontIcon Glyph="&#xE5C9;" FontSize="18" />
                             </Button>
                         </StackPanel>
@@ -770,15 +792,21 @@
                     <Border Style="{StaticResource TopBarGroupStyle}">
                         <StackPanel Orientation="Horizontal" Spacing="0">
                             <Button x:Name="UndoBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Undo (Ctrl+Z)" IsEnabled="False">
+                                    ToolTipService.ToolTip="Undo (Ctrl+Z)" AutomationProperties.Name="Undo" IsEnabled="False">
                                 <FontIcon Glyph="&#xe166;" FontSize="18" />
                             </Button>
                             <Border Style="{StaticResource TopBarSegDividerStyle}" />
                             <Button x:Name="RedoBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Redo (Ctrl+Y)" IsEnabled="False">
+                                    ToolTipService.ToolTip="Redo (Ctrl+Y)" AutomationProperties.Name="Redo" IsEnabled="False">
                                 <FontIcon Glyph="&#xe15a;" FontSize="18" />
                             </Button>
                         </StackPanel>
+                    </Border>
+                    <Border Style="{StaticResource TopBarGroupStyle}">
+                        <Button x:Name="SaveBtn" Style="{StaticResource TopBarSegButtonStyle}"
+                                ToolTipService.ToolTip="Save (Ctrl+S)" AutomationProperties.Name="Save">
+                            <FontIcon Glyph="&#xe161;" FontSize="18" />
+                        </Button>
                     </Border>
                     <!-- Everything that takes the note somewhere else, in one menu. -->
                     <Border Style="{StaticResource TopBarGroupStyle}">
@@ -828,7 +856,7 @@
                             <Button x:Name="TopBarTitleBtn"
                                     Background="Transparent" BorderThickness="0"
                                     Padding="8,4" CornerRadius="6"
-                                    ToolTipService.ToolTip="Rename">
+                                    ToolTipService.ToolTip="Rename" AutomationProperties.Name="Rename">
                                 <TextBlock x:Name="TopBarTitle"
                                            FontSize="14" FontWeight="SemiBold" MaxWidth="360"
                                            VerticalAlignment="Center"
@@ -863,6 +891,41 @@
                 <!-- Right: screenshot · view · add · present · settings -->
                 <StackPanel x:Name="ToolbarSecondary" Grid.Column="2" Orientation="Horizontal" Spacing="8"
                             Padding="0,0,4,0" VerticalAlignment="Center">
+                    <!-- Zoom: shows the current zoom; the menu has the presets and the lock. -->
+                    <Border x:Name="ZoomShell" Style="{StaticResource TopBarGroupStyle}">
+                        <Button x:Name="ZoomMenuBtn" Style="{StaticResource TopBarAddButtonStyle}"
+                                Width="Auto" ToolTipService.ToolTip="Zoom"
+                                AutomationProperties.Name="Zoom">
+                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                <FontIcon x:Name="ZoomLockIcon" Glyph="&#xe897;" FontSize="14" Visibility="Collapsed" />
+                                <TextBlock x:Name="ZoomMenuText" Text="100%" FontSize="13" MinWidth="34"
+                                           TextAlignment="Center"
+                                           FontFamily="{ThemeResource ContentControlThemeFontFamily}"
+                                           VerticalAlignment="Center" />
+                                <FontIcon Glyph="&#xe5cf;" FontSize="11" />
+                            </StackPanel>
+                            <Button.Flyout>
+                                <MenuFlyout Placement="Bottom" ShouldConstrainToRootBounds="True">
+                                    <MenuFlyoutItem x:Name="ZoomInItem" Text="Zoom in" KeyboardAcceleratorTextOverride="Ctrl+=">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe8ff;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="ZoomOutItem" Text="Zoom out" KeyboardAcceleratorTextOverride="Ctrl+-">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe900;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="ZoomActualItem" Text="Actual size (100%)" KeyboardAcceleratorTextOverride="Ctrl+0" />
+                                    <MenuFlyoutSeparator />
+                                    <MenuFlyoutItem x:Name="ZoomFitWidthItem" Text="Fit width" KeyboardAcceleratorTextOverride="Ctrl+9">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe8d4;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="ZoomFitPageItem" Text="Fit page" KeyboardAcceleratorTextOverride="Ctrl+8">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe3c2;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator />
+                                    <ToggleMenuFlyoutItem x:Name="ZoomLockItem" Text="Lock zoom" />
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                    </Border>
                     <Border x:Name="ScreenshotShell" Style="{StaticResource TopBarGroupStyle}">
                         <Button x:Name="ScreenshotBtn" Style="{StaticResource TopBarSegButtonStyle}"
                                 ToolTipService.ToolTip="Take screenshot" AutomationProperties.Name="Take screenshot">
@@ -871,11 +934,11 @@
                     </Border>
                     <Border Style="{StaticResource TopBarGroupStyle}">
                         <StackPanel Orientation="Horizontal" Spacing="0">
-                            <Button x:Name="PagePanelBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Page sorter">
+                            <Button x:Name="PagePanelBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Page sorter" AutomationProperties.Name="Page sorter">
                                 <FontIcon Glyph="&#xe8ef;" FontSize="18" />
                             </Button>
                             <Border Style="{StaticResource TopBarSegDividerStyle}" />
-                            <Button x:Name="SearchBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Find text (Ctrl+F)">
+                            <Button x:Name="SearchBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Find text (Ctrl+F)" AutomationProperties.Name="Find text">
                                 <FontIcon Glyph="&#xe8b6;" FontSize="18" />
                             </Button>
                             <Border x:Name="SideBySideDivider" Style="{StaticResource TopBarSegDividerStyle}" />
@@ -915,7 +978,7 @@
                             </Flyout>
                         </FlyoutBase.AttachedFlyout>
                         <Button x:Name="AddMenuBtn" Style="{StaticResource TopBarAddButtonStyle}"
-                                Width="Auto" ToolTipService.ToolTip="Add pages, stickers and page templates">
+                                Width="Auto" ToolTipService.ToolTip="Add pages, stickers and page templates" AutomationProperties.Name="Add pages, stickers and page templates">
                             <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
                                 <FontIcon Glyph="&#xe145;" FontSize="16" />
                                 <TextBlock Text="Add" FontSize="13"
@@ -938,6 +1001,35 @@
                                     <MenuFlyoutItem x:Name="TemplateBtn" Text="Page template…">
                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xf79d;" /></MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                    </Border>
+                    <!-- Study: quiz yourself on the tape strips. Shown once the note has tape. -->
+                    <Border x:Name="StudyShell" Style="{StaticResource TopBarGroupStyle}" Visibility="Collapsed">
+                        <Button x:Name="StudyBtn" Style="{StaticResource TopBarAddButtonStyle}"
+                                Width="Auto" ToolTipService.ToolTip="Study the tape strips in this note"
+                                AutomationProperties.Name="Study">
+                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
+                                <FontIcon Glyph="&#xe80c;" FontSize="16" />
+                                <TextBlock Text="Study" FontSize="13"
+                                           FontFamily="{ThemeResource ContentControlThemeFontFamily}"
+                                           VerticalAlignment="Center" />
+                                <FontIcon Glyph="&#xe5cf;" FontSize="11" />
+                            </StackPanel>
+                            <Button.Flyout>
+                                <MenuFlyout x:Name="StudyMenu" Placement="Bottom" ShouldConstrainToRootBounds="True">
+                                    <MenuFlyoutItem x:Name="StudyQuizItem" Text="Quiz me" KeyboardAcceleratorTextOverride="F6">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe80c;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="StudyCardsItem" Text="Flashcards">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe41d;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator x:Name="StudyMissedSep" />
+                                    <MenuFlyoutItem x:Name="StudyMissedItem" Text="Quiz only the missed">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe042;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="StudyResetItem" Text="Clear missed marks" />
                                 </MenuFlyout>
                             </Button.Flyout>
                         </Button>
@@ -965,7 +1057,7 @@
             </Grid>
             <!-- Open notes as tabs; always shown, with + to open another note. -->
             <TabView x:Name="TabStrip" Grid.Row="1" Visibility="Collapsed"
-                     Padding="8,0,8,0" Height="38"
+                     Padding="8,0,8,0" VerticalAlignment="Bottom"
                      TabWidthMode="SizeToContent" CloseButtonOverlayMode="OnPointerOver"
                      IsAddTabButtonVisible="False" CanReorderTabs="True" CanDragTabs="True" AllowDropTabs="True">
                 <TabView.TabStripFooter>
@@ -981,6 +1073,73 @@
                 </TabView.TabStripFooter>
             </TabView>
             </Grid>
+        </Border>
+
+        <!-- Study bar: shown while quizzing yourself on the note's tape strips.
+             The page stays fully usable (write your answer, then reveal). -->
+        <Border x:Name="StudyBar"
+                Grid.Row="1" Grid.RowSpan="2" Grid.Column="0" Grid.ColumnSpan="3"
+                Canvas.ZIndex="12" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                Margin="0,0,0,20" Padding="12,6,6,6" CornerRadius="26"
+                Visibility="Collapsed"
+                Background="{ThemeResource AppToolbarBrush}"
+                BorderBrush="{ThemeResource AppBorderBrush}" BorderThickness="1"
+                Translation="0,0,32">
+            <Border.Shadow><ThemeShadow /></Border.Shadow>
+            <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                <FontIcon Glyph="&#xe80c;" FontSize="20" Foreground="{ThemeResource AppAccentBrush}" />
+                <StackPanel Width="96" Spacing="4" VerticalAlignment="Center">
+                    <TextBlock x:Name="StudyProgressText" Text="1 of 1" FontSize="13"
+                               Foreground="{ThemeResource AppTextPrimaryBrush}" />
+                    <ProgressBar x:Name="StudyProgress" Minimum="0" Maximum="100" Value="0"
+                                 Height="4" MinHeight="4" CornerRadius="2"
+                                 Foreground="{ThemeResource AppAccentBrush}"
+                                 Background="{ThemeResource AppBorderBrush}" />
+                </StackPanel>
+                <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" />
+                <Button x:Name="StudyShowBtn" AllowFocusOnInteraction="False" IsTabStop="False" Padding="14,8" CornerRadius="19"
+                        ToolTipService.ToolTip="Show what's under the tape (Space)"
+                        AutomationProperties.Name="Show answer">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xe8f4;" FontSize="18" />
+                        <TextBlock Text="Show answer" FontSize="14" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="StudyAgainBtn" AllowFocusOnInteraction="False" IsTabStop="False" Padding="14,8" CornerRadius="19" Visibility="Collapsed"
+                        ToolTipService.ToolTip="I didn't know it: ask again later (1)"
+                        AutomationProperties.Name="Again">
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xe042;" FontSize="18" />
+                        <TextBlock Text="Again" FontSize="14" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="StudyGotBtn" AllowFocusOnInteraction="False" IsTabStop="False" Padding="14,8" CornerRadius="19" Visibility="Collapsed"
+                        ToolTipService.ToolTip="I knew it (2)" AutomationProperties.Name="Got it">
+                    <Button.Resources>
+                        <ResourceDictionary>
+                            <StaticResource x:Key="ButtonBackground" ResourceKey="AppAccentSoftBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPointerOver" ResourceKey="AppAccentSoftBrush" />
+                            <StaticResource x:Key="ButtonBackgroundPressed" ResourceKey="AppAccentSoftBrush" />
+                            <StaticResource x:Key="ButtonForeground" ResourceKey="AppAccentBrush" />
+                            <StaticResource x:Key="ButtonForegroundPointerOver" ResourceKey="AppAccentBrush" />
+                            <StaticResource x:Key="ButtonForegroundPressed" ResourceKey="AppAccentBrush" />
+                        </ResourceDictionary>
+                    </Button.Resources>
+                    <StackPanel Orientation="Horizontal" Spacing="6">
+                        <FontIcon Glyph="&#xe5ca;" FontSize="18" />
+                        <TextBlock Text="Got it" FontSize="14" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Border Background="{ThemeResource AppBorderBrush}" Width="1" Height="24" Margin="2,0" />
+                <Button x:Name="StudyCardsBtn" AllowFocusOnInteraction="False" IsTabStop="False" Style="{StaticResource ToolButtonStyle}"
+                        ToolTipService.ToolTip="Switch to flashcards" AutomationProperties.Name="Switch to flashcards">
+                    <FontIcon Glyph="&#xe41d;" FontSize="18" />
+                </Button>
+                <Button x:Name="StudyExitBtn" AllowFocusOnInteraction="False" IsTabStop="False" Style="{StaticResource ToolButtonStyle}"
+                        ToolTipService.ToolTip="Stop studying (Esc)" AutomationProperties.Name="Stop studying">
+                    <FontIcon Glyph="&#xe5cd;" FontSize="18" />
+                </Button>
+            </StackPanel>
         </Border>
 
         <!-- Presentation bar: the only chrome left in presentation mode. Dim
@@ -1129,21 +1288,21 @@
                     <Border.Shadow><ThemeShadow/></Border.Shadow>
                     <StackPanel Orientation="Horizontal" Spacing="2">
                         <Button x:Name="ShotCopyBtn" Style="{StaticResource ShotActionButtonStyle}"
-                                ToolTipService.ToolTip="Copy to clipboard">
+                                ToolTipService.ToolTip="Copy to clipboard" AutomationProperties.Name="Copy to clipboard">
                             <StackPanel Orientation="Horizontal" Spacing="7">
                                 <FontIcon Glyph="&#xe14d;" FontSize="16"/>
                                 <TextBlock Text="Copy" FontSize="13" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
                         <Button x:Name="ShotInsertBtn" Style="{StaticResource ShotActionButtonStyle}"
-                                ToolTipService.ToolTip="Insert into this note">
+                                ToolTipService.ToolTip="Insert into this note" AutomationProperties.Name="Insert into this note">
                             <StackPanel Orientation="Horizontal" Spacing="7">
                                 <FontIcon Glyph="&#xe439;" FontSize="16"/>
                                 <TextBlock Text="Insert" FontSize="13" VerticalAlignment="Center"/>
                             </StackPanel>
                         </Button>
                         <Button x:Name="ShotSaveBtn" Style="{StaticResource ShotActionButtonStyle}"
-                                ToolTipService.ToolTip="Save as PNG">
+                                ToolTipService.ToolTip="Save as PNG" AutomationProperties.Name="Save as PNG">
                             <StackPanel Orientation="Horizontal" Spacing="7">
                                 <FontIcon Glyph="&#xe161;" FontSize="16"/>
                                 <TextBlock Text="Save" FontSize="13" VerticalAlignment="Center"/>
@@ -1151,7 +1310,7 @@
                         </Button>
                         <Border Width="1" Margin="4,4" Background="{ThemeResource AppBorderBrush}"/>
                         <Button x:Name="ShotCancelBtn" Style="{StaticResource ShotActionButtonStyle}"
-                                ToolTipService.ToolTip="Cancel (Esc)">
+                                ToolTipService.ToolTip="Cancel (Esc)" AutomationProperties.Name="Cancel">
                             <FontIcon Glyph="&#xe5cd;" FontSize="16"/>
                         </Button>
                     </StackPanel>

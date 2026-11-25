@@ -37,7 +37,7 @@
                         </TransitionCollection>
                     </StackPanel.ChildrenTransitions>
 
-                    <Button x:Name="AllNotesNavBtn"
+                    <Button x:Name="AllNotesNavBtn" AutomationProperties.Name="All notes"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Left"
                             BorderThickness="0"
@@ -50,7 +50,7 @@
                         </StackPanel>
                     </Button>
 
-                    <Button x:Name="TrashNavBtn"
+                    <Button x:Name="TrashNavBtn" AutomationProperties.Name="Trash"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Left"
                             Background="Transparent"
@@ -65,7 +65,7 @@
                         </StackPanel>
                     </Button>
 
-                    <Button x:Name="ArchiveNavBtn"
+                    <Button x:Name="ArchiveNavBtn" AutomationProperties.Name="Archive"
                             HorizontalAlignment="Stretch"
                             HorizontalContentAlignment="Left"
                             Background="Transparent"
@@ -137,7 +137,7 @@
                                 HorizontalAlignment="Right"
                                 Background="Transparent" BorderThickness="0"
                                 CornerRadius="6" Padding="6,4"
-                                ToolTipService.ToolTip="New folder">
+                                ToolTipService.ToolTip="New folder" AutomationProperties.Name="New folder">
                             <FontIcon Glyph="&#xE145;" FontSize="18"
                                       FontFamily="{StaticResource MaterialIconsFamily}"
                                       Foreground="{ThemeResource AppTextSecondaryBrush}" />
@@ -190,7 +190,7 @@
                                             Padding="6,2"
                                             CornerRadius="6"
                                             VerticalAlignment="Center"
-                                            ToolTipService.ToolTip="Folder options">
+                                            ToolTipService.ToolTip="Folder options" AutomationProperties.Name="Folder options">
                                         <FontIcon Glyph="&#xE5D3;" FontSize="18"
                                                   FontFamily="{StaticResource MaterialIconsFamily}"
                                                   Foreground="{ThemeResource AppTextPrimaryBrush}" />
@@ -207,7 +207,7 @@
                         BorderThickness="0,1,0,0"
                         Padding="8,6,8,12">
                     <Grid>
-                        <Button x:Name="SettingsBtn"
+                        <Button x:Name="SettingsBtn" AutomationProperties.Name="Settings"
                                 HorizontalAlignment="Stretch"
                                 HorizontalContentAlignment="Left"
                                 Background="Transparent"
@@ -250,9 +250,12 @@
                     Padding="4,0,12,0"
                     MinHeight="48">
                 <Grid VerticalAlignment="Center">
+                    <!-- The search column takes the free space first (up to its max
+                         width) and shrinks when the actions on the right need room,
+                         e.g. the longer Select-mode bar, so they never get cut off. -->
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="1000*" MinWidth="150" MaxWidth="336" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
@@ -267,7 +270,7 @@
                     <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="6" VerticalAlignment="Center">
                         <Button x:Name="SidebarToggleBtn"
                                 Style="{StaticResource ToolButtonStyle}"
-                                ToolTipService.ToolTip="Toggle sidebar">
+                                ToolTipService.ToolTip="Toggle sidebar" AutomationProperties.Name="Toggle sidebar">
                             <FontIcon Glyph="&#xe5d2;" />
                         </Button>
                     </StackPanel>
@@ -275,16 +278,15 @@
                     <!-- Search: filters the visible notes by title or folder. -->
                     <TextBox x:Name="SearchBox"
                              Grid.Column="1"
-                             Width="320"
                              Margin="8,0,8,0"
                              VerticalAlignment="Center"
                              PlaceholderText="Search notes and handwriting (Ctrl+F)"
-                             CornerRadius="8"
-                             Padding="34,6,10,6" />
+                             CornerRadius="18"
+                             Padding="36,6,14,6" />
                     <FontIcon Grid.Column="1" Glyph="&#xE8B6;" FontSize="18"
                               FontFamily="{StaticResource MaterialIconsFamily}"
                               HorizontalAlignment="Left" VerticalAlignment="Center"
-                              Margin="18,0,0,0" IsHitTestVisible="False"
+                              Margin="20,0,0,0" IsHitTestVisible="False"
                               Foreground="{ThemeResource AppTextSecondaryBrush}" />
 
                     <!-- Normal mode -->
@@ -296,8 +298,8 @@
                         <!-- Primary action in the app's own accent (soft tint + accent
                              text) rather than the system accent fill, so it matches the
                              rest of the chrome in both themes. -->
-                        <Button x:Name="NewBtn"
-                                Padding="12,8" CornerRadius="8" BorderThickness="1">
+                        <Button x:Name="NewBtn" AutomationProperties.Name="New note"
+                                Padding="14,8" CornerRadius="19" BorderThickness="1">
                             <Button.Resources>
                                 <ResourceDictionary>
                                     <StaticResource x:Key="ButtonBackground" ResourceKey="AppAccentSoftBrush" />
@@ -317,8 +319,8 @@
                                 <TextBlock Text="New note" VerticalAlignment="Center" FontSize="14" FontWeight="SemiBold" />
                             </StackPanel>
                         </Button>
-                        <Button x:Name="OpenBtn"
-                                Padding="12,8" CornerRadius="8"
+                        <Button x:Name="OpenBtn" AutomationProperties.Name="Import PDF"
+                                Padding="12,8" CornerRadius="19"
                                 Background="Transparent" BorderThickness="0">
                             <StackPanel Orientation="Horizontal" Spacing="7">
                                 <FontIcon Glyph="&#xe415;" FontSize="18" />
@@ -326,9 +328,9 @@
                             </StackPanel>
                         </Button>
                         <Button x:Name="SelectBtn"
-                                Padding="12,8" CornerRadius="8"
+                                Padding="12,8" CornerRadius="19"
                                 Background="Transparent" BorderThickness="0"
-                                ToolTipService.ToolTip="Select notes">
+                                ToolTipService.ToolTip="Select notes" AutomationProperties.Name="Select notes">
                             <StackPanel Orientation="Horizontal" Spacing="7">
                                 <FontIcon Glyph="&#xe162;" FontSize="18" />
                                 <TextBlock Text="Select" VerticalAlignment="Center" FontSize="14" />
@@ -346,8 +348,8 @@
                         <TextBlock x:Name="SelectionCountLabel" Text="0 selected"
                                    VerticalAlignment="Center" Margin="0,0,8,0"
                                    Style="{StaticResource MutedStyle}" />
-                        <Button x:Name="RestoreBtn"
-                                Padding="12,8" CornerRadius="8"
+                        <Button x:Name="RestoreBtn" AutomationProperties.Name="Restore"
+                                Padding="12,8" CornerRadius="19"
                                 Background="Transparent" BorderThickness="0"
                                 IsEnabled="False" Visibility="Collapsed">
                             <StackPanel Orientation="Horizontal" Spacing="6">
@@ -355,8 +357,8 @@
                                 <TextBlock Text="Restore" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
-                        <Button x:Name="UnarchiveBtn"
-                                Padding="12,8" CornerRadius="8"
+                        <Button x:Name="UnarchiveBtn" AutomationProperties.Name="Unarchive"
+                                Padding="12,8" CornerRadius="19"
                                 Background="Transparent" BorderThickness="0"
                                 IsEnabled="False" Visibility="Collapsed">
                             <StackPanel Orientation="Horizontal" Spacing="6">
@@ -365,8 +367,8 @@
                                 <TextBlock Text="Unarchive" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
-                        <Button x:Name="MoveToFolderBtn"
-                                Padding="12,8" CornerRadius="8"
+                        <Button x:Name="MoveToFolderBtn" AutomationProperties.Name="Move to folder"
+                                Padding="12,8" CornerRadius="19"
                                 Background="Transparent" BorderThickness="0" IsEnabled="False">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <FontIcon Glyph="&#xe2c8;" FontSize="18" />
@@ -374,17 +376,17 @@
                             </StackPanel>
                         </Button>
                         <Button x:Name="TagsBtn"
-                                Padding="12,8" CornerRadius="8"
+                                Padding="12,8" CornerRadius="19"
                                 Background="Transparent" BorderThickness="0" IsEnabled="False"
-                                ToolTipService.ToolTip="Add or remove tags">
+                                ToolTipService.ToolTip="Add or remove tags" AutomationProperties.Name="Add or remove tags">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <FontIcon Glyph="&#xe9ef;" FontSize="18"
                                           FontFamily="{StaticResource MaterialIconsFamily}" />
                                 <TextBlock Text="Tags" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
-                        <Button x:Name="ArchiveBtn"
-                                Padding="12,8" CornerRadius="8"
+                        <Button x:Name="ArchiveBtn" AutomationProperties.Name="Archive"
+                                Padding="12,8" CornerRadius="19"
                                 Background="Transparent" BorderThickness="0" IsEnabled="False">
                             <StackPanel Orientation="Horizontal" Spacing="6">
                                 <FontIcon Glyph="&#xe149;" FontSize="18"
@@ -392,8 +394,8 @@
                                 <TextBlock Text="Archive" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
-                        <Button x:Name="DeleteBtn"
-                                Padding="12,8" CornerRadius="8"
+                        <Button x:Name="DeleteBtn" AutomationProperties.Name="Move to Trash"
+                                Padding="12,8" CornerRadius="19"
                                 Background="#E03A3A" Foreground="White"
                                 BorderThickness="0" IsEnabled="False">
                             <StackPanel Orientation="Horizontal" Spacing="6">
@@ -401,8 +403,33 @@
                                 <TextBlock x:Name="DeleteBtnLabel" Text="Move to Trash" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
                         </Button>
-                        <Button x:Name="CancelSelectBtn"
-                                Padding="12,8" CornerRadius="8">
+                        <!-- Less common bulk actions: select all, pin, export copies. -->
+                        <Button x:Name="SelectMoreBtn"
+                                Padding="10,8" CornerRadius="19"
+                                Background="Transparent" BorderThickness="0"
+                                ToolTipService.ToolTip="More actions" AutomationProperties.Name="More actions">
+                            <FontIcon Glyph="&#xE5D3;" FontSize="18"
+                                      FontFamily="{StaticResource MaterialIconsFamily}" />
+                            <Button.Flyout>
+                                <MenuFlyout Placement="Bottom" ShouldConstrainToRootBounds="True">
+                                    <MenuFlyoutItem x:Name="SelectAllItem" Text="Select all (Ctrl+A)">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe162;" FontFamily="{StaticResource MaterialIconsFamily}" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="SelectNoneItem" Text="Select none" />
+                                    <MenuFlyoutSeparator x:Name="SelectMoreSep" />
+                                    <MenuFlyoutItem x:Name="PinSelectedItem" Text="Pin to the top">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xF10D;" FontFamily="{StaticResource MaterialIconsFamily}" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="UnpinSelectedItem" Text="Unpin" />
+                                    <MenuFlyoutItem x:Name="ExportSelectedItem" Text="Export copies to a folder…">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xf3b2;" FontFamily="{StaticResource MaterialIconsFamily}" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                </MenuFlyout>
+                            </Button.Flyout>
+                        </Button>
+                        <Button x:Name="CancelSelectBtn" AutomationProperties.Name="Cancel selection"
+                                Padding="12,8" CornerRadius="19"
+                                ToolTipService.ToolTip="Done selecting (Esc)">
                             <TextBlock Text="Cancel" FontSize="14" />
                         </Button>
                     </StackPanel>
@@ -437,11 +464,11 @@
                                VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                         <Border Background="{ThemeResource AppSurfaceVariantBrush}"
-                                CornerRadius="8" Padding="2">
+                                CornerRadius="17" Padding="2">
                             <StackPanel Orientation="Horizontal" Spacing="1">
                                 <!-- Clicking the active option flips the direction; the
                                      arrow (shown only on the active one) says which way. -->
-                                <Button x:Name="SortByDateBtn" Padding="12,6" CornerRadius="6"
+                                <Button x:Name="SortByDateBtn" AutomationProperties.Name="Sort by date" Padding="12,6" CornerRadius="15"
                                         Background="{ThemeResource AppSurfaceBrush}" BorderThickness="0">
                                     <StackPanel Orientation="Horizontal" Spacing="4">
                                         <TextBlock Text="Date" FontSize="13" VerticalAlignment="Center" />
@@ -449,7 +476,7 @@
                                                   FontFamily="{StaticResource MaterialIconsFamily}" />
                                     </StackPanel>
                                 </Button>
-                                <Button x:Name="SortByNameBtn" Padding="12,6" CornerRadius="6"
+                                <Button x:Name="SortByNameBtn" AutomationProperties.Name="Sort by name" Padding="12,6" CornerRadius="15"
                                         Background="Transparent" BorderThickness="0">
                                     <StackPanel Orientation="Horizontal" Spacing="4">
                                         <TextBlock Text="Name" FontSize="13" VerticalAlignment="Center" />
@@ -457,7 +484,7 @@
                                                   FontFamily="{StaticResource MaterialIconsFamily}" />
                                     </StackPanel>
                                 </Button>
-                                <Button x:Name="SortByFolderBtn" Padding="12,6" CornerRadius="6"
+                                <Button x:Name="SortByFolderBtn" AutomationProperties.Name="Sort by folder" Padding="12,6" CornerRadius="15"
                                         Background="Transparent" BorderThickness="0">
                                     <StackPanel Orientation="Horizontal" Spacing="4">
                                         <TextBlock Text="Folder" FontSize="13" VerticalAlignment="Center" />

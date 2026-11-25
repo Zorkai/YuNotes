@@ -256,10 +256,12 @@ public sealed partial class EditorPage
         if (_doc is null) return true;
         if (_saving || Canvas.Context.EditingSuspended) return false;
         if (_presenting) ExitPresentation();
+        ExitStudy();
         Canvas.ClearSelection();
         UpdateSelectionUi();
         if (SearchPanel.Visibility == Visibility.Visible) CloseSearch();
-        SaveLastPage();
+        SaveView();
+        SaveLastPage(force: true);
         _autosaveTimer?.Stop();
 
         if (_doc.IsDirty)

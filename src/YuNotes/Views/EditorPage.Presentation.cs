@@ -42,6 +42,7 @@ public sealed partial class EditorPage
     {
         if (_presenting || _doc is null || Canvas.PageCount == 0) return;
         if (ScreenshotOverlay.Visibility == Visibility.Visible) ExitScreenshotMode();
+        ExitStudy();
         _presenting = true;
         int page = Math.Max(0, Canvas.ActivePageIndex);
         _toolBeforePresent = _selected;

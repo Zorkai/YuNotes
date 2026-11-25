@@ -39,6 +39,11 @@ public sealed class TextBox
 public sealed class PageText
 {
     public int Index { get; set; }
+    // Which note page this is and what its ink looked like when it was read
+    // (SearchIndex.InkSignature): a page whose ink hasn't changed reuses its
+    // handwriting words instead of being read again.
+    public string PageId { get; set; } = "";
+    public string InkSig { get; set; } = "";
     public List<TextBox> Boxes { get; set; } = new();
 }
 
@@ -60,7 +65,12 @@ public static class HandwritingRecognizer
 {
     private const int MaxStrokesPerBatch = 120;
 
+    // Two lanes: work the user is waiting on (find in note, convert to text)
+    // is taken before background indexing, which goes one page at a time, so
+    // it never waits behind more than a single page of the index.
     private static readonly System.Collections.Concurrent.BlockingCollection<Action> s_work = new();
+    private static readonly System.Collections.Concurrent.BlockingCollection<Action> s_background = new();
+    private static readonly System.Collections.Concurrent.BlockingCollection<Action>[] s_lanes = { s_work, s_background };
     private static InkRecognizerContainer? s_container;
     private static readonly Task<bool> s_availableTask;
     private static int s_skipped;
@@ -68,7 +78,15 @@ public static class HandwritingRecognizer
 
     static HandwritingRecognizer()
     {
-        var t = new Thread(() => { foreach (var job in s_work.GetConsumingEnumerable()) job(); })
+        var t = new Thread(() =>
+        {
+            // TakeFromAny checks the lanes in order: s_work first.
+            while (true)
+            {
+                System.Collections.Concurrent.BlockingCollection<Action>.TakeFromAny(s_lanes, out var job);
+                job();
+            }
+        })
         {
             IsBackground = true,
             Name = "Handwriting recognizer",
@@ -86,10 +104,10 @@ public static class HandwritingRecognizer
         });
     }
 
-    private static Task<T> Run<T>(Func<T> work)
+    private static Task<T> Run<T>(Func<T> work, bool background = false)
     {
         var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
-        s_work.Add(() =>
+        (background ? s_background : s_work).Add(() =>
         {
             try { tcs.SetResult(work()); }
             catch (Exception ex) { tcs.SetException(ex); }
@@ -141,7 +159,8 @@ public static class HandwritingRecognizer
 
     // Recognizes the pen strokes of one page. Highlighter strokes and dots are
     // skipped. Returns one box per recognized word.
-    public static Task<List<TextBox>> RecognizeAsync(IReadOnlyList<Stroke> strokes)
+    // background: queue behind anything the user is waiting on (indexing).
+    public static Task<List<TextBox>> RecognizeAsync(IReadOnlyList<Stroke> strokes, bool background = false)
     {
         if (!IsAvailable) return Task.FromResult(new List<TextBox>());
         // Copy now: the caller's page can change while the work waits its turn.
@@ -168,7 +187,7 @@ public static class HandwritingRecognizer
             if (s_lastError is not null)
                 App.LogError(s_lastError, $"Handwriting recognition skipped {s_skipped} of {pen.Count} strokes on a page");
             return result;
-        });
+        }, background);
     }
 
     // Drops our reference to a native object right here, on the recognizer
@@ -331,6 +350,9 @@ public sealed class NoteIndexEntry
     public string Title { get; set; } = "";
     // Handwriting language the note was read with ("" = Windows default).
     public string Language { get; set; } = "";
+    // False while a note is still being read: saved every few pages so a big
+    // note's progress survives closing YuNotes, but not yet up to date.
+    public bool Complete { get; set; }
     public List<PageText> Pages { get; set; } = new();
 }
 
@@ -339,7 +361,7 @@ public sealed record NoteSearchHit(string Path, string Title, PageMatch Match);
 public sealed class SearchIndex
 {
     // Bump when indexing changes so existing caches are rebuilt.
-    private const int FormatVersion = 8;
+    private const int FormatVersion = 9;   // 9: per-page ink signatures, partial progress
     private readonly string _dir;
     private readonly ConcurrentDictionary<string, NoteIndexEntry> _entries = new(StringComparer.OrdinalIgnoreCase);
     private readonly SemaphoreSlim _runGate = new(1, 1);
@@ -408,7 +430,7 @@ public sealed class SearchIndex
     }
 
     private static bool IsCurrent(NoteIndexEntry e, FileInfo fi) =>
-        e.Version == FormatVersion && e.Length == fi.Length && e.WriteUtc == fi.LastWriteTimeUtc
+        e.Complete && e.Version == FormatVersion && e.Length == fi.Length && e.WriteUtc == fi.LastWriteTimeUtc
         && (e.Language ?? "") == (App.Services.Settings.Current.HandwritingLanguage ?? "");
 
     // Brings the index up to date for these notes, one at a time in the
@@ -438,7 +460,8 @@ public sealed class SearchIndex
                 {
                     bool readInk = !_skipInk.Contains(p);
                     if (readInk) { Directory.CreateDirectory(_dir); File.WriteAllText(MarkerFile, p); }
-                    var entry = await Task.Run(() => BuildAsync(p, readInk)).ConfigureAwait(false);
+                    _entries.TryGetValue(p, out var previous);
+                    var entry = await Task.Run(() => BuildAsync(p, readInk, previous, SavePartial)).ConfigureAwait(false);
                     if (readInk) File.Delete(MarkerFile);
                     if (entry is not null)
                     {
@@ -459,7 +482,61 @@ public sealed class SearchIndex
         }
     }
 
-    private static async Task<NoteIndexEntry?> BuildAsync(string path, bool readInk)
+    // Every SaveEvery newly read pages, a big note's progress is written out
+    // (marked not Complete), so the next run picks up from there.
+    private const int SaveEvery = 20;
+
+    private void SavePartial(NoteIndexEntry partial)
+    {
+        try
+        {
+            _entries[partial.Path] = partial;
+            Directory.CreateDirectory(_dir);
+            File.WriteAllText(CacheFile(partial.Path), JsonSerializer.Serialize(partial));
+        }
+        catch { }
+    }
+
+    // A short fingerprint of a page's ink: changes when a stroke is added,
+    // removed, moved, reshaped or recolored to/from highlighter.
+    public static string InkSignature(NotePage p)
+    {
+        unchecked
+        {
+            ulong h = 1469598103934665603UL;
+            void Mix(long v) { h ^= (ulong)v; h *= 1099511628211UL; }
+            foreach (var s in p.Strokes)
+            {
+                // Stable across runs (string.GetHashCode is randomized per process,
+                // and these signatures are saved to disk).
+                foreach (char c in s.Id) Mix(c);
+                Mix((int)s.Kind);
+                Mix(s.Points.Count);
+                if (s.Points.Count == 0) continue;
+                var a = s.Points[0];
+                var b = s.Points[^1];
+                Mix(BitConverter.SingleToInt32Bits(a.X)); Mix(BitConverter.SingleToInt32Bits(a.Y));
+                Mix(BitConverter.SingleToInt32Bits(b.X)); Mix(BitConverter.SingleToInt32Bits(b.Y));
+            }
+            return $"{p.Strokes.Count}:{h:x16}";
+        }
+    }
+
+    // Handwriting words already read for a note's pages, by page id, with the
+    // ink signature they were read for. Lets the editor's find-in-note start
+    // from what the index has instead of reading every page again.
+    public Dictionary<string, (string Sig, List<TextBox> Words)> HandwritingFor(string path)
+    {
+        var result = new Dictionary<string, (string, List<TextBox>)>();
+        if (!_entries.TryGetValue(path, out var e)) return result;
+        foreach (var page in e.Pages)
+            if (page.PageId.Length > 0 && page.InkSig.Length > 0)
+                result[page.PageId] = (page.InkSig, page.Boxes.Where(b => b.K == TextSource.Handwriting).ToList());
+        return result;
+    }
+
+    private static async Task<NoteIndexEntry?> BuildAsync(string path, bool readInk, NoteIndexEntry? previous,
+                                                          Action<NoteIndexEntry> savePartial)
     {
         var fi = new FileInfo(path);
         var (doc, srcPdf) = App.Services.Documents.OpenForIndex(path, App.Services.PdfContainer);
@@ -472,6 +549,7 @@ public sealed class SearchIndex
             WriteUtc = fi.LastWriteTimeUtc,
             Language = App.Services.Settings.Current.HandwritingLanguage ?? "",
             Title = doc?.Info.Title is { Length: > 0 } t ? t : System.IO.Path.GetFileNameWithoutExtension(path),
+            Complete = true,
         };
 
         if (doc is null)
@@ -482,17 +560,49 @@ public sealed class SearchIndex
             return entry;
         }
 
+        // Handwriting already read for pages whose ink hasn't changed since.
+        var known = new Dictionary<string, PageText>();
+        if (previous?.Version == FormatVersion && (previous.Language ?? "") == entry.Language)
+            foreach (var old in previous.Pages)
+                if (old.PageId.Length > 0) known[old.PageId] = old;
+
+        int readSinceSave = 0;
         for (int i = 0; i < doc.Pages.Count; i++)
         {
             var p = doc.Pages[i];
-            var page = new PageText { Index = i };
+            var page = new PageText { Index = i, PageId = p.Id };
             if (readInk)
-                page.Boxes.AddRange(await HandwritingRecognizer.RecognizeAsync(p.Strokes).ConfigureAwait(false));
+            {
+                var sig = InkSignature(p);
+                if (known.TryGetValue(p.Id, out var old) && old.InkSig == sig)
+                    page.Boxes.AddRange(old.Boxes.Where(b => b.K == TextSource.Handwriting));
+                else
+                {
+                    // One page per job, in the background lane.
+                    page.Boxes.AddRange(await HandwritingRecognizer.RecognizeAsync(p.Strokes, background: true).ConfigureAwait(false));
+                    readSinceSave++;
+                }
+                page.InkSig = sig;
+            }
             if (p.SourcePageIndex is int si && si >= 0 && si < pdfPages.Count)
                 page.Boxes.AddRange(PdfBoxes(pdfPages[si], p.BackgroundLeft, p));
             page.Boxes.AddRange(TypedBoxes(p.Texts));
             if (BookmarkBox(p) is { } bm) page.Boxes.Add(bm);
             entry.Pages.Add(page);
+
+            if (readSinceSave >= SaveEvery && i < doc.Pages.Count - 1)
+            {
+                readSinceSave = 0;
+                // Pages read so far plus what is known for the rest; not
+                // Complete, so the note is read again (from here) next time.
+                var partial = new NoteIndexEntry
+                {
+                    Version = entry.Version, Path = entry.Path, Length = entry.Length, WriteUtc = entry.WriteUtc,
+                    Language = entry.Language, Title = entry.Title, Complete = false,
+                    Pages = entry.Pages.Concat(known.Values.Where(k => !entry.Pages.Any(e => e.PageId == k.PageId))).ToList(),
+                };
+                savePartial(partial);
+            }
         }
         return entry;
     }

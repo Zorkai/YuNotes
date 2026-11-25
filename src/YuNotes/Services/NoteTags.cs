@@ -76,6 +76,18 @@ public static class NoteTags
         for (int i = 0; i < S.PinnedNotes.Count; i++)
             if (string.Equals(S.PinnedNotes[i], oldPath, StringComparison.OrdinalIgnoreCase))
                 S.PinnedNotes[i] = newPath;
+        foreach (var vk in S.NoteViews.Keys.Where(k => string.Equals(k, oldPath, StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            var view = S.NoteViews[vk];
+            S.NoteViews.Remove(vk);
+            S.NoteViews[newPath] = view;
+        }
+        foreach (var sk in S.StudyMissed.Keys.Where(k => string.Equals(k, oldPath, StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            var ids = S.StudyMissed[sk];
+            S.StudyMissed.Remove(sk);
+            S.StudyMissed[newPath] = ids;
+        }
     }
 
     // A folder moved or was renamed: re-key every note under it. Does not save.
@@ -92,5 +104,17 @@ public static class NoteTags
         for (int i = 0; i < S.PinnedNotes.Count; i++)
             if (S.PinnedNotes[i].StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
                 S.PinnedNotes[i] = Rebase(S.PinnedNotes[i]);
+        foreach (var k in S.NoteViews.Keys.Where(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            var view = S.NoteViews[k];
+            S.NoteViews.Remove(k);
+            S.NoteViews[Rebase(k)] = view;
+        }
+        foreach (var k in S.StudyMissed.Keys.Where(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            var ids = S.StudyMissed[k];
+            S.StudyMissed.Remove(k);
+            S.StudyMissed[Rebase(k)] = ids;
+        }
     }
 }
