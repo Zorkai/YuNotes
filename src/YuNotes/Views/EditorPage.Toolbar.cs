@@ -305,7 +305,7 @@ public sealed partial class EditorPage
         // Title bar. The Add menu holds pages, sticker and template;
         // hiding one hides its row, and the Add button only goes when all are
         // hidden. Side by side and Present can be hidden too.
-        ScreenshotShell.Visibility = Show("Screenshot");
+        ScreenshotBtn.Visibility   = Show("Screenshot");
         TemplateBtn.Visibility     = Show("Template");
         StickersItem.Visibility    = Show("Stickers");
         AddPageBtn.Visibility      = Show("AddPage");
@@ -315,8 +315,8 @@ public sealed partial class EditorPage
         bool anyInserts = !IsHidden("Stickers") || !IsHidden("Template");
         AddMenuSep.Visibility = anyPages && anyInserts ? Visibility.Visible : Visibility.Collapsed;
         AddMenuShell.Visibility = anyPages || anyInserts ? Visibility.Visible : Visibility.Collapsed;
-        SideBySideBtn.Visibility = SideBySideDivider.Visibility = Show("SideBySide");
-        PresentShell.Visibility = Show("Present");
+        SideBySideSubItem.Visibility = Show("SideBySide");
+        PresentItem.Visibility = PresentSep.Visibility = Show("Present");
         // TopSep1 is an invisible layout anchor for ApplyToolbarOrder — leave it collapsed.
     }
 

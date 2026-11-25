@@ -779,37 +779,16 @@
                 <Border x:Name="TopBarDragRegion" Grid.Column="1"
                         Background="Transparent" />
 
-                <!-- Left: home · undo/redo · share menu. Every cluster is a rounded
-                     group, separated by spacing only. -->
-                <StackPanel Grid.Column="0" Orientation="Horizontal" Spacing="8"
+                <!-- Left: home · share menu · undo/redo. Single actions are plain
+                     icons (fill on hover only); only menus get an outlined pill. -->
+                <StackPanel x:Name="TopBarLeft" Grid.Column="0" Orientation="Horizontal" Spacing="4"
                             VerticalAlignment="Center">
-                    <Border Style="{StaticResource TopBarGroupStyle}">
-                        <Button x:Name="BackBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                ToolTipService.ToolTip="Home" AutomationProperties.Name="Home">
-                            <FontIcon Glyph="&#xe88a;" FontSize="18" />
-                        </Button>
-                    </Border>
-                    <Border Style="{StaticResource TopBarGroupStyle}">
-                        <StackPanel Orientation="Horizontal" Spacing="0">
-                            <Button x:Name="UndoBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Undo (Ctrl+Z)" AutomationProperties.Name="Undo" IsEnabled="False">
-                                <FontIcon Glyph="&#xe166;" FontSize="18" />
-                            </Button>
-                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
-                            <Button x:Name="RedoBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Redo (Ctrl+Y)" AutomationProperties.Name="Redo" IsEnabled="False">
-                                <FontIcon Glyph="&#xe15a;" FontSize="18" />
-                            </Button>
-                        </StackPanel>
-                    </Border>
-                    <Border Style="{StaticResource TopBarGroupStyle}">
-                        <Button x:Name="SaveBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                ToolTipService.ToolTip="Save (Ctrl+S)" AutomationProperties.Name="Save">
-                            <FontIcon Glyph="&#xe161;" FontSize="18" />
-                        </Button>
-                    </Border>
+                    <Button x:Name="BackBtn" Style="{StaticResource TopBarIconButtonStyle}"
+                            ToolTipService.ToolTip="Home" AutomationProperties.Name="Home">
+                        <FontIcon Glyph="&#xe88a;" FontSize="18" />
+                    </Button>
                     <!-- Everything that takes the note somewhere else, in one menu. -->
-                    <Border Style="{StaticResource TopBarGroupStyle}">
+                    <Border Style="{StaticResource TopBarGroupStyle}" Margin="4,0">
                         <Button x:Name="ShareBtn" Style="{StaticResource TopBarAddButtonStyle}"
                                 Width="Auto" ToolTipService.ToolTip="Share, export and earlier versions"
                                 AutomationProperties.Name="Share">
@@ -842,6 +821,15 @@
                             </Button.Flyout>
                         </Button>
                     </Border>
+                    <Border Style="{StaticResource TopBarDividerStyle}" />
+                    <Button x:Name="UndoBtn" Style="{StaticResource TopBarIconButtonStyle}"
+                            ToolTipService.ToolTip="Undo (Ctrl+Z)" AutomationProperties.Name="Undo" IsEnabled="False">
+                        <FontIcon Glyph="&#xe166;" FontSize="18" />
+                    </Button>
+                    <Button x:Name="RedoBtn" Style="{StaticResource TopBarIconButtonStyle}"
+                            ToolTipService.ToolTip="Redo (Ctrl+Y)" AutomationProperties.Name="Redo" IsEnabled="False">
+                        <FontIcon Glyph="&#xe15a;" FontSize="18" />
+                    </Button>
                 </StackPanel>
 
                 <!-- Center: document title + save state. Sits over the drag region,
@@ -868,12 +856,17 @@
                                      MinWidth="200" MaxWidth="360"
                                      VerticalAlignment="Center" />
                         </Grid>
-                        <!-- Save state doubles as the save button (autosave does the rest). -->
+                        <!-- Save state doubles as the save button (autosave does the rest).
+                             Shown only while saving or unsaved; "Saved" shows briefly, then fades. -->
                         <Button x:Name="SaveStateBtn"
                                 Background="Transparent" BorderThickness="0"
                                 Padding="8,4" CornerRadius="6"
+                                Visibility="Collapsed"
                                 ToolTipService.ToolTip="Save now (Ctrl+S)"
                                 AutomationProperties.Name="Save">
+                            <Button.OpacityTransition>
+                                <ScalarTransition Duration="0:0:0.3" />
+                            </Button.OpacityTransition>
                             <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
                                 <FontIcon x:Name="SaveStateCheck" Glyph="&#xe5ca;" FontSize="14"
                                           Foreground="{ThemeResource AppSuccessBrush}" VerticalAlignment="Center" />
@@ -888,24 +881,41 @@
                     </StackPanel>
                 </StackPanel>
 
-                <!-- Right: screenshot · view · add · present · settings -->
-                <StackPanel x:Name="ToolbarSecondary" Grid.Column="2" Orientation="Horizontal" Spacing="8"
-                            Padding="0,0,4,0" VerticalAlignment="Center">
-                    <!-- Zoom: shows the current zoom; the menu has the presets and the lock. -->
-                    <Border x:Name="ZoomShell" Style="{StaticResource TopBarGroupStyle}">
-                        <Button x:Name="ZoomMenuBtn" Style="{StaticResource TopBarAddButtonStyle}"
-                                Width="Auto" ToolTipService.ToolTip="Zoom"
-                                AutomationProperties.Name="Zoom">
+                <!-- Right: find · screenshot | view menu · add menu · study -->
+                <StackPanel x:Name="ToolbarSecondary" Grid.Column="2" Orientation="Horizontal" Spacing="4"
+                            Padding="0,0,16,0" VerticalAlignment="Center">
+                    <Button x:Name="SearchBtn" Style="{StaticResource TopBarIconButtonStyle}"
+                            ToolTipService.ToolTip="Find text (Ctrl+F)" AutomationProperties.Name="Find text">
+                        <FontIcon Glyph="&#xe8b6;" FontSize="18" />
+                    </Button>
+                    <Button x:Name="ScreenshotBtn" Style="{StaticResource TopBarIconButtonStyle}"
+                            ToolTipService.ToolTip="Take screenshot" AutomationProperties.Name="Take screenshot">
+                        <FontIcon Glyph="&#xe3b0;" FontSize="18" />
+                    </Button>
+                    <Border Style="{StaticResource TopBarDividerStyle}" />
+                    <!-- How you look at the note: pages, side by side, zoom, present. -->
+                    <Border Style="{StaticResource TopBarGroupStyle}" Margin="4,0,0,0">
+                        <Button x:Name="ViewMenuBtn" Style="{StaticResource TopBarAddButtonStyle}"
+                                Width="Auto" ToolTipService.ToolTip="Page sorter, side by side, zoom and present"
+                                AutomationProperties.Name="View">
                             <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
-                                <FontIcon x:Name="ZoomLockIcon" Glyph="&#xe897;" FontSize="14" Visibility="Collapsed" />
-                                <TextBlock x:Name="ZoomMenuText" Text="100%" FontSize="13" MinWidth="34"
-                                           TextAlignment="Center"
+                                <FontIcon Glyph="&#xe8ef;" FontSize="16" />
+                                <TextBlock Text="View" FontSize="13"
                                            FontFamily="{ThemeResource ContentControlThemeFontFamily}"
                                            VerticalAlignment="Center" />
+                                <FontIcon x:Name="ZoomLockIcon" Glyph="&#xe897;" FontSize="13" Visibility="Collapsed" />
                                 <FontIcon Glyph="&#xe5cf;" FontSize="11" />
                             </StackPanel>
                             <Button.Flyout>
-                                <MenuFlyout Placement="Bottom" ShouldConstrainToRootBounds="True">
+                                <MenuFlyout x:Name="ViewMenu" Placement="Bottom" ShouldConstrainToRootBounds="True">
+                                    <MenuFlyoutItem x:Name="PagePanelItem" Text="Page sorter">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe8ef;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSubItem x:Name="SideBySideSubItem" Text="Side by side">
+                                        <MenuFlyoutSubItem.Icon><FontIcon Glyph="&#xe949;" /></MenuFlyoutSubItem.Icon>
+                                    </MenuFlyoutSubItem>
+                                    <MenuFlyoutSeparator />
+                                    <MenuFlyoutItem x:Name="ZoomLevelItem" Text="Zoom 100%" IsEnabled="False" />
                                     <MenuFlyoutItem x:Name="ZoomInItem" Text="Zoom in" KeyboardAcceleratorTextOverride="Ctrl+=">
                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe8ff;" /></MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
@@ -913,44 +923,20 @@
                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe900;" /></MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
                                     <MenuFlyoutItem x:Name="ZoomActualItem" Text="Actual size (100%)" KeyboardAcceleratorTextOverride="Ctrl+0" />
-                                    <MenuFlyoutSeparator />
                                     <MenuFlyoutItem x:Name="ZoomFitWidthItem" Text="Fit width" KeyboardAcceleratorTextOverride="Ctrl+9">
                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe8d4;" /></MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
                                     <MenuFlyoutItem x:Name="ZoomFitPageItem" Text="Fit page" KeyboardAcceleratorTextOverride="Ctrl+8">
                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe3c2;" /></MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>
-                                    <MenuFlyoutSeparator />
                                     <ToggleMenuFlyoutItem x:Name="ZoomLockItem" Text="Lock zoom" />
+                                    <MenuFlyoutSeparator x:Name="PresentSep" />
+                                    <MenuFlyoutItem x:Name="PresentItem" Text="Present" KeyboardAcceleratorTextOverride="F5">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe41b;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
                                 </MenuFlyout>
                             </Button.Flyout>
                         </Button>
-                    </Border>
-                    <Border x:Name="ScreenshotShell" Style="{StaticResource TopBarGroupStyle}">
-                        <Button x:Name="ScreenshotBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                ToolTipService.ToolTip="Take screenshot" AutomationProperties.Name="Take screenshot">
-                            <FontIcon Glyph="&#xe3b0;" FontSize="18" />
-                        </Button>
-                    </Border>
-                    <Border Style="{StaticResource TopBarGroupStyle}">
-                        <StackPanel Orientation="Horizontal" Spacing="0">
-                            <Button x:Name="PagePanelBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Page sorter" AutomationProperties.Name="Page sorter">
-                                <FontIcon Glyph="&#xe8ef;" FontSize="18" />
-                            </Button>
-                            <Border Style="{StaticResource TopBarSegDividerStyle}" />
-                            <Button x:Name="SearchBtn" Style="{StaticResource TopBarSegButtonStyle}" ToolTipService.ToolTip="Find text (Ctrl+F)" AutomationProperties.Name="Find text">
-                                <FontIcon Glyph="&#xe8b6;" FontSize="18" />
-                            </Button>
-                            <Border x:Name="SideBySideDivider" Style="{StaticResource TopBarSegDividerStyle}" />
-                            <Button x:Name="SideBySideBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                    ToolTipService.ToolTip="Side by side: open another note next to this one"
-                                    AutomationProperties.Name="Side by side">
-                                <FontIcon Glyph="&#xe949;" FontSize="18" />
-                                <Button.Flyout>
-                                    <MenuFlyout x:Name="SideBySideFlyout" Placement="Bottom" ShouldConstrainToRootBounds="True" />
-                                </Button.Flyout>
-                            </Button>
-                        </StackPanel>
                     </Border>
                     <!-- Invisible anchor: ApplyToolbarOrder re-inserts the reorderable
                          action slots (Add menu) right after it. -->
@@ -1032,25 +1018,6 @@
                                     <MenuFlyoutItem x:Name="StudyResetItem" Text="Clear missed marks" />
                                 </MenuFlyout>
                             </Button.Flyout>
-                        </Button>
-                    </Border>
-                    <!-- Present is a mode switch, so it gets its own labelled button. -->
-                    <Border x:Name="PresentShell" Style="{StaticResource TopBarGroupStyle}">
-                        <Button x:Name="PresentBtn" Style="{StaticResource TopBarAddButtonStyle}"
-                                Width="Auto" ToolTipService.ToolTip="Present full screen with the laser pointer (F5)"
-                                AutomationProperties.Name="Present">
-                            <StackPanel Orientation="Horizontal" Spacing="5" VerticalAlignment="Center">
-                                <FontIcon Glyph="&#xe41b;" FontSize="16" />
-                                <TextBlock Text="Present" FontSize="13"
-                                           FontFamily="{ThemeResource ContentControlThemeFontFamily}"
-                                           VerticalAlignment="Center" />
-                            </StackPanel>
-                        </Button>
-                    </Border>
-                    <Border Style="{StaticResource TopBarGroupStyle}">
-                        <Button x:Name="SettingsBtn" Style="{StaticResource TopBarSegButtonStyle}"
-                                ToolTipService.ToolTip="Settings" AutomationProperties.Name="Settings">
-                            <FontIcon Glyph="&#xe8b8;" FontSize="18" />
                         </Button>
                     </Border>
                 </StackPanel>

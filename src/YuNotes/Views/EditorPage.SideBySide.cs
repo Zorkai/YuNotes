@@ -35,11 +35,11 @@ public sealed partial class EditorPage
 
     private void RebuildSideBySideFlyout()
     {
-        SideBySideFlyout.Items.Clear();
+        SideBySideSubItem.Items.Clear();
         var current = _doc?.Info.FilePath ?? "";
         var ordered = CandidateNotePaths(p => SamePath(p, current));
 
-        SideBySideFlyout.Items.Add(new MenuFlyoutItem { Text = "Show next to this note:", IsEnabled = false });
+        SideBySideSubItem.Items.Add(new MenuFlyoutItem { Text = "Show next to this note:", IsEnabled = false });
         foreach (var p in ordered)
         {
             var item = new MenuFlyoutItem { Text = NoteMenuLabel(p) };
@@ -47,16 +47,16 @@ public sealed partial class EditorPage
                 item.Icon = new FontIcon { Glyph = "" };
             string path = p;
             item.Click += async (_, __) => await OpenReferenceAsync(path);
-            SideBySideFlyout.Items.Add(item);
+            SideBySideSubItem.Items.Add(item);
         }
         if (ordered.Count == 0)
-            SideBySideFlyout.Items.Add(new MenuFlyoutItem { Text = "No other notes yet", IsEnabled = false });
+            SideBySideSubItem.Items.Add(new MenuFlyoutItem { Text = "No other notes yet", IsEnabled = false });
         if (_refPath is not null)
         {
-            SideBySideFlyout.Items.Add(new MenuFlyoutSeparator());
+            SideBySideSubItem.Items.Add(new MenuFlyoutSeparator());
             var close = new MenuFlyoutItem { Text = "Close side-by-side view" };
             close.Click += (_, __) => CloseReference();
-            SideBySideFlyout.Items.Add(close);
+            SideBySideSubItem.Items.Add(close);
         }
     }
 

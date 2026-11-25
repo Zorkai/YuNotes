@@ -484,6 +484,24 @@
         <Setter Property="CornerRadius" Value="17" />
     </Style>
 
+    <!-- Borderless title-bar icon (home, undo, find, screenshot): no outline,
+         a soft fill only on hover, so the bar reads as a few groups rather
+         than a row of pills. -->
+    <Style x:Key="TopBarIconButtonStyle" TargetType="Button" BasedOn="{StaticResource ToolButtonStyle}">
+        <Setter Property="Width" Value="36" />
+        <Setter Property="Height" Value="32" />
+        <Setter Property="CornerRadius" Value="8" />
+    </Style>
+
+    <!-- Short vertical hairline between title-bar groups. -->
+    <Style x:Key="TopBarDividerStyle" TargetType="Border">
+        <Setter Property="Width" Value="1" />
+        <Setter Property="Height" Value="18" />
+        <Setter Property="Margin" Value="4,0" />
+        <Setter Property="Background" Value="{ThemeResource AppChromeHairlineBrush}" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
     <!-- The "+ Add" pill: text + chevron, so it auto-sizes and uses the UI font
          (not the icon font) for the label. Sits inside a TopBarGroupStyle shell. -->
     <Style x:Key="TopBarAddButtonStyle" TargetType="Button" BasedOn="{StaticResource ToolButtonStyle}">

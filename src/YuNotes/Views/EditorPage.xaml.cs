@@ -93,10 +93,7 @@ public sealed partial class EditorPage : Page
         _ = Task.Run(Rendering.PdfFontResolver.EnsureIndexed);
         // GoBack reverses the drill-in animation the note was opened with.
         BackBtn.Click += async (_, __) => { if (await ConfirmLeaveAsync()) MainWindow.GoBack(this); };
-        SettingsBtn.Click += (_, __) => MainWindow.Navigate<SettingsPage>(this, 
-            null, new SlideNavigationTransitionInfo { Effect = SlideNavigationTransitionEffect.FromRight });
         SaveStateBtn.Click += async (_, __) => await SaveAsync();
-        SaveBtn.Click += async (_, __) => await SaveAsync();
         StickersItem.Click += (_, __) => FlyoutBase.ShowAttachedFlyout(AddMenuShell);
 
         UndoBtn.Click += (_, __) => DoUndo();
@@ -140,7 +137,7 @@ public sealed partial class EditorPage : Page
         LaserDotItem.Click += (_, __) => { SetLaserMode(LaserMode.Dot); LaserFlyout.Hide(); };
         LaserTrailItem.Click += (_, __) => { SetLaserMode(LaserMode.Trail); LaserFlyout.Hide(); };
 
-        PresentBtn.Click += (_, __) => EnterPresentation();
+        PresentItem.Click += (_, __) => EnterPresentation();
         PresentExitBtn.Click += (_, __) => ExitPresentation();
         PresentLaserDotBtn.Click += (_, __) => SetLaserMode(LaserMode.Dot);
         PresentLaserTrailBtn.Click += (_, __) => SetLaserMode(LaserMode.Trail);
@@ -221,9 +218,9 @@ public sealed partial class EditorPage : Page
         SelColorPicker.ColorChanged += (_, c) => Canvas.RecolorSelection(c);
         SelWidthPicker.WidthChanged += (_, w) => { Canvas.SetSelectionWidth((float)w); PositionSelectionActions(); };
 
-        PagePanelBtn.Click += (_, __) => TogglePagePanel();
+        PagePanelItem.Click += (_, __) => TogglePagePanel();
         BookmarksFlyout.Opening += (_, __) => RebuildBookmarksFlyout();
-        SideBySideFlyout.Opening += (_, __) => RebuildSideBySideFlyout();
+        ViewMenu.Opening += (_, __) => RebuildSideBySideFlyout();
         RefCloseBtn.Click += (_, __) => CloseReference();
         RefOpenBtn.Click += async (_, __) => await OpenReferenceAsMainAsync();
         RefSplitter.PointerPressed += (_, e) => { RefSplitter.CapturePointer(e.Pointer); _splitDragging = true; e.Handled = true; };
@@ -843,6 +840,45 @@ public sealed partial class EditorPage : Page
             SaveStateCheck.Visibility = Visibility.Visible;
             SaveStateDot.Visibility = Visibility.Collapsed;
         }
+
+        // Only show the state while something is happening: "Saving…" and
+        // "Unsaved" stay up, "Saved" shows for a moment after a save and then
+        // fades, leaving just the title. A clean note that was never shown as
+        // unsaved (just opened) shows nothing at all.
+        bool clean = !_saving && _doc?.IsDirty != true;
+        _saveStateHideTimer?.Stop();
+        if (!clean)
+        {
+            SaveStateBtn.Visibility = Visibility.Visible;
+            SaveStateBtn.Opacity = 1;
+        }
+        else if (SaveStateBtn.Visibility == Visibility.Visible && SaveStateBtn.Opacity > 0)
+        {
+            _saveStateHideTimer ??= CreateSaveStateHideTimer();
+            _saveStateHideTimer.Start();
+        }
+    }
+
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer? _saveStateHideTimer;
+    private Microsoft.UI.Dispatching.DispatcherQueueTimer CreateSaveStateHideTimer()
+    {
+        var t = DispatcherQueue.CreateTimer();
+        t.Interval = TimeSpan.FromSeconds(1.8);
+        t.IsRepeating = false;
+        t.Tick += (_, __) =>
+        {
+            if (_saving || _doc?.IsDirty == true) return;
+            SaveStateBtn.Opacity = 0;   // OpacityTransition fades it
+            var collapse = DispatcherQueue.CreateTimer();
+            collapse.Interval = TimeSpan.FromMilliseconds(320);
+            collapse.IsRepeating = false;
+            collapse.Tick += (_, __) =>
+            {
+                if (!_saving && _doc?.IsDirty != true) SaveStateBtn.Visibility = Visibility.Collapsed;
+            };
+            collapse.Start();
+        };
+        return t;
     }
 
     private void OnAccelerator(KeyboardAccelerator sender, KeyboardAcceleratorInvokedEventArgs args)
