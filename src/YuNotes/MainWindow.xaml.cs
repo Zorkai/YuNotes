@@ -58,6 +58,27 @@ public sealed partial class MainWindow : Window
 
     public MainWindow() : this(null) { }
 
+    // The last window closed: end the process for real. Any process left alive
+    // keeps the package "in use", and Windows then never applies a staged
+    // update (it waits until no YuNotes process is running). Give up the
+    // single-instance key first, so a launch during shutdown starts fresh
+    // instead of redirecting to this closing instance.
+    private static void ExitAfterLastWindow()
+    {
+        try { Microsoft.Windows.AppLifecycle.AppInstance.GetCurrent().UnregisterKey(); } catch { }
+        var dq = Microsoft.UI.Dispatching.DispatcherQueue.GetForCurrentThread();
+        dq?.TryEnqueue(Microsoft.UI.Dispatching.DispatcherQueuePriority.Low, () =>
+        {
+            if (s_windows.Count == 0) Application.Current.Exit();
+        });
+        // Backstop in case something still holds the process open after Exit.
+        _ = System.Threading.Tasks.Task.Run(async () =>
+        {
+            await System.Threading.Tasks.Task.Delay(TimeSpan.FromSeconds(15));
+            if (s_windows.Count == 0) Environment.Exit(0);
+        });
+    }
+
     // `tabs`: start in the editor with these tabs (a tab dragged out of another
     // window), instead of on Home.
     internal MainWindow(EditorTabs? tabs)
@@ -70,7 +91,11 @@ public sealed partial class MainWindow : Window
             s_windows.Remove(this);
             s_windows.Add(this);
         };
-        Closed += (_, __) => s_windows.Remove(this);
+        Closed += (_, __) =>
+        {
+            s_windows.Remove(this);
+            if (s_windows.Count == 0) ExitAfterLastWindow();
+        };
 
         InitializeComponent();
         Title = "YuNotes";

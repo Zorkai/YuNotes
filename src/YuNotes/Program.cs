@@ -20,7 +20,14 @@ public static class Program
     private static int Main(string[] args)
     {
         WinRT.ComWrappersSupport.InitializeComWrappers();
-        if (TryRedirectToRunningInstance()) return 0;
+        if (TryRedirectToRunningInstance())
+        {
+            // Exit hard: a redirect that never completes leaves a WinRT call
+            // pending, and a process left behind keeps the package "in use",
+            // which blocks a staged update from installing.
+            Environment.Exit(0);
+            return 0;
+        }
 
         Application.Start(p =>
         {
@@ -57,8 +64,14 @@ public static class Program
                 catch { }
                 SetEvent(done);
             });
-            const uint CWMO_DEFAULT = 0, INFINITE = 0xFFFFFFFF;
-            CoWaitForMultipleObjects(CWMO_DEFAULT, INFINITE, 1, new[] { done }, out _);
+            // Bounded wait. The running instance can be closing, or stuck, and
+            // then the redirect never completes; waiting forever left windowless
+            // YuNotes processes behind that kept the package "in use", so
+            // Windows never applied a staged update. On timeout, run as our own
+            // instance instead: the user still gets a window.
+            const uint CWMO_DEFAULT = 0, RedirectTimeoutMs = 8000, RPC_S_CALLPENDING = 0x80010115;
+            uint hr = CoWaitForMultipleObjects(CWMO_DEFAULT, RedirectTimeoutMs, 1, new[] { done }, out _);
+            if (hr == RPC_S_CALLPENDING) return false;   // keep `done` open: the task may still set it
             CloseHandle(done);
             return true;
         }
