@@ -47,37 +47,52 @@ public sealed partial class EditorPage
     }
 
     // ── Title bar fit ────────────────────────────────────────────────────────
-    // In a narrow window the labelled buttons (Share, View, Add, Study) drop their
-    // text and keep their icons, so the right-hand cluster never slides under
-    // the window's caption buttons and the title keeps some room.
-    private const double TitleMinWidth = 220;
+    // As the window narrows the bar steps down one level at a time until it
+    // fits, so nothing slides under the window's caption buttons:
+    //   0 full · 1 Share/View/Add/Study drop their text · 2 Find and
+    //   Screenshot fold into the View menu · 3 Redo hides (Ctrl+Y still works)
+    // The title gets less guaranteed room at each level and trims with "…".
+    private static readonly double[] TitleMinWidthAt = { 220, 220, 120, 0 };
+    private bool _screenshotEnabled = true;   // Settings can hide the screenshot tool
 
     private void InitTopBarFit()
     {
         TopBarGrid.SizeChanged += (_, __) => FitTopBar();
+        FindItem.Click += (_, __) => OpenSearch();
+        ScreenshotItem.Click += (_, __) => EnterScreenshotMode();
     }
 
     private void FitTopBar()
     {
         if (TopBarGrid.ActualWidth <= 0) return;
-        SetTopBarCompact(false);
         var inf = new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity);
-        var left = TopBarLeft;
-        left.Measure(inf);
-        ToolbarSecondary.Measure(inf);
         double available = TopBarGrid.ActualWidth - TopBarGrid.Padding.Left - TopBarGrid.Padding.Right;
-        if (left.DesiredSize.Width + ToolbarSecondary.DesiredSize.Width + TitleMinWidth > available)
-            SetTopBarCompact(true);
+        for (int level = 0; level < TitleMinWidthAt.Length; level++)
+        {
+            ApplyTopBarLevel(level);
+            TopBarLeft.Measure(inf);
+            ToolbarSecondary.Measure(inf);
+            if (TopBarLeft.DesiredSize.Width + ToolbarSecondary.DesiredSize.Width + TitleMinWidthAt[level] <= available)
+                break;
+        }
     }
 
-    private void SetTopBarCompact(bool compact)
+    private void ApplyTopBarLevel(int level)
     {
         foreach (var btn in new[] { ShareBtn, ViewMenuBtn, AddMenuBtn, StudyBtn })
         {
             if (btn.Content is not StackPanel sp) continue;
             foreach (var label in sp.Children.OfType<TextBlock>())
-                label.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+                label.Visibility = level >= 1 ? Visibility.Collapsed : Visibility.Visible;
         }
+
+        bool fold = level >= 2;
+        SearchBtn.Visibility = RightToolsDivider.Visibility = fold ? Visibility.Collapsed : Visibility.Visible;
+        ScreenshotBtn.Visibility = !fold && _screenshotEnabled ? Visibility.Visible : Visibility.Collapsed;
+        FindItem.Visibility = FoldedToolsSep.Visibility = fold ? Visibility.Visible : Visibility.Collapsed;
+        ScreenshotItem.Visibility = fold && _screenshotEnabled ? Visibility.Visible : Visibility.Collapsed;
+
+        RedoBtn.Visibility = level >= 3 ? Visibility.Collapsed : Visibility.Visible;
     }
 
     private void SetZoomLocked(bool locked, bool save = true)

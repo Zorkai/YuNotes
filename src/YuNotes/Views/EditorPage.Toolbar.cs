@@ -305,7 +305,9 @@ public sealed partial class EditorPage
         // Title bar. The Add menu holds pages, sticker and template;
         // hiding one hides its row, and the Add button only goes when all are
         // hidden. Side by side and Present can be hidden too.
+        _screenshotEnabled = !IsHidden("Screenshot");
         ScreenshotBtn.Visibility   = Show("Screenshot");
+        FitTopBar();   // re-applies the narrow-window folding on top of this
         TemplateBtn.Visibility     = Show("Template");
         StickersItem.Visibility    = Show("Stickers");
         AddPageBtn.Visibility      = Show("AddPage");

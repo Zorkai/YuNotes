@@ -157,7 +157,7 @@
                     <Button x:Name="BackBtn" AutomationProperties.Name="Back" Style="{StaticResource ToolButtonStyle}" VerticalAlignment="Center">
                         <FontIcon Glyph="&#xe5c4;" />
                     </Button>
-                    <TextBlock Text="Settings" Style="{StaticResource H2Style}" VerticalAlignment="Center" />
+                    <TextBlock x:Name="SettingsTitle" Text="Settings" Style="{StaticResource H2Style}" VerticalAlignment="Center" />
                 </StackPanel>
                 <!-- Window drag region. SetTitleBar turns this element's bounds into
                      non-client space (controls overlapping it lose input), so it only

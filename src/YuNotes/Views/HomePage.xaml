@@ -255,7 +255,7 @@
                          e.g. the longer Select-mode bar, so they never get cut off. -->
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="1000*" MinWidth="150" MaxWidth="336" />
+                        <ColumnDefinition x:Name="SearchColumn" Width="1000*" MinWidth="150" MaxWidth="336" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
@@ -283,11 +283,20 @@
                              PlaceholderText="Search notes and handwriting (Ctrl+F)"
                              CornerRadius="18"
                              Padding="36,6,14,6" />
-                    <FontIcon Grid.Column="1" Glyph="&#xE8B6;" FontSize="18"
+                    <FontIcon x:Name="SearchBoxIcon" Grid.Column="1" Glyph="&#xE8B6;" FontSize="18"
                               FontFamily="{StaticResource MaterialIconsFamily}"
                               HorizontalAlignment="Left" VerticalAlignment="Center"
                               Margin="20,0,0,0" IsHitTestVisible="False"
                               Foreground="{ThemeResource AppTextSecondaryBrush}" />
+                    <!-- In a very narrow window the search box folds into this
+                         button; tapping it opens the box across the bar. -->
+                    <Button x:Name="SearchIconBtn" Grid.Column="1"
+                            Style="{StaticResource ToolButtonStyle}" Width="40" Height="40"
+                            HorizontalAlignment="Left" Margin="4,0,0,0"
+                            Visibility="Collapsed"
+                            ToolTipService.ToolTip="Search (Ctrl+F)" AutomationProperties.Name="Search">
+                        <FontIcon Glyph="&#xE8B6;" FontSize="18" />
+                    </Button>
 
                     <!-- Normal mode -->
                     <StackPanel x:Name="HeaderNormal"
@@ -335,6 +344,25 @@
                                 <FontIcon Glyph="&#xe162;" FontSize="18" />
                                 <TextBlock Text="Select" VerticalAlignment="Center" FontSize="14" />
                             </StackPanel>
+                        </Button>
+                        <!-- Narrow window: Import PDF and Select fold into this menu. -->
+                        <Button x:Name="HeaderMoreBtn"
+                                Padding="10,8" CornerRadius="19"
+                                Background="Transparent" BorderThickness="0"
+                                Visibility="Collapsed"
+                                ToolTipService.ToolTip="More" AutomationProperties.Name="More">
+                            <FontIcon Glyph="&#xE5D3;" FontSize="18"
+                                      FontFamily="{StaticResource MaterialIconsFamily}" />
+                            <Button.Flyout>
+                                <MenuFlyout Placement="Bottom" ShouldConstrainToRootBounds="True">
+                                    <MenuFlyoutItem x:Name="MoreImportItem" Text="Import PDF">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe415;" FontFamily="{StaticResource MaterialIconsFamily}" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="MoreSelectItem" Text="Select notes">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe162;" FontFamily="{StaticResource MaterialIconsFamily}" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                </MenuFlyout>
+                            </Button.Flyout>
                         </Button>
                     </StackPanel>
 
@@ -430,7 +458,11 @@
                         <Button x:Name="CancelSelectBtn" AutomationProperties.Name="Cancel selection"
                                 Padding="12,8" CornerRadius="19"
                                 ToolTipService.ToolTip="Done selecting (Esc)">
-                            <TextBlock Text="Cancel" FontSize="14" />
+                            <Grid>
+                                <TextBlock x:Name="CancelSelectText" Text="Cancel" FontSize="14" />
+                                <FontIcon x:Name="CancelSelectIcon" Glyph="&#xe5cd;" FontSize="18"
+                                          FontFamily="{StaticResource MaterialIconsFamily}" Visibility="Collapsed" />
+                            </Grid>
                         </Button>
                     </StackPanel>
 
@@ -461,6 +493,7 @@
                     </Grid.ColumnDefinitions>
                     <TextBlock x:Name="SectionTitle" Text="All notes"
                                Style="{StaticResource H1Style}"
+                               TextTrimming="CharacterEllipsis" MaxLines="1" Margin="0,0,12,0"
                                VerticalAlignment="Center" />
                     <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                         <Border Background="{ThemeResource AppSurfaceVariantBrush}"

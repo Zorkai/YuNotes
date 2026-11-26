@@ -58,6 +58,28 @@ public sealed partial class MainWindow : Window
 
     public MainWindow() : this(null) { }
 
+    // Smallest window the bars are laid out for. Below this the title bars
+    // would have to drop essentials (undo, new note), so Windows stops the
+    // resize here instead. In DIPs; the presenter wants physical pixels, so
+    // it is re-applied when the window moves to a screen with another scale.
+    private const double MinWidthDip = 480, MinHeightDip = 400;
+
+    private void ApplyMinimumSize()
+    {
+        try
+        {
+            if (_appWindow.Presenter is not OverlappedPresenter op) return;
+            double scale = GetDpiForWindow(WindowNative.GetWindowHandle(this)) / 96.0;
+            if (scale <= 0) scale = 1;
+            op.PreferredMinimumWidth = (int)Math.Ceiling(MinWidthDip * scale);
+            op.PreferredMinimumHeight = (int)Math.Ceiling(MinHeightDip * scale);
+        }
+        catch (Exception ex) { App.LogError(ex, "ApplyMinimumSize"); }
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern uint GetDpiForWindow(IntPtr hwnd);
+
     // The last window closed: end the process for real. Any process left alive
     // keeps the package "in use", and Windows then never applies a staged
     // update (it waits until no YuNotes process is running). Give up the
@@ -109,6 +131,7 @@ public sealed partial class MainWindow : Window
         var id = Win32Interop.GetWindowIdFromWindow(hwnd);
         _appWindow = AppWindow.GetFromWindowId(id);
         _appWindow.Resize(new Windows.Graphics.SizeInt32(1400, 900));
+        ApplyMinimumSize();
 
         // Merge each page's own top bar into the title bar area. Pages register
         // their drag region via SetDragRegion and pad past CaptionButtonInset.
@@ -127,6 +150,11 @@ public sealed partial class MainWindow : Window
         // Guard the window's close (X) button: if the editor has unsaved changes,
         // prompt to save before letting the app exit (same dialog the Back button uses).
         _appWindow.Closing += OnAppWindowClosing;
+        // Moving to a screen with another scale changes the pixel minimum.
+        RootGrid.Loaded += (_, __) =>
+        {
+            if (RootGrid.XamlRoot is { } root) root.Changed += (_, __) => ApplyMinimumSize();
+        };
 
         // Apply the saved light/dark theme to the content root (cascades to every
         // page; the XAML MicaBackdrop and caption buttons follow ActualTheme), and

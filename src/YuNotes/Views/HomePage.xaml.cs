@@ -215,6 +215,7 @@ public sealed partial class HomePage : Page
 
         // Search: filter as you type; Ctrl+F focuses the box, Escape clears it.
         SearchBox.TextChanged += (_, __) => ApplyFilter();
+        SizeChanged += (_, e) => OnPageWidthChanged(e.NewSize.Width);
         SearchBox.KeyDown += (_, e) =>
         {
             if (e.Key == Windows.System.VirtualKey.Escape && SearchBox.Text.Length > 0)
@@ -230,6 +231,7 @@ public sealed partial class HomePage : Page
         };
         findKey.Invoked += (_, e) =>
         {
+            ExpandSearch();
             SearchBox.Focus(FocusState.Keyboard);
             SearchBox.SelectAll();
             e.Handled = true;
@@ -264,16 +266,41 @@ public sealed partial class HomePage : Page
 
     // ── Sidebar toggle ────────────────────────────────────────────────────────
 
+    // In a narrow window the sidebar hides on its own so the notes keep their
+    // room; the toggle still opens it there (and that choice is forgotten once
+    // the window is wide again, where the user's own setting applies).
+    private const double SidebarAutoHideWidth = 760;
+    private bool _narrow;
+    private bool _narrowSidebarOpen;
+
     private void ToggleSidebar()
     {
-        _sidebarOpen = !_sidebarOpen;
-        SidebarBorder.Visibility = _sidebarOpen ? Visibility.Visible : Visibility.Collapsed;
+        if (_narrow) _narrowSidebarOpen = !_narrowSidebarOpen;
+        else _sidebarOpen = !_sidebarOpen;
+        ApplySidebarVisibility();
+    }
+
+    private void OnPageWidthChanged(double width)
+    {
+        bool narrow = width > 0 && width < SidebarAutoHideWidth;
+        if (narrow == _narrow) return;
+        _narrow = narrow;
+        _narrowSidebarOpen = false;
+        ApplySidebarVisibility();
+    }
+
+    private void ApplySidebarVisibility()
+    {
+        bool open = _narrow ? _narrowSidebarOpen : _sidebarOpen;
+        SidebarBorder.Visibility = open ? Visibility.Visible : Visibility.Collapsed;
     }
 
     // ── Sidebar navigation ────────────────────────────────────────────────────
 
     private void SelectNav(NavSection section)
     {
+        // A sidebar opened over a narrow window has done its job.
+        if (_narrow && _narrowSidebarOpen) { _narrowSidebarOpen = false; ApplySidebarVisibility(); }
         _activeSection = section;
         _selectedFolderPath = null;
         _activeTag = null;

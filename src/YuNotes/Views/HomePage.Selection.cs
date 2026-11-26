@@ -23,42 +23,108 @@ public sealed partial class HomePage
     private bool _rangeSelecting;
 
     // ── Header fit ───────────────────────────────────────────────────────────
-    // When the window is too narrow for the action buttons (Select mode has
-    // up to eight), they drop their labels and show icons only, with the
-    // label as a tooltip, so nothing is pushed off the edge. Labels come back
-    // when there is room again.
+    // As the window narrows, the header steps down one level at a time until it
+    // fits, so nothing is pushed under the caption buttons:
+    //   normal: 0 full · 1 labels off (New note keeps its own) · 2 New note
+    //           icon only · 3 Import and Select fold into a ⋯ menu ·
+    //           4 the search box folds into a search button
+    //   select: 0 full · 1 labels and count off · 2 Cancel becomes ✕ ·
+    //           3 the search box folds into a search button · 4 the sidebar
+    //           toggle hides (it's back once select mode ends)
+    // Labels come back when there is room again.
     private const double SearchMinWidth = 150 + 16;   // search column MinWidth + its margins
+    private const double SearchIconWidth = 48;        // collapsed search button + margin
+    private bool _searchCollapsed;
+    private bool _searchExpanded;   // collapsed search opened across the bar
 
     private void FitHeader()
     {
-        if (HeaderBar.ActualWidth <= 0) return;
-        var bar = HeaderSelect.Visibility == Visibility.Visible ? HeaderSelect : HeaderNormal;
-        double available = HeaderBar.ActualWidth - HeaderBar.Padding.Left - HeaderBar.Padding.Right
-                           - SidebarToggleBtn.ActualWidth - 6 - SearchMinWidth;
-        SetHeaderCompact(bar, false);
-        bar.Measure(new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity));
-        if (bar.DesiredSize.Width > available) SetHeaderCompact(bar, true);
+        if (HeaderBar.ActualWidth <= 0 || _searchExpanded) return;
+        bool select = HeaderSelect.Visibility == Visibility.Visible;
+        var bar = select ? HeaderSelect : HeaderNormal;
+        int maxLevel = 4;
+        double barAvail = HeaderBar.ActualWidth - HeaderBar.Padding.Left - HeaderBar.Padding.Right;
+        var inf = new Windows.Foundation.Size(double.PositiveInfinity, double.PositiveInfinity);
+        for (int level = 0; level <= maxLevel; level++)
+        {
+            ApplyHeaderLevel(select, level);
+            bar.Measure(inf);
+            double search = _searchCollapsed ? SearchIconWidth : SearchMinWidth;
+            double toggle = SidebarToggleBtn.Visibility == Visibility.Visible ? SidebarToggleBtn.Width + 6 : 0;
+            if (bar.DesiredSize.Width <= barAvail - toggle - search) break;
+        }
     }
 
-    private void SetHeaderCompact(StackPanel bar, bool compact)
+    private void ApplyHeaderLevel(bool select, int level)
     {
-        if (bar == HeaderSelect)
-            SelectionCountLabel.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
+        var bar = select ? HeaderSelect : HeaderNormal;
+        bool labelsOff = level >= 1;
+        if (select)
+        {
+            SelectionCountLabel.Visibility = labelsOff ? Visibility.Collapsed : Visibility.Visible;
+            CancelSelectText.Visibility = level >= 2 ? Visibility.Collapsed : Visibility.Visible;
+            CancelSelectIcon.Visibility = level >= 2 ? Visibility.Visible : Visibility.Collapsed;
+        }
         foreach (var btn in bar.Children.OfType<Button>())
         {
-            // The primary action (New note) keeps its label.
-            if (btn == NewBtn || btn.Content is not StackPanel sp) continue;
+            if (btn.Content is not StackPanel sp) continue;
             var label = sp.Children.OfType<TextBlock>().FirstOrDefault();
             if (label is null) continue;
-            label.Visibility = compact ? Visibility.Collapsed : Visibility.Visible;
-            if (compact && ToolTipService.GetToolTip(btn) is null)
+            // The primary action (New note) keeps its label one level longer.
+            bool off = btn == NewBtn ? level >= 2 : labelsOff;
+            label.Visibility = off ? Visibility.Collapsed : Visibility.Visible;
+            if (off && ToolTipService.GetToolTip(btn) is null)
                 ToolTipService.SetToolTip(btn, label.Text);
         }
+        if (!select)
+        {
+            bool fold = level >= 3;
+            OpenBtn.Visibility = SelectBtn.Visibility = fold ? Visibility.Collapsed : Visibility.Visible;
+            HeaderMoreBtn.Visibility = fold ? Visibility.Visible : Visibility.Collapsed;
+        }
+        SetSearchCollapsed(level >= (select ? 3 : 4));
+        SidebarToggleBtn.Visibility = select && level >= 4 ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void SetSearchCollapsed(bool collapsed)
+    {
+        _searchCollapsed = collapsed;
+        SearchColumn.MinWidth = collapsed ? SearchIconWidth : 150;
+        SearchBox.Visibility = SearchBoxIcon.Visibility = collapsed ? Visibility.Collapsed : Visibility.Visible;
+        SearchIconBtn.Visibility = collapsed ? Visibility.Visible : Visibility.Collapsed;
+        // A filter is still applied while the box is folded away: show it.
+        SearchIconBtn.Foreground = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources[
+            SearchBox.Text.Trim().Length > 0 ? "AppAccentBrush" : "AppTextPrimaryBrush"];
+    }
+
+    // Collapsed search: hide the actions so the box gets their room (it stays
+    // in its own column, clear of the window drag region) until it loses focus.
+    private void ExpandSearch()
+    {
+        if (!_searchCollapsed) { SearchBox.Focus(FocusState.Keyboard); return; }
+        _searchExpanded = true;
+        HeaderNormal.Visibility = HeaderSelect.Visibility = Visibility.Collapsed;
+        SearchIconBtn.Visibility = Visibility.Collapsed;
+        SearchBox.Visibility = SearchBoxIcon.Visibility = Visibility.Visible;
+        SearchBox.Focus(FocusState.Programmatic);
+    }
+
+    private void CollapseExpandedSearch()
+    {
+        if (!_searchExpanded) return;
+        _searchExpanded = false;
+        HeaderNormal.Visibility = _selectMode ? Visibility.Collapsed : Visibility.Visible;
+        HeaderSelect.Visibility = _selectMode ? Visibility.Visible : Visibility.Collapsed;
+        FitHeader();
     }
 
     private void InitSelectionExtras()
     {
         HeaderBar.SizeChanged += (_, __) => FitHeader();
+        SearchIconBtn.Click += (_, __) => ExpandSearch();
+        SearchBox.LostFocus += (_, __) => CollapseExpandedSearch();
+        MoreImportItem.Click += async (_, __) => await OpenExistingAsync();
+        MoreSelectItem.Click += (_, __) => SetSelectMode(true);
         SelectAllItem.Click      += (_, __) => SelectAllNotes();
         SelectNoneItem.Click     += (_, __) => SelectNoNotes();
         PinSelectedItem.Click    += (_, __) => PinSelected(true);

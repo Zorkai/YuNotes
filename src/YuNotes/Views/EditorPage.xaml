@@ -821,7 +821,7 @@
                             </Button.Flyout>
                         </Button>
                     </Border>
-                    <Border Style="{StaticResource TopBarDividerStyle}" />
+                    <Border x:Name="UndoDivider" Style="{StaticResource TopBarDividerStyle}" />
                     <Button x:Name="UndoBtn" Style="{StaticResource TopBarIconButtonStyle}"
                             ToolTipService.ToolTip="Undo (Ctrl+Z)" AutomationProperties.Name="Undo" IsEnabled="False">
                         <FontIcon Glyph="&#xe166;" FontSize="18" />
@@ -892,7 +892,7 @@
                             ToolTipService.ToolTip="Take screenshot" AutomationProperties.Name="Take screenshot">
                         <FontIcon Glyph="&#xe3b0;" FontSize="18" />
                     </Button>
-                    <Border Style="{StaticResource TopBarDividerStyle}" />
+                    <Border x:Name="RightToolsDivider" Style="{StaticResource TopBarDividerStyle}" />
                     <!-- How you look at the note: pages, side by side, zoom, present. -->
                     <Border Style="{StaticResource TopBarGroupStyle}" Margin="4,0,0,0">
                         <Button x:Name="ViewMenuBtn" Style="{StaticResource TopBarAddButtonStyle}"
@@ -908,6 +908,15 @@
                             </StackPanel>
                             <Button.Flyout>
                                 <MenuFlyout x:Name="ViewMenu" Placement="Bottom" ShouldConstrainToRootBounds="True">
+                                    <!-- Shown only when the window is too narrow for the
+                                         Find and Screenshot buttons in the bar. -->
+                                    <MenuFlyoutItem x:Name="FindItem" Text="Find text" KeyboardAcceleratorTextOverride="Ctrl+F" Visibility="Collapsed">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe8b6;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutItem x:Name="ScreenshotItem" Text="Take screenshot" Visibility="Collapsed">
+                                        <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe3b0;" /></MenuFlyoutItem.Icon>
+                                    </MenuFlyoutItem>
+                                    <MenuFlyoutSeparator x:Name="FoldedToolsSep" Visibility="Collapsed" />
                                     <MenuFlyoutItem x:Name="PagePanelItem" Text="Page sorter">
                                         <MenuFlyoutItem.Icon><FontIcon Glyph="&#xe8ef;" /></MenuFlyoutItem.Icon>
                                     </MenuFlyoutItem>

@@ -138,6 +138,7 @@ public sealed partial class SettingsPage
     private void FitSidebar(double width)
     {
         bool narrow = width < 760;
+        FitHeader(width);
         NavColumn.Width = new GridLength(narrow ? 64 : 220);
         NavLegend.Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
         foreach (var item in NavList.Items.OfType<ListViewItem>())
@@ -146,5 +147,25 @@ public sealed partial class SettingsPage
                 g.Children[1].Visibility = narrow ? Visibility.Collapsed : Visibility.Visible;
                 ToolTipService.SetToolTip(item, narrow ? (g.Children[1] as TextBlock)?.Text : null);
             }
+    }
+
+    // Header in a narrow window: the update chip shows its icon only, the
+    // search box gives up width (down to 120), and the "Settings" title goes
+    // last, so nothing slides under the caption buttons.
+    private void FitHeader(double width)
+    {
+        if (width <= 0) return;
+        bool chipCompact = width < 760;
+        UpdateChipText.Visibility = chipCompact ? Visibility.Collapsed : Visibility.Visible;
+        ToolTipService.SetToolTip(UpdateChip, chipCompact ? UpdateChipText.Text : null);
+        SettingsTitle.Visibility = width < 560 ? Visibility.Collapsed : Visibility.Visible;
+
+        // Room left for the search box once the fixed parts are placed.
+        double fixedParts = HeaderGrid.Padding.Left + HeaderGrid.Padding.Right
+                            + BackBtn.Width + 8
+                            + (SettingsTitle.Visibility == Visibility.Visible ? 90 : 0)
+                            + (chipCompact ? 44 : 150)
+                            + HeaderGrid.ColumnSpacing * 3 + 24;   // + a sliver of drag region
+        SettingsSearch.Width = Math.Clamp(width - fixedParts, 120, 280);
     }
 }
